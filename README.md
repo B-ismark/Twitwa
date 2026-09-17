@@ -51,8 +51,8 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`, which is why those carry
-304 checks and 53 mutations between them while the renderer carries none
-(371 checks and 66 mutations counting the two PNG tools).
+323 checks and 57 mutations between them while the renderer carries none
+(390 checks and 70 mutations counting the two PNG tools).
 
 `renderCard()` was run twice on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
@@ -161,10 +161,10 @@ Both exit 1 on failure and have been verified to actually go red:
 ```
 python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
-cd spike && node src/pixels.test.mjs     # 99 checks on the pixel math
+cd spike && node src/pixels.test.mjs     # 168 checks on the pixel math
 cd spike && node src/sizing.test.mjs     # 56 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
-cd spike && node tools/check-imports.mjs # 38 named imports across 6 files, App.js included
+cd spike && node tools/check-imports.mjs # 41 named imports across 6 files, App.js included
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
@@ -175,26 +175,19 @@ babel breakage in ~40s with no phone. It is also how the `babel.config.js` mista
 was found; see `spike/PHASE0.md`. It resolves modules, not named exports, so it
 cannot catch a wrong named import.
 
-`pixels.test.mjs` carries a `BREAK=` mutation per assertion group, so its green can
-be shown to mean something:
+Every suite carries a `BREAK=` mutation per assertion group, so a green run can be
+shown to mean something. Derive the names from the files rather than listing them
+here — this README carried three hand-written lists and all three had fallen
+behind, which is the same failure as a mutation that cannot go red:
 
 ```
 cd spike
-for b in ring_flat ring_var ring_clip ink sb_cut sb_none sb_lead delta          bg_mean bg_spread bg_cov runs sb_shape zones edge_one no_agree          crop_mid luma_flip region_unclipped region_clamp_fields tiles_one tiles_whole ink_fast_max ink_fast_offset; do
-  BREAK=$b node src/pixels.test.mjs >/dev/null 2>&1; echo "$b -> $?"
-done
-for b in longedge no_upscale_guard no_ceiling maxpx_binds asym; do
-  BREAK=$b node src/sizing.test.mjs >/dev/null 2>&1; echo "$b -> $?"
-done
-for b in no_shape_gate never_ignored trim_outside sample_order fallback_flip          no_edge_warn always_no_warn literal_bounds no_mask_clamp mask_keep_outside          mask_scale_from_plan no_swap clamp_fields mask_px_nearest mask_px_inward mask_px_unclamped mask_px_no_null; do
-  BREAK=$b node src/plan.test.mjs >/dev/null 2>&1; echo "$b -> $?"
-done
-for b in mislabel truncate noguard; do
-  BREAK=$b node tools/png.test.mjs >/dev/null 2>&1; echo "$b -> $?"
-done
-for b in sbit_is_colour trunc_iccp_ok no_primaries name_identifies loose_tol; do
-  BREAK=$b node tools/chunks.test.mjs >/dev/null 2>&1; echo "$b -> $?"
-done                                     # every line must print 1
+for t in src/pixels.test.mjs src/plan.test.mjs src/sizing.test.mjs \
+         tools/chunks.test.mjs tools/png.test.mjs; do
+  for b in $(grep -o "BREAK === '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
+    BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
+  done
+done                                     # silence is the pass; 70 mutations
 ```
 
 ## Answering Q1 and Q3 without a phone
