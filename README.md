@@ -85,10 +85,15 @@ Things the runs changed that no test could have:
   verdict the desktop predictor had printed before any phone was involved.
 - **A configuration change breaks the image picker.** After the density change,
   `launchImageLibraryAsync` rejects with `Attempting to launch an unregistered
-  ActivityResultLauncher`. Rotation and a font-size change would do the same. It
-  used to surface as an unhandled rejection with nothing on screen; it is now
-  caught and reported under its own label, which does not re-register the
-  launcher but does stop the app losing its input action silently.
+  ActivityResultLauncher`. It used to surface as an unhandled rejection with
+  nothing on screen; it is now caught and reported under its own label, which
+  does not re-register the launcher but does stop the app losing its input
+  action silently — **and that catch has now been seen firing on the phone**,
+  provoked with a font-scale change. This paragraph used to add that "rotation
+  and a font-size change would do the same"; the font scale does, and rotation
+  does **not**, because `MainActivity` declares `orientation|screenSize` in
+  `configChanges` and absorbs it without recreating the activity. Two guesses,
+  one of them wrong, which is why the sentence is gone.
 
 And two from a third review pass, both cases of a check that could not go red:
 
@@ -298,6 +303,12 @@ single backslashes as escapes), and `rootProject.name` must not contain a space.
 `spike/android/local.properties` pins `sdk.dir`, so Gradle works in a shell with no
 `ANDROID_HOME`.
 
-**A device is attached** — `21241FDEE0019C` — and reads `unauthorized`. That needs
-the "Allow USB debugging" prompt accepted on the phone before `npx expo run:android`
-can install anything. Full steps in `spike/PHASE0.md`.
+**The device is `21241FDEE0019C`** (Pixel 6 Pro, density override 476). It is
+authorized and has carried every device run since Phase 0; this paragraph used to
+say it read `unauthorized` and needed the "Allow USB debugging" prompt, which was
+true on the first attempt only. If a fresh checkout does read `unauthorized`, that
+prompt is still the answer, and the full steps are in `spike/PHASE0.md`. Two things
+the phone needs from its owner and no flag can supply: it must be **unlocked**
+(a secure fingerprint lock sends every tap to the keyguard) and its screen must be
+**on** — `dumpsys power` reporting `mWakefulness=Dozing` looks exactly like a
+hung app from the shell.
