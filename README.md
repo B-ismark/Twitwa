@@ -35,7 +35,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | --- | --- |
 | `src/pixels.js` | All the pixel math. Ring flatness, modal background, row ink profile, status-bar cut and shape test, four-edge card background, colour round-trip delta. No Skia — none of it needs Skia to be correct |
 | `src/sizing.js` | Output size: width-bounded, never upscaling, no long-edge cap, encode ceiling |
-| `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Written, never run** — see `spike/results/phase1-pipeline.md` |
+| `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device** — three times now, most recently byte-identically after the ring read was rewritten; see `spike/results/phase1-pipeline.md` |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
 | `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md` |
 | `App.js` | The spike screen: one button per Phase 0 question, plus two that run the Phase 1 pipeline and draw the written card back off disk |
@@ -164,7 +164,7 @@ python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 168 checks on the pixel math
 cd spike && node src/sizing.test.mjs     # 56 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
-cd spike && node tools/check-imports.mjs # 41 named imports across 6 files, App.js included
+cd spike && node tools/check-imports.mjs # 41 imports + 6 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0

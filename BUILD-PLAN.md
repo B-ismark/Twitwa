@@ -321,8 +321,10 @@ measurement this repo can take on its own:
 - **Q1's verdict on a real display.** Every number predicts no visible seam. A
   number below the eye's threshold is not the eye. This is the one open item that
   could still change direction.
-- **Whether the Display P3 colour chunk reaches the PNG.** Pixel values round-trip
-  exactly; the tag is unconfirmed, and an untagged P3 file is shown as sRGB.
+- ~~**Whether the Display P3 colour chunk reaches the PNG.**~~ **Measured.**
+  `colorSpace: DisplayP3` writes an `iCCP` whose colorant tags are Display P3's,
+  and 961238 channel samples re-encode. The default output carries no colour
+  chunk at all — sRGB by convention only. See `spike/results/phase0-device.md`.
 - **WhatsApp's actual recompression**, which needs a real send to a real phone.
 - **Crop-gesture performance on mid-range hardware.** One device so far, and it is
   a fast one — the Phase 2 target is the slowest device available, not this one.
