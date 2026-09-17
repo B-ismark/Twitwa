@@ -229,8 +229,19 @@ order, so a byte comparison would fail on a correct result and send someone hunt
 a bug in the wrong layer. Byte-identity is only worth asserting if deterministic
 encoding is separately proven.
 
+**Done, with one device and a density override** (`adb shell wm density`, at 320 /
+476 / 640): the card is byte-identical across a 2x range. Byte-identity is
+available here *because* it is one device and therefore one encoder — the caveat
+above still governs a real second device. Not evidence about another GPU, Skia
+build or Android skin. The masked path is density-**dependent** by construction and
+measured to be; see `spike/results/phase1-pipeline.md`.
+
 Then send one through WhatsApp and look at what arrives. The sizing rules were
 chosen against WhatsApp's recompression and have never been checked against it.
+**Left open deliberately** — no phone-plus-WhatsApp is available for this work.
+`spike/results/phase1-pipeline.md` records what the absence costs (no
+WhatsApp-derived constant exists in `sizing.js`, so the exposure is one number)
+and the exact steps that would close it.
 
 ## Phase 2 — the crop gesture
 

@@ -51,7 +51,8 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`, which is why those carry
-208 checks and 40 mutations between them while the renderer carries none.
+237 checks and 46 mutations between them while the renderer carries none
+(272 checks and 54 mutations counting the two PNG tools).
 
 `renderCard()` was run twice on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
@@ -60,17 +61,36 @@ pulled off the device byte-exact and decoded with `tools/png.mjs`, which shares 
 code with Skia: 431117 non-black pixels inside the destination rect and **zero
 outside it**, with the content's bounding box matching the rect to the pixel.
 
-Three things the run changed that no test could have:
+Things the runs changed that no test could have:
 
 - **Colour tagging is asymmetric.** `colorSpace: DisplayP3` writes an `iCCP`
   whose primaries are Display P3's, and re-encodes the pixels; the default writes
   **no profile at all** — sRGB by convention only. That closes Q4, and it means
   an sRGB card travels on a viewer's assumption rather than on its own bytes.
-- **The status-bar detector costs ~250ms**, about 45% of the wall on a 3120-row
-  capture — more than the PNG encode on the second run, and unbudgeted.
-- **A Cover box's edge is anti-aliased**, so one pixel of the covered content
-  survives at up to 53/255. Opaque inside, not at the boundary — which matters
-  because covering a handle is a redaction.
+- **A Cover box's edge was anti-aliased**, leaving one pixel of the covered
+  content at up to 53/255 — a leak, since covering a handle is a redaction. The
+  rect is now snapped outward to whole pixels and drawn with AA off: 306 leaked
+  pixels became 0 on the device.
+- **The status-bar detector cost ~245ms**, 45% of the wall. Now ~110: the ink
+  loop was allocating an array per pixel and scanning 4096 histogram buckets per
+  row. What is left is mostly the lazy decode, which the first pixel read pays
+  for and nothing can avoid.
+- **The card is byte-identical across a 2x density range** (320 / 476 / 640 dpi
+  overrides on the one device), which is the Phase 1 density gate. The *Cover
+  box* is not — it comes from view coordinates, so the same on-screen rectangle
+  covers a different region at each density. A crop must be stored in image
+  pixels the moment it is committed.
+- **Light captures work, including the fallback.** An Instagram capture whose
+  crop edges disagree falls back to the neutral frame and reaches the identical
+  verdict the desktop predictor had printed before any phone was involved.
+- **A configuration change breaks the image picker.** After the density change,
+  `launchImageLibraryAsync` rejects with `Attempting to launch an unregistered
+  ActivityResultLauncher`. Rotation and a font-size change would do the same, and
+  it surfaces as an unhandled rejection.
+
+**Never sent through WhatsApp, and not going to be from here.** The output spec
+was chosen against WhatsApp's recompression, so that part stays an assumption;
+`spike/results/phase1-pipeline.md` says what it costs and what would settle it.
 
 `spike/results/phase1-pipeline.md` has the log lines and what each check was.
 
@@ -119,9 +139,9 @@ Both exit 1 on failure and have been verified to actually go red:
 ```
 python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
-cd spike && node src/pixels.test.mjs     # 82 checks on the pixel math
+cd spike && node src/pixels.test.mjs     # 99 checks on the pixel math
 cd spike && node src/sizing.test.mjs     # 39 checks on the output sizing
-cd spike && node src/plan.test.mjs       # 87 checks on the decision layer
+cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
 cd spike && node tools/check-imports.mjs # 37 named imports across 6 files, App.js included
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 19 checks on the PNG chunk/ICC reader
@@ -138,13 +158,13 @@ be shown to mean something:
 
 ```
 cd spike
-for b in ring_flat ring_var ring_clip ink sb_cut sb_none sb_lead delta          bg_mean bg_spread bg_cov runs sb_shape zones edge_one no_agree          crop_mid luma_flip region_unclipped region_clamp_fields tiles_one tiles_whole; do
+for b in ring_flat ring_var ring_clip ink sb_cut sb_none sb_lead delta          bg_mean bg_spread bg_cov runs sb_shape zones edge_one no_agree          crop_mid luma_flip region_unclipped region_clamp_fields tiles_one tiles_whole ink_fast_max ink_fast_offset; do
   BREAK=$b node src/pixels.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 done
 for b in longedge no_upscale_guard no_ceiling maxpx_binds asym; do
   BREAK=$b node src/sizing.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 done
-for b in no_shape_gate never_ignored trim_outside sample_order fallback_flip          no_edge_warn always_no_warn literal_bounds no_mask_clamp mask_keep_outside          mask_scale_from_plan no_swap clamp_fields; do
+for b in no_shape_gate never_ignored trim_outside sample_order fallback_flip          no_edge_warn always_no_warn literal_bounds no_mask_clamp mask_keep_outside          mask_scale_from_plan no_swap clamp_fields mask_px_nearest mask_px_inward mask_px_unclamped mask_px_no_null; do
   BREAK=$b node src/plan.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 done
 for b in mislabel truncate noguard; do
