@@ -51,8 +51,8 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`, which is why those carry
-237 checks and 46 mutations between them while the renderer carries none
-(272 checks and 54 mutations counting the two PNG tools).
+304 checks and 53 mutations between them while the renderer carries none
+(371 checks and 66 mutations counting the two PNG tools).
 
 `renderCard()` was run twice on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
@@ -85,8 +85,25 @@ Things the runs changed that no test could have:
   verdict the desktop predictor had printed before any phone was involved.
 - **A configuration change breaks the image picker.** After the density change,
   `launchImageLibraryAsync` rejects with `Attempting to launch an unregistered
-  ActivityResultLauncher`. Rotation and a font-size change would do the same, and
-  it surfaces as an unhandled rejection.
+  ActivityResultLauncher`. Rotation and a font-size change would do the same. It
+  used to surface as an unhandled rejection with nothing on screen; it is now
+  caught and reported under its own label, which does not re-register the
+  launcher but does stop the app losing its input action silently.
+
+And two from a third review pass, both cases of a check that could not go red:
+
+- **The Cover ring was read as the whole box.** Sampling the surround of a Cover
+  box asked for the box's padded bounding rectangle and threw the interior away —
+  82.2MiB of `readPixels` on a 1080x20000 source to use 165KiB of it. The same
+  defect had already been found and fixed in the background fallback; this was the
+  second caller with the same shape, and it survived two passes. Now read as four
+  non-overlapping strips, held to a brute-force enumeration of the ring.
+- **The PNG colour validator reported malformed profiles as sound.** It tested one
+  of the four failure flags its parser can set, so a truncated chunk, an
+  18-byte profile and a header lying about its own length were all `tagged: true`.
+  This is the tool that closed Q4, so it mattered more than its severity suggested;
+  Q4's answer survives because the colorants are read down a separate path, and
+  re-running the fixed tool reproduces both published verdicts.
 
 **Never sent through WhatsApp, and not going to be from here.** The output spec
 was chosen against WhatsApp's recompression, so that part stays an assumption;
@@ -140,11 +157,11 @@ Both exit 1 on failure and have been verified to actually go red:
 python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 99 checks on the pixel math
-cd spike && node src/sizing.test.mjs     # 39 checks on the output sizing
+cd spike && node src/sizing.test.mjs     # 56 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
-cd spike && node tools/check-imports.mjs # 37 named imports across 6 files, App.js included
+cd spike && node tools/check-imports.mjs # 38 named imports across 6 files, App.js included
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
-cd spike && node tools/chunks.test.mjs   # 19 checks on the PNG chunk/ICC reader
+cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
 ```
 
