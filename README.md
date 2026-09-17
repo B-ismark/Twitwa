@@ -35,24 +35,27 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | --- | --- |
 | `src/pixels.js` | All the pixel math. Ring flatness, modal background, row ink profile, status-bar cut and shape test, four-edge card background, colour round-trip delta. No Skia — none of it needs Skia to be correct |
 | `src/sizing.js` | Output size: width-bounded, never upscaling, no long-edge cap, encode ceiling |
-| `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device** — three times now, most recently byte-identically after the ring read was rewritten; see `spike/results/phase1-pipeline.md` |
+| `src/read.js` | One clamped sub-rect read, shared by the pipeline and the measurement harness. Was two copies returning the same values under different field names — `{width, height}` in one, `{w, h}` in the other. Pure: the colour constants arrive as an argument, so it loads in node and has a test |
+| `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device three times**, most recently byte-identically — but that was before the `readRect` merge, so the byte-identical claim is owed a fourth run and does not currently hold; see `spike/results/phase1-pipeline.md` |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
-| `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md` |
+| `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, which the published Q1/Q2/Q4 figures predate |
 | `App.js` | The spike screen: one button per Phase 0 question, plus two that run the Phase 1 pipeline and draw the written card back off disk |
 | `tools/png.mjs` | PNG decoder built on node's `zlib`, no dependency |
 | `tools/probe.mjs` | Answers Q1, Q3 and the card background from a PNG on disk |
 | `tools/make-fixture.mjs` | Synthetic screenshot with known band positions |
 | `tools/make-tall.mjs` | Tall synthetic PNGs for the Q5 ramp; 82MiB-as-RGBA costs 0.14MiB on disk |
 | `tools/check-imports.mjs` | Verifies named imports between our own modules exist; `expo export` resolves modules but not named exports. Prints whether each module was loaded or source-parsed, because the Skia-importing ones cannot be loaded in node |
+| `tools/check-dead.mjs` | Finds exported names nothing outside their own module refers to. Comments are stripped first, because this repo's comments name functions constantly and a dead export otherwise stays alive by being discussed |
 | `tools/chunks.mjs` | Reads a PNG's chunk table and any embedded ICC profile, and names the colour space **by its primaries** — the profile's name cannot, since Skia names both of the ones it writes "Skia". For the Display P3 question, which only the bytes can answer |
 | `tools/capture.mjs` | Drains the device's `PHASE0` log lines into `results/phase0-device-raw.txt`; exits 1 rather than write an empty capture |
 | `fixtures/screenshots/` | The four real captures every measured number rests on |
 
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
-decision delegated to `plan.js`/`sizing.js`/`pixels.js`, which is why those carry
-323 checks and 57 mutations between them while the renderer carries none
-(390 checks and 70 mutations counting the two PNG tools).
+decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
+those carry 379 checks and 65 mutations between them while the renderer carries
+none (446 checks and 78 mutations counting the two PNG tools, and 84 mutations
+counting the two gates that check their own rules).
 
 `renderCard()` was run twice on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
@@ -162,9 +165,11 @@ Both exit 1 on failure and have been verified to actually go red:
 python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 168 checks on the pixel math
-cd spike && node src/sizing.test.mjs     # 56 checks on the output sizing
+cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
+cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
-cd spike && node tools/check-imports.mjs # 41 imports + 6 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 42 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 57 exports + 7 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
@@ -182,13 +187,22 @@ behind, which is the same failure as a mutation that cannot go red:
 
 ```
 cd spike
-for t in src/pixels.test.mjs src/plan.test.mjs src/sizing.test.mjs \
-         tools/chunks.test.mjs tools/png.test.mjs; do
-  for b in $(grep -o "BREAK === '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
+for t in src/pixels.test.mjs src/read.test.mjs src/plan.test.mjs \
+         src/sizing.test.mjs tools/chunks.test.mjs tools/png.test.mjs \
+         tools/check-imports.mjs tools/check-dead.mjs; do
+  for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 70 mutations
+done                                     # silence is the pass; 84 mutations
 ```
+
+Two things this loop had wrong, both of which hid mutations rather than reporting
+them. It matched `BREAK === ` only, so a mutation written as `BREAK !== ` was
+never run — `check-dead.mjs` had one, and it exited 0 unnoticed until the pattern
+was widened. And it listed the five suites and neither gate, so the mutations on
+`check-imports.mjs` and `check-dead.mjs` were outside the loop that exists to
+prove mutations fail. Both are the README's own warning, one paragraph up, coming
+true twice.
 
 ## Answering Q1 and Q3 without a phone
 
