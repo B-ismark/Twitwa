@@ -1,0 +1,10 @@
+# The spike is its own repository and throwaway by design.
+spike/
+
+# Fetched HTML used once to measure the oEmbed / Open Graph responses.
+# measured-endpoints.md is the artifact; these are the raw bytes it came from.
+fixtures/pages/
+fixtures/og-pages.tar.gz
+
+__pycache__/
+*.pyc

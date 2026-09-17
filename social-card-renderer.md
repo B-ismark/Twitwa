@@ -1,0 +1,673 @@
+# Social Card Renderer App
+
+*As of September 16, 2026. Restructured around screenshot input; the link-fetch
+design and its measured endpoint behaviour are preserved in the appendix.*
+
+## Problem
+
+Manually screenshotting tweets, Threads posts, and Instagram posts produces crops
+that sit too close to the content, dragging in likes, icons, and reply counts, with
+no breathing room around the actual text or media. Existing "quote card" apps solve
+the crop problem but slap on their own branding or reformat things oddly.
+
+## Concept
+
+The user screenshots the post themselves, shares the image into the app, and drags a
+crop to the part they want. The app re-renders that crop with generous, adjustable
+padding on a background matched to the screenshot, and offers a mask tool for any
+leftover chrome the crop could not exclude. Output saves to Photos or shares
+straight to WhatsApp.
+
+No fetching, no API, no network. The app is a crop-and-compose tool, which is why it
+works on anything the user can see: public posts, private accounts, locked posts,
+DMs, Slack, Discord, LinkedIn.
+
+### Why this rather than fetching from a link
+
+An earlier design took a post link and rebuilt the card from fetched data. That
+works, and the appendix records exactly how far it works, but screenshot input wins
+on nearly every axis that matters here:
+
+| | Screenshot input | Link input (appendix) |
+| --- | --- | --- |
+| Platform coverage | anything on screen | X, Threads, Instagram |
+| Private / login-walled posts | works | impossible |
+| Quote posts, reply parents | **free** — already in the pixels | two fetch chains, one fragile |
+| Instagram resolution | device resolution, 1080–1440 | capped at a 640×640 crop |
+| Fragility | no network at all | OG scraping, `t.co` meta-refresh parsing, DOM-walking for reply parents, rate limits, signed URLs expiring in 5 days |
+| Code | a crop UI; everything below is shared | the entire fetch layer |
+
+What it gives up: fixed pixels. A light-mode screenshot stays light, text cannot be
+re-wrapped, and a saved card cannot be re-rendered later in a different theme. Those
+are real, and they are what the link path would buy back in v2.
+
+### The honest weakness, and the fix
+
+A crop cannot remove chrome that sits *between* two things the user wants. On X the
+action bar sits below the post text, so cropping it away works. On Instagram the
+on-screen order runs image → action row → like count → caption, so a crop keeping
+both the image and the caption keeps the like count with it — which is precisely
+what the problem statement is about.
+
+Hence the **mask tool**: after cropping, the user drags a box over leftover chrome
+and it is filled with the colour sampled from immediately around the box. Social UIs
+are flat single-colour backgrounds, so a sampled fill is seamless without real
+inpainting. This is not a nice-to-have — it is the thing that decides whether the
+app delivers the stated problem or only most of it, so it ships in v1 and gets
+prototyped first.
+
+**Measured, 2026-09-16** (`spike/results/phase0-q1-q3.md`). On a real dark-mode X
+capture and a real dark-mode Instagram capture, every row the Cover tool would
+target has a background spread below 1/255 — the engagement rows come in at 0.04
+to 0.59. The premise holds.
+
+With one condition that changes the implementation: **the fill is the ring's modal
+colour, not its mean.** The sampling ring around a like-count row catches
+ascenders and descenders from the rows either side, and a mean is dragged by them.
+On one measured row a mean fill came out `#7F7F7F` — mid grey — where the actual
+background was `#000000`. That is not a subtle error; it is a guaranteed seam on
+every dark post. The mean also overstated roughness by up to 17x, which would have
+read as a failing Q1 on a screenshot that passes.
+
+Alongside the fill, sampling reports **coverage**: how much of the ring is
+background at all. Low coverage means a badly placed box rather than a rough
+background, and the two want different responses — move the box versus accept a
+visible fill.
+
+## Core user flow
+
+1. User screenshots a post, taps share, picks the app. (Or opens the app and picks
+   from their recent screenshots.)
+2. Crop to the region worth keeping. The status bar is detected and trimmed by
+   default.
+3. Optional: mask any leftover chrome — like counts, a stray icon.
+4. Adjust padding and background. Both have sensible defaults, so this step is
+   skippable.
+5. Save to Photos, or share straight to WhatsApp.
+
+Steps 3 and 4 are optional by design; the default path is share → crop → save.
+
+## Rendering and design
+
+### Background matching
+
+The card background defaults to the colour **sampled from the crop's own edge
+pixels**, not to a fixed Paper or Ink. A dark-mode tweet padded with off-white looks
+like a sticker on the wrong ground; padded with its own background it looks like the
+post simply had more room.
+
+- Sample a band a few pixels wide just inside each edge of the crop, take the modal
+  colour, and use it if the four edges agree closely.
+- If they disagree — the crop cut through an image, or spans two surfaces — fall
+  back to the nearest of Paper or Ink, chosen by the crop's overall luminance.
+- Offer a manual override: Match / Paper / Ink.
+
+This replaces the per-card light/dark theme toggle from the link design, which
+cannot mean anything when the pixels are already committed.
+
+### Output spec
+
+The deliverable is an image file, so its dimensions are a design decision, not a
+device outcome.
+
+**Padding has units.** Each stop is a fraction of the crop's width, not a fixed
+pixel count, so the frame looks the same on a crop of any size: Snug 3%, Standard
+6%, Roomy 10%, floored at 12px.
+
+It is **not** rounded to an even number. An earlier draft said it was, "so the two
+sides match exactly", and that reasoning is wrong twice over: the padding is added
+twice from a single value, so the two sides match at any parity, and the thing that
+actually produces unequal margins is scaling the crop independently of the padding
+and letting the two roundings disagree. The card's destination rect is therefore
+derived by subtraction — `width - 2 × pad` — which makes the margins equal by
+construction rather than by arithmetic that happens to work out. `BREAK=asym` in
+`spike/src/sizing.test.mjs` restores the independent scaling; note that its first
+version exited 0, because for tidy inputs the two agree, and it only became a real
+test once inputs were found where they diverge (904×904 roomy gives margins 90 and
+89).
+
+**Sizing, in order:**
+
+1. `padded_w = crop_w + 2 × pad`, `padded_h = crop_h + 2 × pad`
+2. `scale = min(1, 1080 / padded_w)` — **width-bounded, and never upscaling.** A crop
+   from a 1080-wide screenshot lands near the target; a crop from an older 720p
+   device produces a smaller card rather than a soft one.
+3. Height simply follows. **There is no long-edge cap**, and this reverses an earlier
+   decision in this document.
+
+   That earlier rule capped the long edge at 1600px, which quietly destroyed exactly
+   the input the spec elsewhere promises to accept. A 1080×6000 thread crop at
+   Standard padding is 1210×6130 padded; the width bound alone gives 1080×5472,
+   while the 1600 long-edge cap gives **316×1600** — a 0.26 scale factor that turns
+   36px source text into 9.4px. Unreadable, silently, on the one case most worth
+   supporting. The cap was reasoned from WhatsApp's recompression, which is a
+   *sharing* concern, and it was applied as an *archival* limit.
+4. A ceiling still exists, but **not for the reason written here first.** These
+   were guesses pending Phase 0's tall-image stress; that has now run on a Pixel 6
+   Pro (`spike/results/phase0-device.md`) and split them:
+
+   - **8000px on the height: kept.** The real hardware ceiling is
+     `Skia.Surface.MakeOffscreen`, measured between 16256 (composes) and 16384
+     (returns `null`, rather than throwing). 8000 has roughly 2x headroom.
+   - **~10MP total: kept as a guard, but it cannot fire.** Output width is capped
+     at 1080 and height at 8000, so the largest card this can produce is 8.64MP —
+     under the limit, always. Two justifications were written for it before that
+     was checked: an encoder-and-heap limit (wrong; a 19.64MP surface composed and
+     encoded without complaint, and a full 82.4MiB `readPixels` never failed), then
+     a time limit (compose+encode runs ~50-60ms per megapixel, **92.5% of it the
+     PNG encoder**, so 10MP would be ~550ms of encoding — sound reasoning about an
+     unreachable branch). The real time bound is the 8.64MP maximum, around 500ms.
+     Time is still the right frame if the ceiling is ever revisited; memory is not.
+
+   Above the ceiling, scale down and say so.
+5. Above ~4000px tall, warn once that chat apps will downscale the preview. Warn,
+   do not shrink: shrinking to pre-empt someone else's downscale loses the archival
+   copy too, and the user may be saving rather than sending.
+
+**PNG**, not JPEG. The payload is type on a flat ground, exactly where JPEG rings on
+letter edges. The source screenshot is usually already PNG.
+
+**One output colour space: sRGB, 8-bit, SDR.** Wide gamut and high dynamic range are
+two different problems and the earlier instruction to "preserve the source colour
+space" collapsed them. Modern phones capture Display P3, and some capture HDR; an
+HDR source needs *tone mapping*, not a copied profile, because there is no
+brightness headroom in an SDR PNG to put it in. So v1 converts deliberately — P3
+gamut-mapped to sRGB, HDR tone-mapped to SDR — and accepts a small, known shift on
+saturated media in exchange for a file that looks the same everywhere it lands.
+Phase 0 measures the round trip; if Skia preserves P3 for free and recipients handle
+it, this is worth revisiting, but not before it is measured.
+
+Render off-screen at the computed pixel size, independent of screen density, so the
+same crop produces the same file on any phone. Verify that as equal dimensions and
+decoded pixels within tolerance — **not** as byte-identical files, since PNG
+encoders differ by version in filtering and chunk order.
+
+### Visual direction: island navigation, opaque surfaces
+
+The brief asked for a light touch of frosted glass; the weight constraint rules the
+blur out, so the look comes from the island shape and layered depth instead. Two
+things stay separate regardless — **chrome** (nav, sheets, toolbars) and **the
+rendered card**, which is flat, opaque, and maximally legible, since that is the
+deliverable people look at.
+
+**Material: opaque islands, not glass.** Skip runtime blur. The island shape carries
+the look — a floating pill detached from the screen edges reads as modern on its own.
+Fill it with a solid surface a few percent lighter (dark) or darker (light) than the
+background, add a 1px hairline border and one tight shadow.
+
+Where a blur would normally signal "content continues under this," use a short
+opaque-to-transparent gradient behind the nav. Effectively free to render, identical
+on every Android version.
+
+What this buys: no blur dependency, no per-frame blur cost while scrolling, no
+overdraw on mid-range devices — which matters more here than in the link design,
+since the crop surface is gesture-driven and must hold 60fps. Native blur via
+`RenderEffect` is Android 12+, and community libraries do offer sub-12 paths at
+worse quality and real frame cost; the performance argument alone is sufficient.
+
+**Island navigation**: a floating, centered, pill-shaped bottom bar with a detached
+circular island for the primary action. The island is **pick a screenshot** — the
+fastest path when the user opens the app directly rather than sharing in.
+
+| Token | Light | Dark | Role |
+| --- | --- | --- | --- |
+| Paper / Ink | `#F6F4EF` | `#15181D` | App background; card background fallback |
+| Surface | `#FFFFFF` | `#1E2228` | Nav pill, sheets — solid, no blur |
+| Hairline | `rgba(0,0,0,0.08)` | `rgba(255,255,255,0.10)` | 1px border on surfaces |
+| Graphite | `#4B5157` | `#949BA2` | Secondary text, icon default state |
+| Signal | `#3B5BA8` | `#7C9AE0` | One accent — active tab, primary action, crop handles |
+
+Every token needs a value per theme. A single-value version of this table failed
+WCAG on dark, on exactly the two most-used colours:
+
+| Pair | Ratio | |
+| --- | --- | --- |
+| Graphite `#4B5157` on Ink | 2.21:1 | fails AA and the 3:1 UI minimum |
+| Graphite `#4B5157` on Surface-dark | 1.99:1 | fails everything |
+| Signal `#3B5BA8` on Ink | 2.75:1 | fails AA and 3:1 |
+| Signal `#3B5BA8` on Surface-dark | 2.47:1 | fails everything |
+
+The dark values clear 4.5:1 on both dark grounds: Graphite-dark 6.33:1 on Ink and
+5.68:1 on Surface-dark; Signal-dark 6.40:1 and 5.75:1. Light values pass unchanged
+(Graphite 7.31:1, Signal 5.88:1 on Paper). Verified by `contrast.py`, which exits 1
+on failure.
+
+Signal doing double duty as the crop handle colour needs checking against arbitrary
+screenshot content, not against Paper and Ink — a blue handle over a blue image is
+invisible. Crop handles get a white core with a dark outline, or the inverse, so
+they read on any underlying pixels. That is a contrast requirement no token table
+can express, so it is a device check.
+
+- **Type**: the platform's system font throughout (SF Pro / Roboto Flex). The
+  card-versus-chrome font split from the link design is gone with it — the card
+  carries no app-drawn text any more, only the user's pixels. Nothing to bundle.
+- **Layout**: content-first, single column. The crop surface fills the screen; nav
+  and controls float above and below on their own surfaces.
+- **Motion**: one deliberate moment — the Save button morphing into the export
+  sheet. Crop and mask gestures are direct manipulation, not animation.
+
+### Icon pack and UI library
+
+- **Icons**: [Lucide](https://lucide.dev) — one consistent outline weight, native
+  React Native package (`lucide-react-native`). Small vocabulary: crop, mask, share,
+  save, settings.
+- **Framework**: React Native + Expo — fits the share-target requirement and keeps
+  Android/iOS in one codebase.
+- **Crop and mask surface**: `react-native-gesture-handler` plus
+  `react-native-reanimated`, driving the crop rect and mask boxes on the UI thread.
+  This is the only genuinely new work in the app.
+- **All pixel work**: `@shopify/react-native-skia`, as the single imaging
+  dependency. It does the edge sampling for background matching, the crop (draw a
+  sub-rect), the mask fill, the composition, and the PNG encode. The instinct is
+  that Skia is heavy and should be avoided, but here it **replaces** four libraries
+  — `react-native-view-shot`, `expo-image-manipulator`, and the alternatives for
+  pixel reads — so taking it is the lighter choice, not the heavier one. Skia
+  itself *does* run in Expo Go (SDK 57 lists it as bundled); the development build
+  is needed for the incoming-share intent filter, which is a native manifest entry
+  Expo Go cannot register.
+- **Depth**: no blur library. Solid surfaces, `expo-linear-gradient` for the nav
+  fade (already in the Expo stack), platform elevation for the shadow.
+- **Styling/tokens**: a typed `theme.ts` exporting the token table, used with
+  `StyleSheet` — **not** NativeWind. For four screens and five tokens a typed theme
+  enforces the palette better than utility classes: a wrong token is a TypeScript
+  error, a wrong class name is silent. It also removes a babel and metro config
+  surface, which is the kind of weight that does not show up in a bundle size but
+  costs a day when it breaks.
+
+### Copy voice
+
+- Name actions by what they do: "Save to Photos," not "Export." Keep the verb the
+  same through the flow — a "Save" button produces a "Saved" confirmation.
+- No filler enthusiasm — the interface confirms outcomes plainly.
+- Skip the usual AI-writing tells: no tracked-out ALL-CAPS labels, no
+  middle-dot-joined meta strings, no arrow appended to button text, no em-dash-heavy
+  or triad-heavy microcopy.
+- Empty states are an invitation: "Share in a screenshot, or pick one to get
+  started."
+- The mask tool is named for its effect, not its method: "Cover" or "Hide", never
+  "Inpaint" or "Heal".
+
+## Information architecture
+
+```
+Root
+├── Create            (default landing)
+│   ├── Share-in / pick-a-screenshot entry
+│   ├── Crop            (status bar auto-trimmed)
+│   ├── Cover           (optional — mask leftover chrome)
+│   ├── Padding + background
+│   └── Export sheet
+├── Library           (source image + crop rect + mask rects + settings)
+│   └── Card detail → re-edit / remove
+└── Settings
+    ├── App appearance (System / Light / Dark)   — chrome only
+    ├── Default padding (Snug / Standard / Roomy)
+    ├── Background (Match screenshot / Paper / Ink) — default Match
+    ├── Auto-trim status bar (on by default)
+    ├── Save behavior (Ask each time / Always save to Photos)
+    └── About + clear cache
+```
+
+Two destinations in the island nav — **Create** and **Library**. Settings sits
+behind a gear in Create's top-right, since it is visited rarely.
+
+## End-to-end flow
+
+```mermaid
+flowchart TD
+    A["Entry: share target or pick from Photos"] --> B{"Is it an image?"}
+    B -->|"No"| B1["Unsupported input state"]
+    B -->|"Yes"| C["Decode, honour EXIF orientation"]
+    C --> D{"Resolution usable?"}
+    D -->|"Tiny"| D1["Warn: card will be small, never upscaled"]
+    D -->|"Yes"| E["Detect and trim status bar"]
+    E --> F["Crop surface: user drags region"]
+    F --> G{"Leftover chrome?"}
+    G -->|"Yes"| H["Cover tool: mask box, sampled background fill"]
+    G -->|"No"| I["Sample crop edges for background colour"]
+    H --> I
+    I --> J{"Edges agree?"}
+    J -->|"Yes"| K["Background = sampled colour"]
+    J -->|"No"| K2["Background = Paper or Ink by luminance"]
+    K --> L["Compose: padding"]
+    K2 --> L
+    L --> M["Rasterise: width min(1080, crop + padding), height follows"]
+    M --> N{"Photos permission?"}
+    N -->|"Denied"| N1["Share-only fallback"]
+    N -->|"Granted"| O["Saved, entry added to Library"]
+```
+
+### Entry points
+
+1. **Share target** — the primary path. Android intent filter, `ACTION_SEND` with
+   `image/*`, plus `ACTION_SEND_MULTIPLE` so a multi-image share does not bounce.
+2. **Pick a screenshot** — the detached circular island. Opens the picker scoped to
+   the Screenshots album where the OS exposes it, since that is almost always what
+   the user wants.
+
+Note there is no clipboard path any more, and with it goes the pasteboard-read
+concern from the link design. An image on the clipboard is still worth accepting if
+it is free, but it is not an entry point.
+
+### Crop screen
+
+The screenshot fills the surface with a draggable crop rect over it, corners and
+edges both grabbable, the area outside dimmed. The status bar band is pre-trimmed,
+shown as an already-excluded region the user can drag back in.
+
+Below, on a solid raised surface: padding (three stops) and background (Match /
+Paper / Ink). Changes re-render live. Primary action **Save to Photos**, share
+secondary, **Cover** alongside as a mode toggle.
+
+Deliberate omissions: no filters, no colour adjustment, no text or sticker overlay,
+no border or shadow controls, **and no aspect presets** — the crop already is the
+aspect, so a Square or Story preset can only fight it by padding unevenly or by
+re-cropping what the user deliberately included. The app crops, pads, and covers.
+Every knob beyond that is a different product.
+
+## Screen inventory and states
+
+| Screen | Empty | Loading | Error | Populated |
+| --- | --- | --- | --- | --- |
+| Create | "Share in a screenshot, or pick one to get started" | n/a | n/a | Recent-screenshot suggestion if one is available |
+| Crop | n/a | Image decode skeleton at the source's own proportions | "This image couldn't be opened" + pick another | Crop rect over the screenshot |
+| Cover | n/a | n/a | n/a | Mask boxes, tap-to-remove |
+| Library | "Cards you make show up here" | Thumbnail grid fades in | n/a | Grid, newest first |
+| Card detail | n/a | n/a | "The original screenshot is gone — this card can't be re-edited" + offer remove | Re-editable crop, or flat card if the source was cleared |
+| Settings | n/a | n/a | n/a | Grouped list |
+
+## Edge cases
+
+| Case | Behavior |
+| --- | --- |
+| Non-image shared (text, PDF, link) | Inline message naming what is supported. No modal, no error red — a normal outcome. A shared *link* is the obvious v2 hook; until then say so plainly rather than silently failing. |
+| Multiple images shared at once | Handle the first and show a strip to switch, rather than rejecting the intent. Registering only `ACTION_SEND` and not `ACTION_SEND_MULTIPLE` makes the app vanish from the share sheet for multi-select, which reads as a bug. |
+| EXIF orientation flag set | Honour it at decode. A shared camera photo or a re-encoded screenshot can carry one, and ignoring it rotates the crop relative to what the user saw. |
+| Display P3 source | Gamut-map to sRGB deliberately per the output spec. A naive clamp shifts colours visibly on media posts; a deliberate map shifts them less and predictably. |
+| HDR source | Tone-map to SDR. Not the same problem as wide gamut — an SDR PNG has no headroom to carry it, so there is nothing to "preserve". No HDR output in v1. |
+| Very low-resolution source | Never upscale. Warn once that the card will be small, and let it be small. A soft card is the one outcome this app exists to avoid. |
+| Very tall crop (long thread) | Allowed at full height — only the width is bounded. Above ~4000px, warn that chat apps will downscale the preview. Above the decode/encode ceiling, scale down and say so. |
+| Source too large to decode | Downscale at decode rather than failing. A 1080×20000 capture is ~82MiB as one RGBA buffer before any copy, so the ceiling is a heap limit, not a preference. |
+| Crop smaller than a floor | Enforce a minimum crop of ~120px on the short edge so the output is not a postage stamp. Clamp the gesture rather than erroring. |
+| Status bar present | Auto-trimmed by default, shown as an excluded band the user can drag back. Trim only when the band passes a **shape test** — glyphs at both outer edges, empty middle, under ~7.5% of height. |
+| Status bar already cropped out | Do nothing. Measured on two real captures: the old heuristic found a confident "status bar" at 7.6% and 7.9% of height that was in fact the author's avatar-and-name row, so auto-trim would have silently eaten the byline. Detecting a top boundary is not the same as detecting chrome. |
+| Rounded platform corners inside the crop | Leave them. Matching the card radius to them is a guess; the user cropped where they cropped. |
+| Crop edges disagree on background colour | Fall back to Paper or Ink by the crop's overall luminance rather than picking one edge and hoping. |
+| Mask box over non-flat background | The sampled fill will be visible. Allow it, show the result live so the user sees it immediately, and do not pretend it is seamless. |
+| Screenshot already padded by its source app | Nothing to do — the user's own padding plus ours just reads as roomier. Not worth detecting. |
+| Screenshot of a screenshot | Works, no special handling. |
+| Photos permission denied | Fall back to the share sheet silently. Don't nag, don't block — sharing to WhatsApp is the actual goal. |
+| Source screenshot later deleted from Photos | No effect. The source is copied into app-owned storage at import, so a Library entry stays re-editable regardless of what happens in Photos. Only the app's own "delete originals" action loses re-editability, and it says so. |
+| App killed mid-crop | Nothing to recover. Re-entry starts clean. |
+| Same screenshot used twice | Two Library entries — unlike link input, two different crops of one screenshot are two different cards. Don't deduplicate by source. |
+| Device theme changes mid-session | Chrome follows the system. The card's background is either sampled or explicitly chosen, so it never changes underneath the user. |
+| Alt text on export | Not generated. Out of scope for v1, stated so the omission is deliberate. |
+| Likes or counts still visible after crop | This is the Cover tool's entire reason to exist. If Cover proves unconvincing in practice, the problem statement is not fully met and the link path in the appendix becomes the answer rather than an enhancement. |
+
+## Decisions settled
+
+| Decision | Choice | What it means for the build |
+| --- | --- | --- |
+| Input mode | **Screenshot, shared in or picked** | No network in v1. Deletes the entire fetch layer, every per-platform parser, and every error state around deleted, private, unsupported, or rate-limited posts. |
+| Chrome removal | Crop, plus a **Cover** mask with sampled-background fill | The crop alone cannot satisfy the problem statement on Instagram. Prototype Cover first — it carries the premise. |
+| Card background | Sampled from the crop's edges, overridable to Paper or Ink | Padding that matches the screenshot reads as breathing room rather than a mount. Replaces the per-card theme toggle, which fixed pixels make meaningless. |
+| Quote posts, reply parents | **Free** | Already in the screenshot, rendered by the platform as the user saw them. No fetch chains, no nested template, no parent lookup. |
+| Private and login-walled posts | **Supported** | They were impossible under link input. This is the single largest capability gain. |
+| Output | PNG, width `min(1080, crop + padding)`, height unbounded below the encode ceiling, sRGB SDR | Width-bounded because a long-edge cap turns a long thread into 9px text. One colour space because wide gamut and HDR are different problems and only one of them fits in an SDR PNG. |
+| Aspect presets | **Dropped** | The crop determines the output shape; padding is the only shape control. Inherited from the link design, where text could be re-laid-out to any ratio — with committed pixels a preset must either pad asymmetrically or discard content the user chose to include. |
+| Typography | System font, chrome only | The card draws no app text, so there is nothing to bundle and no cross-OS fidelity problem. |
+| Library storage | A **copy** of the source in app-owned storage, plus crop rect + mask rects + settings in source-pixel space | Fully re-editable and immune to the source moving or being deleted — a `content://` URI from a share is a revocable grant, not a file. Costs real storage, 200KB–2MB per source, so Settings has two separate actions: "clear rendered outputs" (lossless, they regenerate) and "delete originals" (destroys re-editability, and says so). |
+| Distribution | **Personal / sideload** | Three separate things, previously collapsed into one. **Store policy**: not engaged, there is no listing. **Platform display requirements**: written for API and embed consumers, and this app consumes neither — it reads pixels the user already had. **Content rights**: unchanged by any of that. Someone else's post stays someone else's, and re-sharing it stripped of attribution is the user's call to make, not a thing sideloading licenses. The branding-free design stands on the first two; the third is a reason to keep the tool personal rather than a reason it is safe. |
+| Link input | **Deferred to v2** | Kept in the appendix with its measured behaviour intact. It earns its place later as "paste a link for a perfectly typeset card" on public posts, where font and theme control genuinely beat a screenshot. |
+| Platform order | Android first, iOS after | See below. |
+
+### What Android-first changes
+
+- **Intent filters, not share extensions.** `ACTION_SEND` and
+  `ACTION_SEND_MULTIPLE` with `image/*`. No memory ceiling comparable to iOS share
+  extensions, though the "hand off to the main app and work there" pattern still
+  holds for architectural cleanliness — and matters more now, since decoding a
+  full-resolution screenshot is the app's heaviest single operation.
+- **Saving goes through MediaStore**, with scoped-storage behaviour differing across
+  API levels. Sharing to WhatsApp needs a `FileProvider` content URI for
+  `ACTION_SEND` — the stated primary goal depends on it.
+- **Reading the source needs no broad storage permission** when the image arrives by
+  intent; the picker path uses the photo picker, which is permissionless on modern
+  Android. Worth getting right, since the link design's permission story was simpler
+  and this one can regress into a full-gallery prompt if built carelessly.
+- **No blur means no version tiering.** Opaque surfaces render identically across
+  versions, so the design ships once.
+- **Device fragmentation** matters for source resolution rather than for rendering:
+  the output is decoupled from screen density, but what a screenshot *contains*
+  varies by density and display-zoom setting.
+
+## Open questions
+
+- **Does Cover actually look seamless?** The premise depends on it. Prototype
+  against a real Instagram screenshot before building anything else.
+- **Status-bar detection**: whether a simple top-band heuristic is reliable across
+  Android skins, or whether it needs to be a draggable default rather than automatic.
+- **Skia versus ImageManipulator** for the compose-and-rasterise step, once the
+  sampled fill is in play.
+- **Whether the edge-sampling background actually reads better** than a fixed Paper
+  or Ink. It should, but it is a design claim, not a measured one.
+
+## Not in scope (for now)
+
+- Fetching anything from a link (see appendix — v2)
+- Stitching multiple screenshots into one long image
+- Filters, colour adjustment, text or sticker overlays
+- Real inpainting beyond a sampled flat fill
+- Alt text on the exported image
+
+---
+
+# Appendix: link input (v2)
+
+Everything below was measured against live endpoints and real public posts on
+2026-09-16. It is correct, and it is deferred rather than discarded. If Cover proves
+unconvincing, or if typeset output becomes the point, this is the design.
+
+## Platform sources and fetching
+
+Meta's oEmbed endpoints went tokenless on June 15, 2026 — no access token, no App
+Review for public posts.
+
+**But oEmbed is the wrong primary source.** It returns embed *markup* meant to be
+upgraded in a browser by the platform's own script, not structured post data. Meta
+dropped `thumbnail_url`, `thumbnail_width`, `thumbnail_height` and `author_name`
+from `instagram_oembed` on November 3, 2025, and both Meta platforms now return a
+content-free placeholder.
+
+**Open Graph meta tags on the post page are the primary source for all three
+platforms** — one scraper, uniform data model. All three serve them to a plain user
+agent over HTTP 200, including X, which does not login-wall the post page.
+
+| Platform | Primary: OG tags | Secondary: oEmbed | oEmbed's actual value |
+| --- | --- | --- | --- |
+| X | text, name, handle, media or avatar, `og:image:alt` | `author_name`, `author_url`, `html` | Text sits in `<p lang dir>`, so text direction is given rather than guessed. Also the timestamp. Media is only a `pic.twitter.com` t.co link — no media URL |
+| Threads | text, name, handle, media, media dimensions | `type`, `version`, `html`, `provider_*`, `width` | Shortcode existence check only — it ignores the username, so it cannot confirm the author. `html` is a Threads logo plus "View on Threads" |
+| Instagram | text, name, handle, media | exactly `version`, `provider_name`, `provider_url`, `type`, `width`, `html` | Nothing usable. `html` is a grey `#F4F4F4` skeleton plus "View this post on Instagram" |
+
+### Parsing rules, each measured
+
+- **Prefer `og:description` over `twitter:description`.** Identical on X, but Threads
+  truncates `twitter:description` to ~200 characters while `og:description` carried
+  the full 440.
+- **`og:description` preserves real newlines**, so paragraph structure comes free.
+  This also means a line-based scan misses the tag entirely — parse with something
+  that spans lines.
+- **Instagram's `og:description` embeds exactly what this app removes.** Measured:
+  `71 likes, 1 comments - sciencealert on September 16, 2026: "In the darkest
+  depths…"`. Strip the `N likes, M comments - handle on DATE: "` prefix, or prefer
+  `og:title`, which is the cleaner `Name on Instagram: "caption"`.
+- **Take the handle from `og:url`, never `og:title`.** A measured Threads title is
+  `<emoji> <post opening> | <display name> (@<handle>) on Threads`.
+- **The pipeline must be UTF-8 clean end to end.** Emoji in display names are
+  routine.
+
+### X's `og:image` is overloaded
+
+Either the avatar or the post media, never both:
+
+| Post kind | `og:image` | `twitter:card` | `og:image:alt` |
+| --- | --- | --- | --- |
+| Text-only | avatar | `summary` | `"jack profile picture"` |
+| Media | the media | `summary_large_image` | absent |
+
+A media post's avatar needs a third fetch of `https://x.com/{handle}`, cacheable per
+author.
+
+### URL normalization comes before any network call
+
+- **Threads share links must be resolved first.** The share sheet emits
+  `threads.com/share/<id>/`, which oEmbed rejects with
+  `code: 100, error_subcode: 2207047, "Invalid URL"`. It 301s to
+  `threads.com/@handle/post/<shortcode>`.
+- **`t.co` no longer redirects.** `https://t.co/<id>` returns HTTP 200 with no
+  `Location` header. It serves a 357-byte interstitial carrying the target in a
+  `<meta http-equiv="refresh">`, the `<title>`, and a `location.replace()`. Expand
+  with a GET and read the meta refresh. A HEAD or redirect-follow fails *silently* —
+  200 looks like success, so the link appears already canonical. Scheme matters:
+  `http://` returned 520.
+- Strip `?s=`, `?stkn=`, `?xmt=`; accept `threads.net` legacy URLs.
+
+### A 400 is overloaded: branch on `code`
+
+| Response | Meaning | Action |
+| --- | --- | --- |
+| `code: 100`, subcode `2207047`, "Invalid URL" | our URL is wrong | normalize and retry, never show "deleted" |
+| `code: 24`, "Media Not Found" | deleted or private | show unavailable |
+| 200 | shortcode exists | scrape |
+
+Branch on `code`, not `error_subcode`: the subcode for "Media Not Found" is
+`4279056` on Threads and `2207045` on Instagram. Treating any 400 as "deleted" would
+report a deleted post every time normalization failed — the common case, given the
+`/share/` form.
+
+### oEmbed 200 does not validate the handle
+
+`threads.com/@zzzznotarealacct/post/<shortcode>` — a nonexistent account with a real
+shortcode — returns 200, with the permalink `threads.com/t/<shortcode>`. The username
+segment is discarded. So attribution must come from the scraped `og:url`, never the
+input URL, and the page scrape must follow redirects generally, since that
+fake-username URL 301s too.
+
+### Deleted vs. private
+
+- **X**: 404 plus a known `og:description` and a placeholder `og:image`.
+- **Threads**: oEmbed `code: 24`.
+- **Instagram**: `code: 24`; does not separate deleted from private, so one message
+  covers both.
+
+### Media URLs expire on Meta, not on X
+
+| Platform | Host | Params | Expiry |
+| --- | --- | --- | --- |
+| X | `pbs.twimg.com` | none at all | stable |
+| Threads | `instagram.*.fna.fbcdn.net` | 16, signed | `oe=6AB0AAC4` → ~5 days |
+| Instagram | `scontent.cdninstagram.com` | 13, signed | `oe=6AB0D2FB` → ~5 days |
+
+`oe` is a hex epoch; `oh` signs the rest, so `stp` cannot be edited for a larger
+crop. Cache bytes, never URLs.
+
+**Instagram's `og:image` is a 640×640 crop** (`stp=…_s640x640_tt6`, 53KB JPEG)
+against Threads' 1872×1190 — a hard resolution ceiling, and the reason screenshot
+input beats link input on Instagram.
+
+### Quote posts: a verified four-step chain
+
+1. Scrape the outer post's OG tags.
+2. Read the extra `t.co` from its oEmbed `html` — a quote post's blockquote carries
+   two hrefs, its own permalink plus a `t.co`.
+3. GET that `t.co`, read the meta refresh.
+4. Scrape the resulting status URL as in step 1.
+
+**Distinguishing a quote from a media post needs step 3** — both carry an extra
+`t.co`:
+
+| Expanded target | Meaning |
+| --- | --- |
+| `…/status/<id>/photo/1` | media post |
+| `…/status/<id>`, no trailing segment | quote post |
+
+`t.co` resolves to a `twitter.com` host while the scraped `og:url` normalizes to
+`x.com`; treat the scraped value as canonical.
+
+### Reply parents: a different and more fragile mechanism
+
+A reply's oEmbed blockquote contains **only its own permalink** — no parent link, no
+`data-conversation`.
+
+- **Parent author comes free** from `og:description`, which begins with the mention
+  prefix: `@aitrackerbot The fact that they give "only" 262k context…`.
+- **Parent text needs the parent's status ID**, which appears only in the
+  server-rendered thread. Verified rule: collect every
+  `data-href="/<user>/status/<id>"` block, take the **last** occurrence of the focal
+  post's own timestamp anchor as the boundary, and blocks before it are ancestors
+  while blocks after are later replies. The direct parent is the last ancestor.
+  Verified both directions — one ancestor on a reply, none on an original post.
+
+**This is the most fragile thing in either design.** The first version of the rule
+was wrong: X renders the focal post twice, an SSR shell near byte 21k and the
+hydrated copy near 118k, so using the *first* timestamp anchor put the parent on the
+wrong side and classified it as a later reply — and still returned a plausible
+answer. Screenshot input makes this whole section unnecessary, which is a large part
+of why it wins.
+
+### Fetch layer shape, if this ships
+
+Fetch **on-device**, with parse rules pulled from a small remote endpoint. On-device
+fetching spreads rate limits across user IPs and means no server sees anyone's
+links; remote parse rules make a markup change hot-fixable without an app release.
+A full proxy would concentrate traffic behind one IP, making X's rate limits worse,
+and would see every link rendered.
+
+X's oEmbed returns `cache_age: 3153600000`, so aggressive caching is sanctioned.
+
+### Legal, if this ships
+
+X's Display Requirements require full name, @username, post text, profile picture,
+the X logo in close proximity, a timestamp linking to the post, and unmodified
+content. Meta's Platform Terms are similar in spirit. The branding-free design
+conflicts on four counts. Irrelevant for personal sideloading — the decision taken —
+but it would need a platform mark and timestamp for store distribution, and the
+timestamp is available from X's oEmbed, so that concession is cheap.
+
+---
+
+## Measured evidence
+
+Endpoint behaviour in the appendix was measured unauthenticated on 2026-09-16
+against real public posts, not taken from documentation:
+
+- `measured-endpoints.md` — every response across four rounds, including where
+  earlier rounds were wrong.
+- `og.py` — the OG extractor, and a gate: exits 1 if a page lacks `og:title`,
+  `og:description` or `og:image`. Verified on eight saved pages and verified to exit
+  1 when a tag is stripped.
+- `contrast.py` — WCAG ratios for every token pair. Exits 1 on failure; verified to
+  go red when a dark token is reverted to its light value.
+
+One methodological note worth keeping, because it produced two wrong conclusions:
+an early round used `grep -o` with a character cap and concluded Instagram served
+almost no OG tags and Threads had no `og:image`. Both were artifacts of the
+instrument — `grep` is line-based and `og:description` contains literal newlines,
+while Meta's signed `og:image` URLs exceed 480 characters. The platforms were fine;
+the measurement was filtering. Hence `og.py` uses `re.S` and no length cap.
+
+Not verified, and not verifiable from a terminal — everything that decides whether
+v1 works:
+
+- ~~whether the Cover tool's sampled fill looks seamless on a real screenshot~~ —
+  **measured and passing** on two real captures, conditional on a modal fill; see
+  `spike/results/phase0-q1-q3.md`. Still an eye judgement on a display, and both
+  captures were dark mode
+- ~~whether status-bar auto-detection is reliable across Android skins~~ —
+  **measured and failing** without a shape test: it reported a confident cut on
+  two screenshots that had no status bar at all. With the shape test both are
+  correctly rejected. Not yet tried on a capture that *does* include one
+- whether the sampled background reads better than a fixed Paper or Ink
+- crop-gesture performance on mid-range hardware
+- how WhatsApp recompresses a given output size
+- Instagram's on-screen element order, which decides how much Cover has to do
