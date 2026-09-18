@@ -56,6 +56,18 @@ import { intersectRect } from './pixels.js';
  * deliberately absent so the two shapes cannot drift apart again.
  */
 export function readSubRect(img, box, colour) {
+  // Named here rather than thrown by the dereference below. Omitting this
+  // argument is the easy mistake — it is the only one of the three that is not
+  // obviously required at a call site — and it shipped in App.js on
+  // 2026-09-18, where it read as `Cannot read property 'colorType' of
+  // undefined` and pointed at this file instead of at the caller. Prefer
+  // src/skia.js's two-argument `readRect`, which cannot be called this way.
+  if (!colour || colour.colorType === undefined || colour.alphaType === undefined) {
+    throw new Error(
+      'readSubRect: the third argument is the colour shape {colorType, alphaType}. ' +
+        'Use readRect from src/skia.js, which binds it.',
+    );
+  }
   const r = intersectRect(img.width(), img.height(), box);
   if (!r) return null;
   const buf = img.readPixels(r.x, r.y, {

@@ -3,10 +3,11 @@
 // API signatures were read out of node_modules/@shopify/react-native-skia's own
 // .d.ts at 2.6.2 rather than recalled, because a wrong signature here fails as a
 // null and then as a wrong number, which is worse than a crash.
+// ColorType and AlphaType are gone: the one deliberate whole-image read below
+// now spells its colour with src/skia.js's RGBA, so this file names the shape
+// in no place at all.
 import {
   Skia,
-  ColorType,
-  AlphaType,
   ImageFormat,
   ColorSpace,
 } from '@shopify/react-native-skia';
@@ -21,7 +22,7 @@ import {
   maxChannelDelta,
   rgbHex,
 } from './pixels';
-import { readSubRect } from './read';
+import { RGBA, readRect } from './skia';
 
 const now = () => (global.performance && global.performance.now ? global.performance.now() : Date.now());
 
@@ -31,28 +32,17 @@ function timed(label, fn) {
   return { label, ms: +(now() - t0).toFixed(2), value };
 }
 
-// The colour shape every read here uses, hoisted so read.js needs no Skia import
-// and can therefore be tested in node.
-const RGBA = { colorType: ColorType.RGBA_8888, alphaType: AlphaType.Unpremul };
-
-/**
- * Read ONE sub-rect, not the whole image.
- *
- * A one-line adapter over the shared `readSubRect`. The body used to live here
- * and again in pipeline.js, the same arithmetic under two different field
- * spellings — `{w, h}` here and `{width, height}` there — which is worse than a
- * plain duplicate, because a reader who knows one file's shape reads the other
- * one wrong. This file now uses `{width, height}` too; that was the only
- * behaviour-visible part of the merge.
- *
- * This file is the instrument that produced the published Q1/Q2/Q4 figures in
- * results/phase0-device.md, so changing it owes a re-run: the clamp fix that
- * preceded this one was made with the device attached and Q1 reproduced straight
- * after. **This merge has not been re-run on a device** — the phone was
- * disconnected. See src/read.js for the clamp defect the shared body carries the
- * history of, and read.test.mjs for the 52 checks neither copy ever had.
- */
-const readRect = (img, box) => readSubRect(img, box, RGBA);
+// `RGBA` and `readRect` used to be defined here AND in pipeline.js. Both now
+// come from src/skia.js. The merge that removed the second copy is described
+// there; what it did NOT remove was the third absence — App.js, which had
+// neither and so called the three-argument `readSubRect` with two.
+//
+// This file is the instrument that produced the published Q1/Q2/Q4 figures in
+// results/phase0-device.md, so changing it owes a re-run: the clamp fix that
+// preceded this one was made with the device attached and Q1 reproduced
+// straight after. **The readRect merge has not been re-run on a device.** See
+// src/read.js for the clamp defect the shared body carries the history of, and
+// read.test.mjs for the checks neither copy ever had.
 
 export async function decodeFromUri(uri) {
   const t0 = now();
@@ -236,8 +226,8 @@ export function stressFullRead(img) {
     const buf = img.readPixels(0, 0, {
       width: img.width(),
       height: img.height(),
-      colorType: ColorType.RGBA_8888,
-      alphaType: AlphaType.Unpremul,
+      colorType: RGBA.colorType,
+      alphaType: RGBA.alphaType,
     });
     return {
       requestedMiB: want,

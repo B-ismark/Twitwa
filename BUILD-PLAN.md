@@ -487,13 +487,74 @@ against what this plan says. It exits 1 on failure.
 because Crop and Cover both hang off this shell, and because it is where the
 render step gets deleted.
 
-**Built the same day, and NOT looked at on a phone.** Every item below is done
-in code, every gate is green, and the app bundles. What that does not cover is
-everything this phase is actually about: whether the cross-fade reads as one
-picture, whether the live recompose keeps up with a padding drag, whether the
-corner radius looks like a card or like a sticker, and whether the proposed
-crop lands anywhere sensible on a real screenshot. The auto-crop's whole-image
-read is also unmeasured for time, and it runs on the JS thread at import.
+**Built 2026-09-18, and RUN ON THE PHONE the same day.** It did not survive
+first contact, and the way it failed is the argument for the rule it broke.
+
+**It crashed on every import, and had done since it was written.** App.js
+called `readSubRect(img, {x, y, w, h})` with two of its three arguments, so
+`colour.colorType` threw, and the catch set `problem` while the render went on
+to read `ed.tool` with `ed` still null. The app died with *Cannot read property
+'tool' of null*, which names neither the throw nor the decode under it. **The
+editor had never once opened on a proposed crop** — the central claim of this
+phase — and 1359 green checks, `check-imports`, and a clean `expo export` all
+said otherwise, because no suite loads a component, `check-imports` verifies
+that a name RESOLVES and not how it is CALLED, and bundling is arity-blind.
+
+What that cost, and what was done about it rather than just fixing the call:
+
+- `proposeFor` moved out of App.js into `src/autocrop.js` as
+  `proposeFromImage(img, read)`, taking its reader as an ARGUMENT so the whole
+  path runs in node against a fake image. Three profiles, a status band and a
+  detector is not view code; it only looked like view code because it needs a
+  Skia image. 15 new checks, 4 new mutants
+- `src/skia.js` now owns the one `RGBA` constant and the one two-argument
+  `readRect`. Both had been written privately in `pipeline.js` AND `measure.js`
+  — two copies each — and App.js had neither, which is why it reached for the
+  three-argument function. A two-argument function cannot be called this way
+- `readSubRect` throws a named error when the colour is missing, rather than
+  letting the dereference blame `read.js`. 9 new checks, 2 new mutants
+- `setSrc` now runs AFTER the proposal instead of before it, so `src` and `ed`
+  are set together or not at all. Guarding the render with `ed &&` would have
+  hidden the crash rather than removed the state that caused it
+
+**Two more defects the device found, neither visible in any test:**
+
+- **Background = Paper drew the card on a full-width black slab.**
+  `palette.stage` is documented as the ground *while cropping* — dark so Paper
+  does not tint a light screenshot's edges — and it was painted under the
+  finished card too. Invisible for as long as anyone looked, because the
+  default is Match and Match sampled near-black on the fixture. The ground now
+  rides the same shared value as the cross-fade
+- **A quarter of every export was discarded work.** `renderCard` ran
+  `findStatusBar` unconditionally, and since this phase the app always passes
+  `trim: 'never'` because the proposal already did that trim. Measured 78.33ms
+  of a 323ms Share. Now skipped, and reported as `null` rather than `0` — a
+  zero would read as "looked for, cost nothing". The honest saving is the
+  profile and zone scan, **38.2ms**; the read also paid for Skia's lazy decode,
+  which moved to `planMs` (22 → 67) rather than disappearing
+
+**Measured on the Pixel 6 Pro, 2026-09-18**, on `x-timeline-statusbar`
+(1440x3120):
+
+- The proposal: `{x:36, y:89, w:1404, h:3002}`, trimming 89 top / 29 bottom /
+  36 left / 0 right. The status-bar floor did its job — cut at row 89 rather
+  than at the flat lead's 56, which is exactly the case the floor exists for
+- **The auto-crop's whole-image read costs 200–234ms** on the JS thread at
+  import. This was listed here as unmeasured. It is the largest single cost in
+  the import and it is not yet off the main thread
+- The crop scrim halves luma outside the rect: a step from 33 to 67 across the
+  edge, decoded from a screencap rather than eyeballed
+- Padding is live and monotone at a fixed 1080 width: Snug 2240, Standard
+  2178, Roomy 2105
+- **The phase's own verification gate passed on the device.**
+  `P4.sameComposition` across a 3.7x scale: preview 291x567 pad 24 radius 4,
+  export 1080x2105 pad 90 radius 14, `aspectOff 0.00062`, `padFracOff
+  0.00086`. A second run at a larger preview was tighter still: 0.00028 and
+  0.00043
+
+**Still not looked at:** the 160ms cross-fade as motion (a screencap catches
+one frame of it, which is not the same as watching it), the corner radius as a
+judgement, and how a padding DRAG feels as opposed to the three stops.
 
 What landed, beyond the list below:
 

@@ -31,7 +31,13 @@
 # Hard failures exit non-zero. Warnings print and continue.
 set -u
 A="${ADB:-/d/AndroidDev/sdk/platform-tools/adb.exe}"
-PKG="${PKG:-dev.bismark.twitwa}"
+# The DEBUG id, because this script exists for dev-client runs against Metro.
+# `withDebugSuffix` puts `.debug` on the debug buildType only, so all three of
+# dev.bismark.twitwa, .debug and the old .twitwaspike are installed side by
+# side on this phone. Defaulting to the release id force-stopped and relaunched
+# an app that never talks to Metro, and every check after it then described a
+# process that was not under test. Override with PKG= for a release run.
+PKG="${PKG:-dev.bismark.twitwa.debug}"
 PORT="${PORT:-8081}"
 cd "$(dirname "$0")/.." || exit 1
 
@@ -123,13 +129,26 @@ if [ -n "$RELOAD" ]; then
   echo "reload"
   "$A" shell am force-stop "$PKG" >/dev/null 2>&1
   "$A" logcat -c >/dev/null 2>&1
-  "$A" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
-  # The dev client opens on its launcher; the first DEVELOPMENT SERVERS row is
-  # the project. A fixed coordinate because those rows are Compose nodes that
-  # uiautomator does not report, same as the picker's tabs.
+  # Launch straight at the bundle URL rather than opening the dev launcher and
+  # tapping its first DEVELOPMENT SERVERS row. That tap was a fixed coordinate
+  # (718 722) because the rows are Compose nodes uiautomator does not report —
+  # so it could not be verified before being sent, and it missed: it landed on
+  # whatever was at that point after a layout change and the run continued
+  # against the launcher. A coordinate that cannot be checked is not a step, it
+  # is a guess with a timeout after it.
+  #
+  # The scheme is `exp+<slug>`, and app.json sets no explicit `scheme`, so it
+  # is read back from the device rather than assumed. Confirm with:
+  #   adb shell dumpsys package "$PKG" | grep -oE 'Scheme: "[^"]+"' | sort -u
   curl -s -m 20 "http://127.0.0.1:$PORT/status" >/dev/null 2>&1
-  "$A" shell input tap "${DEV_SERVER_XY:-718 722}"
-  echo "  tapped the first development server row (${DEV_SERVER_XY:-718 722}: not in the dump)"
+  url="${DEV_URL:-exp+twitwa://expo-development-client/?url=http%3A%2F%2Flocalhost%3A$PORT}"
+  if "$A" shell dumpsys package "$PKG" 2>/dev/null | grep -q 'Scheme: "exp+twitwa"'; then
+    ok "the device registers exp+twitwa for $PKG"
+  else
+    warn "$PKG does not register exp+twitwa — the deep link below will not resolve"
+  fi
+  "$A" shell am start -a android.intent.action.VIEW -d "$url" "$PKG" >/dev/null 2>&1
+  echo "  launched $PKG at $url"
   for i in $(seq 1 60); do
     if "$A" logcat -d -s ReactNativeJS:V 2>/dev/null | grep -q 'Running "main"'; then
       ok "JS running (bundle re-fetched, so the device is on the current tree)"

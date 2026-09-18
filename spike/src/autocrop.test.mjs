@@ -1,12 +1,14 @@
 // Tests for src/autocrop.js — the crop the editor opens on.
 //
-//   for b in band_symmetric band_all_flat axes_swapped statusbar_overrides \
-//            statusbar_ignored floor_whole floor_dead profile_short_ok \
-//            no_reason trim_not_subtracted cols_null_as_flat budget_dead; do
+//   for b in $(grep -o "BREAK === '[a-z_0-9]*'" src/autocrop.test.mjs \
+//               | cut -d"'" -f2 | sort -u); do
 //     BREAK=$b node src/autocrop.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
-// Every one must print 1.
+// Every one must print 1. DERIVED, not typed: the list that used to sit here
+// named twelve mutants and went stale the moment four were added for
+// proposeFromImage. Three hand-written BREAK lists in this repo had already
+// fallen behind the suites they described.
 //
 // EVERY FIXTURE HERE IS ASYMMETRIC, and that is the point rather than a
 // flourish. A trim has four independent numbers and three ways to confuse
@@ -17,6 +19,9 @@
 // that would survive any other choice.
 import * as real from './autocrop.js';
 import { MIN_CROP } from './crop.js';
+// For the proposeFromImage mutants at the bottom of the BREAK chain, which
+// reimplement the body rather than wrapping it.
+import { rowInkProfile, colInkProfile, detectStatusBar } from './pixels.js';
 
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
@@ -122,6 +127,70 @@ if (BREAK === 'band_symmetric') {
     const r = real.proposeCrop(args);
     return { ...r, crop: { ...r.crop, w: args.width - r.trimmed.left, h: args.height - r.trimmed.top } };
   };
+} else if (BREAK === 'reader_unchecked') {
+  // No `typeof read === 'function'` guard. Forgetting the reader still
+  // throws, but as `read is not a function` from the middle of the body —
+  // which is the shape of the App.js crash this whole block exists for: an
+  // error that names a mechanism and not the argument or the fix.
+  F.proposeFromImage = (img, read, opts) => body(img, read, opts);
+} else if (BREAK === 'read_null_ok') {
+  // A failed read proposes the whole image instead of throwing: a confident
+  // answer about an image nobody managed to look at.
+  F.proposeFromImage = (img, read, opts) =>
+    body(img, read, opts, {
+      onNull: (width, height) => ({
+        crop: { x: 0, y: 0, w: width, h: height },
+        trimmed: { top: 0, bottom: 0, left: 0, right: 0, columnsProfiled: false },
+        reasons: ['could not read the image; the whole screenshot is the crop'],
+      }),
+    });
+} else if (BREAK === 'read_thrice') {
+  // One read per profile instead of one for the image. Correct output, three
+  // times the bandwidth — and on a 1440x3120 screenshot that is 54MiB of
+  // avoidable copying on the JS thread at import.
+  F.proposeFromImage = (img, read, opts) => body(img, read, opts, { readsPerProfile: true });
+} else if (BREAK === 'budget_whole') {
+  // Over the column budget gives up on BOTH axes rather than on the one it
+  // could not measure. The vertical trim was fine and is thrown away.
+  F.proposeFromImage = (img, read, opts) => body(img, read, opts, { budgetIsWhole: true });
+}
+
+/**
+ * proposeFromImage's body, for the four mutants above only.
+ *
+ * Reimplemented rather than wrapped because these mutations are INSIDE the
+ * function — a wrapper around the real one cannot remove its guard, and a
+ * mutant that cannot reach what it mutates reports a green about the wrong
+ * code. That is not hypothetical either: the first `colour_half_checked` in
+ * read.test.mjs delegated to the real reader and survived for exactly that
+ * reason.
+ */
+function body(img, read, { step = real.PROFILE_STEP, band = real.STATUS_BAND, budget = real.MAX_PROFILE_PX } = {}, how = {}) {
+  const width = img.width();
+  const height = img.height();
+  const whole = { x: 0, y: 0, w: width, h: height };
+  const full = read(img, whole);
+  if (!full) {
+    if (how.onNull) return how.onNull(width, height);
+    throw new Error(`autocrop: could not read the image (${width}x${height})`);
+  }
+  const src = () => (how.readsPerProfile ? read(img, whole) : full);
+  const a = src();
+  const rows = rowInkProfile(a.buf, a.rowBytes, width, height, height, step);
+  const within = real.canProfileColumns(width, height, budget);
+  if (how.budgetIsWhole && !within) {
+    return {
+      crop: whole,
+      trimmed: { top: 0, bottom: 0, left: 0, right: 0, columnsProfiled: false },
+      reasons: ['the image was too large to profile its columns; nothing was trimmed sideways'],
+    };
+  }
+  const b = src();
+  const cols = within ? colInkProfile(b.buf, b.rowBytes, width, height, width, step) : null;
+  const c = src();
+  const h = Math.min(band, height);
+  const bandRows = rowInkProfile(c.buf, c.rowBytes, width, h, h, 2);
+  return real.proposeCrop({ width, height, rows, cols, statusBar: detectStatusBar(bandRows) });
 }
 
 let fails = 0;
@@ -368,6 +437,124 @@ console.log('\nthe asymmetric sweep: no two margins the same, no square images')
   }
   check(`all ${shapes.length} shapes propose the rect their margins describe`, bad === 0, `${bad} wrong`);
   check('and the sweep ran', shapes.length === 5);
+}
+
+console.log('\nproposeFromImage: the whole path, from pixels to a crop');
+{
+  // WHY THIS BLOCK EXISTS. This arithmetic lived in App.js as `proposeFor`,
+  // and on 2026-09-18 it called `readSubRect` with two of its three
+  // arguments. Every import threw, the editor never opened once, and no gate
+  // could have seen it, because no suite loads a React component. The
+  // function moved here and takes its reader as an ARGUMENT so that the whole
+  // path — read, two profiles, the status band, the proposal — runs in node.
+  //
+  // Asymmetric and non-square like every other fixture in this file: four
+  // different margins, so top/bottom, left/right and the whole-axis swap are
+  // each visible.
+  const W = 400;
+  const H = 900;
+  const TOP = 7;
+  const BOTTOM = 31;
+  const LEFT = 13;
+  const RIGHT = 53;
+
+  // A flat white page with one solid black block on it. The block's edges are
+  // the four margins above, so the correct proposal is known by construction
+  // rather than by running the code and writing down what it said.
+  function page(w = W, h = H) {
+    const buf = new Uint8Array(w * h * 4).fill(255);
+    for (let y = TOP; y < h - BOTTOM; y++) {
+      for (let x = LEFT; x < w - RIGHT; x++) {
+        const i = (y * w + x) * 4;
+        buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 255;
+      }
+    }
+    return buf;
+  }
+
+  // Records what was asked for. The defect this block exists for was in the
+  // CALL, so what the caller asked the reader is the thing to assert.
+  function fake(w = W, h = H, opts = {}) {
+    const calls = [];
+    const buf = opts.buf === undefined ? page(w, h) : opts.buf;
+    return {
+      calls,
+      width: () => w,
+      height: () => h,
+      read(img, box) {
+        calls.push(box);
+        if (opts.readFails) return null;
+        return { buf, rowBytes: w * 4, width: w, height: h };
+      },
+    };
+  }
+
+  const f = fake();
+  const got = F.proposeFromImage(f, f.read);
+
+  check('the crop is the block, not the page',
+    got.crop.x === LEFT && got.crop.y === TOP &&
+    got.crop.w === W - LEFT - RIGHT && got.crop.h === H - TOP - BOTTOM,
+    JSON.stringify(got.crop));
+  check('all four margins are reported, and none is another one',
+    got.trimmed.top === TOP && got.trimmed.bottom === BOTTOM &&
+    got.trimmed.left === LEFT && got.trimmed.right === RIGHT,
+    JSON.stringify(got.trimmed));
+  check('the columns were profiled', got.trimmed.columnsProfiled === true);
+  check('and it says what it did', got.reasons.length > 0, JSON.stringify(got.reasons));
+
+  // The read is the expensive thing and the thing that broke. One call, for
+  // the whole image — not one per profile, and not a band.
+  check('the image was read exactly once', f.calls.length === 1, `${f.calls.length} reads`);
+  check('and the read covered the whole image',
+    f.calls[0].x === 0 && f.calls[0].y === 0 &&
+    f.calls[0].w === W && f.calls[0].h === H,
+    JSON.stringify(f.calls[0]));
+
+  // The margins are all under 400, so a band shorter than the image must not
+  // change the answer — this is what proves the band is a status-bar search
+  // and not a second, quietly capped, row profile.
+  const narrow = fake();
+  const nb = F.proposeFromImage(narrow, narrow.read, { band: 100 });
+  check('a smaller status band does not move the crop',
+    JSON.stringify(nb.crop) === JSON.stringify(got.crop),
+    `${JSON.stringify(nb.crop)} vs ${JSON.stringify(got.crop)}`);
+
+  // Over the column budget: the vertical trim survives, the horizontal one is
+  // abandoned, and the reason says so. Driven by the `budget` argument
+  // because proving it with a real 30MP image means 120MiB in a unit suite.
+  const big = fake();
+  const over = F.proposeFromImage(big, big.read, { budget: 10 });
+  check('over the column budget, the columns are not profiled',
+    over.trimmed.columnsProfiled === false);
+  check('and nothing is trimmed sideways',
+    over.trimmed.left === 0 && over.trimmed.right === 0 &&
+    over.crop.x === 0 && over.crop.w === W,
+    JSON.stringify(over.crop));
+  check('but the vertical trim is kept — the budget is per axis, not per proposal',
+    over.crop.y === TOP && over.crop.h === H - TOP - BOTTOM, JSON.stringify(over.crop));
+  check('and the reason names the budget, not a blank screenshot',
+    over.reasons.some((r) => r.includes('too large to profile its columns')),
+    JSON.stringify(over.reasons));
+
+  // The two ways the caller can be wrong. Both throw, because a proposal
+  // invented on top of a failed read is a confident answer about an image
+  // nobody looked at.
+  const missing = (() => {
+    try { F.proposeFromImage(fake(), undefined); return null; } catch (e) { return e.message; }
+  })();
+  check('forgetting the reader throws', missing !== null, 'it did not throw');
+  check('and the message names readRect, which is the thing to pass',
+    !!missing && missing.includes('readRect'), String(missing));
+
+  const failed = fake(W, H, { readFails: true });
+  const nulled = (() => {
+    try { F.proposeFromImage(failed, failed.read); return null; } catch (e) { return e.message; }
+  })();
+  check('a failed read throws rather than proposing the whole image',
+    nulled !== null, 'a null read was treated as an answer');
+  check('and the message carries the size, so the log says which image',
+    !!nulled && nulled.includes(`${W}x${H}`), String(nulled));
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

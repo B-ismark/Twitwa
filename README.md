@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: most checks run in a clone, and the ones that cannot say so
+true: **1374 of the 1390 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -116,6 +116,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/sizing.js` | Output size: width-bounded, never upscaling, no long-edge cap, encode ceiling |
 | `src/recover.js` | When the photo picker's launcher has died and what to do about it: detect the recreation, recognise the rejection, bound the resume flag, and reload at most once. Pure, so the policy is testable without a phone |
 | `src/read.js` | One clamped sub-rect read, shared by the pipeline and the measurement harness. Was two copies returning the same values under different field names — `{width, height}` in one, `{w, h}` in the other. Pure: the colour constants arrive as an argument, so it loads in node and has a test |
+| `src/skia.js` | The one `RGBA` colour shape and the one two-argument `readRect`. Both were written privately in `pipeline.js` AND `measure.js`, and App.js had neither — which is exactly why it called the three-argument `readSubRect` with two and crashed every import for a day. A function that binds the colour cannot be called without it |
 | `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
 | `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, and Q1/Q2/Q3/Q4 were all re-measured after that merge and reproduce exactly |
@@ -144,7 +145,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1359 checks and 191 mutations** counting the two PNG tools, all three
+none (**1390 checks and 197 mutations** counting the two PNG tools, all three
 config plugins, the update module and the six rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -161,15 +162,36 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**The clone figure below is STALE and is left stale rather than estimated.**
-It was 1109 of 1125 with 16 skipped on 2026-09-18, measured before Phase 4.5
-added `shell.js`, `autocrop.js` and their suites; the warm figure above was
-re-measured after. Nothing in Phase 4.5 added a suite that skips, so the clone
-number should have moved by the same amount as the warm one — but "should have"
-is arithmetic, not a measurement, and this README has published an unmeasured
-clone number once already. Re-derive it with the recipe below before quoting it.
+**A clone runs 1374 of those 1390 and reports 16 skipped**, and it runs all 197
+mutations with none surviving. Measured 2026-09-18 from `git write-tree` over
+the staged tree of this commit, so the thing gated is the commit and not the
+working copy. The warm figure above was re-measured by the same script in the
+same sitting rather than being carried over, because two numbers from two
+instruments are not a comparison.
 
-The clone number is the one to trust when it is current, because it is the
+That pairing is the check: 1390 − 1374 = 16, which is the skip count, so the
+clone is the warm run minus exactly the checks that announced they could not
+run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
+moved by 234 — the arithmetic this file refused to publish would have been
+right, which is not a reason to have published it. It is the same arithmetic
+that was wrong three times before.
+
+One thing the clone cannot see, and it is worth naming here because it went
+wrong: **no gate in this list loads App.js**. `check-imports` reads it, but it
+verifies that an imported name RESOLVES, not how it is CALLED. On 2026-09-18
+App.js passed two arguments to a three-argument function and crashed on every
+single import, with all of the numbers above green. The fix was to move the
+logic out of the view rather than to correct the call — see `src/autocrop.js`
+and `src/skia.js`, and the Phase 4.5 section of `BUILD-PLAN.md`.
+
+One qualification on the method, because it is the part that could rot: the
+clone's `node_modules` is a **junction to the warm tree's**, which the recipe
+below allows and which a cross-volume symlink is too slow for. It therefore
+proves the tracked tree is self-sufficient — no untracked source file is
+reached for — but it does not re-resolve the dependency versions. A figure that
+has to survive a lockfile change needs a real install.
+
+The clone number is the one to trust, because it is the
 artifact anyone else gets. The skips are 7 in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
 published, and 4, 2 and 3 in the three plugin suites, which compare against the
@@ -332,22 +354,22 @@ Both exit 1 on failure and have been verified to actually go red:
 python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 179 checks on the pixel math
-cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
+cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
-cd spike && node src/autocrop.test.mjs   # 60 checks on the crop the editor opens on
+cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 106 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 135 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 107 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 140 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
-cd spike && node tools/check-style-members.mjs  # 51 checks; fails on a StyleSheet member RN does not define
+cd spike && node tools/check-style-members.mjs  # 52 checks; fails on a StyleSheet member RN does not define
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
 cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
@@ -397,7 +419,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 191 mutations
+done                                     # silence is the pass; 197 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

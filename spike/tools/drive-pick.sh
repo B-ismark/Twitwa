@@ -60,7 +60,11 @@
 set -u
 A="${ADB:-/d/AndroidDev/sdk/platform-tools/adb.exe}"
 S="$(dirname "$0")"
-P="${PKG:-dev.bismark.twitwa}"
+# No PKG here on purpose. This script only ever taps what is already on screen,
+# so it never names a package — and the `PKG="${PKG:-dev.bismark.twitwa}"` that
+# used to sit on this line was both unused and wrong (that is the RELEASE id;
+# dev-client runs are `.debug`). An unused default is worse than no default: the
+# next reader copies it. tools/preflight.sh owns the package name.
 COLLECTIONS_XY="${COLLECTIONS_XY:-1070 1231}"   # density 476 on a 1440x3120 panel
 export MSYS_NO_PATHCONV=1
 

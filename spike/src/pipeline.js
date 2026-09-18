@@ -17,7 +17,9 @@
 //      the ceiling is one driver's number, and nothing here needs it.
 //   2. Sample the background from the FINAL crop. planCard takes the sampler as
 //      a callback so this cannot be got wrong; see the note in plan.js.
-import { Skia, ColorType, AlphaType, ImageFormat, ColorSpace } from '@shopify/react-native-skia';
+// ColorType and AlphaType are gone from this list: the only thing that used
+// them was the private RGBA constant that moved to src/skia.js.
+import { Skia, ImageFormat, ColorSpace } from '@shopify/react-native-skia';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import {
@@ -35,7 +37,7 @@ import {
   modalOfPoints,
 } from './pixels';
 import { planCard, clampMasks, maskToDestPixels, orientedSize, needsOrientation } from './plan';
-import { readSubRect } from './read';
+import { readRect } from './skia';
 import { MAX_PX } from './sizing';
 import { radiusPx } from './compose';
 
@@ -44,20 +46,10 @@ const EDGE_THICKNESS = 8;       // matches pixels.js's default, kept explicit he
 
 const now = () => (global.performance && global.performance.now ? global.performance.now() : Date.now());
 
-// The colour shape every read in this file uses, hoisted so read.js needs no
-// Skia import of its own and can therefore be tested in node.
-const RGBA = { colorType: ColorType.RGBA_8888, alphaType: AlphaType.Unpremul };
-
-/**
- * Read one sub-rect as RGBA.
- *
- * A one-line adapter over `readSubRect`, which measure.js also uses. The body
- * used to live here and again in measure.js, with the same arithmetic under two
- * different field spellings — `{width, height}` here and `{w, h}` there. See
- * src/read.js for why the arithmetic is worth having in one place, and for the
- * clamp defect that lived in it.
- */
-const readRect = (img, box) => readSubRect(img, box, RGBA);
+// `RGBA` and `readRect` were both defined here AND in measure.js — two copies
+// of a constant and two copies of a one-line adapter. They now live in
+// src/skia.js, which explains what the third copy (the one App.js never wrote)
+// cost. See the import above.
 
 /** regionBackground over a strip read on its own, with the rect translated to the strip's origin. */
 function stripBackground(img, rect, tolerance, step) {
@@ -453,14 +445,34 @@ export async function renderCard({
   // the first readPixels below.
   timings.decodeIsLazy = true;
 
+  // Not looked for at all when the caller says `trim: 'never'`, because
+  // planCard ignores the detector in that case and this is not a cheap
+  // question. MEASURED on a Pixel 6 Pro on 2026-09-18: a Share cost 323ms of
+  // which findStatusBar was 78.33 — a quarter of the export spent computing a
+  // value that was then discarded. Since Phase 4.5 the app always passes
+  // 'never' on this path: the trim happens once, in src/autocrop.js, when the
+  // crop is proposed.
+  //
+  // The saving is NOT the whole 78ms, and saying so would be the kind of
+  // arithmetic this repo has published wrongly before. `readMs` on the first
+  // read also pays for Skia's lazy decode, so skipping this moves that cost
+  // to the next read rather than removing it. The part that genuinely goes is
+  // the profile and the zone scan.
+  //
+  // `measured: false` rather than a zero. A zero here would read as "the
+  // status bar was looked for and cost nothing", which is the opposite of
+  // what happened.
+  const wantStatusBar = trim !== 'never';
   t = now();
-  const statusBar = findStatusBar(img);
-  timings.statusBarMs = +(now() - t).toFixed(2);
+  const statusBar = wantStatusBar
+    ? { ...findStatusBar(img), measured: true }
+    : { detected: false, measured: false, reason: "trim: 'never', so it was not looked for" };
+  timings.statusBarMs = wantStatusBar ? +(now() - t).toFixed(2) : null;
   // Attributed, because the total alone sent me optimising the wrong half once
   // already: readMs on the first call also pays for the lazy decode.
-  timings.statusBarRead = statusBar.readMs;
-  timings.statusBarProfile = statusBar.profileMs;
-  timings.statusBarZones = statusBar.zonesMs;
+  timings.statusBarRead = wantStatusBar ? statusBar.readMs : null;
+  timings.statusBarProfile = wantStatusBar ? statusBar.profileMs : null;
+  timings.statusBarZones = wantStatusBar ? statusBar.zonesMs : null;
 
   t = now();
   let plan;

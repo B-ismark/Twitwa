@@ -16,11 +16,19 @@
 // background it finds nothing and proposes the whole image, which is the right
 // answer to give when the answer is not known.
 //
-// PURE, over profiles, for the reason src/crop.js is pure over rects: the
-// arithmetic can then be wrong in a test rather than on a phone. The caller
-// reads the pixels.
+// PURE, and it stays pure even though `proposeFromImage` at the bottom takes a
+// decoded image: the read is an injected FUNCTION, so this module imports no
+// Skia and the whole path is exercisable in node against a fake image. That is
+// the reason src/crop.js is pure over rects — the arithmetic can be wrong in a
+// test rather than on a phone.
+//
+// `proposeFromImage` lives here rather than in App.js because it was in App.js,
+// and that is precisely where it broke: the view called `readSubRect` with two
+// of its three arguments and every import threw, unseen by every gate, because
+// no suite loads a component. Logic that needs a Skia image is still logic.
 
 import { MIN_CROP } from './crop.js';
+import { rowInkProfile, colInkProfile, detectStatusBar } from './pixels.js';
 
 /**
  * Ink coverage at or below this counts as flat.
@@ -174,4 +182,80 @@ export function proposeCrop({ width, height, rows, cols, statusBar = null, flat 
   }
 
   return { crop: { x: left, y: vTop, w, h: hh }, trimmed, reasons };
+}
+
+/**
+ * How many rows/columns the profiles step over.
+ *
+ * Every 8th pixel, because these profiles decide where a flat band ends and a
+ * flat band is hundreds of pixels deep; sampling one row in eight cannot move
+ * the boundary by more than 7 and costs an eighth of the read. `detectStatusBar`
+ * below runs at step 2 instead: it is looking for a gap of `run = 8` flat rows,
+ * so a step of 8 could straddle it and report no status bar on a screenshot
+ * that plainly has one.
+ */
+export const PROFILE_STEP = 8;
+
+/**
+ * Rows of the image `detectStatusBar` is given.
+ *
+ * A status bar is at the top or it is not a status bar. Profiling the whole
+ * height to find it would multiply the one expensive read in this app by
+ * nothing useful.
+ */
+export const STATUS_BAND = 400;
+
+/**
+ * The proposal, from a decoded image rather than from profiles.
+ *
+ * WHY THIS IS HERE AND NOT IN App.js. It was in App.js, and that is exactly
+ * where the 2026-09-18 crash lived: the view called `readSubRect` with two of
+ * its three arguments, every import threw, and the editor never opened once.
+ * Nothing could have caught it, because this arithmetic sat in a component no
+ * suite loads. Three profiles, a band and a detector is not view code; it only
+ * looked like view code because it needs a Skia image.
+ *
+ * So the Skia part is the `read` ARGUMENT — inject src/skia.js's `readRect`
+ * and this whole function is testable in node against a fake image, which is
+ * what `autocrop.test.mjs` does. The module stays Skia-free.
+ *
+ * @param img   anything with `width()` and `height()`
+ * @param read  `(img, box) => {buf, rowBytes, ...} | null`; pass `readRect`
+ * @returns the same `{crop, trimmed, reasons}` as `proposeCrop`
+ *
+ * Throws when the read fails rather than proposing the whole image. A null
+ * read means the pixels could not be got at all, and a proposal invented on
+ * top of that would be a confident answer about an image nobody looked at.
+ */
+export function proposeFromImage(
+  img,
+  read,
+  { step = PROFILE_STEP, band = STATUS_BAND, budget = MAX_PROFILE_PX } = {},
+) {
+  if (typeof read !== 'function') {
+    throw new Error('proposeFromImage: pass a read function, e.g. readRect from src/skia.js');
+  }
+  const width = img.width();
+  const height = img.height();
+  const full = read(img, { x: 0, y: 0, w: width, h: height });
+  if (!full) throw new Error(`autocrop: could not read the image (${width}x${height})`);
+
+  const rows = rowInkProfile(full.buf, full.rowBytes, width, height, height, step);
+  // Asked BEFORE the profile is computed rather than after, because the point
+  // of the ceiling is to not do the work. See MAX_PROFILE_PX for why this is
+  // the one whole-image read in the app and why it is bounded rather than
+  // excused.
+  // `budget` is an argument rather than a constant read straight from module
+  // scope so the over-budget path is reachable in a test. It was not, and an
+  // untestable branch is a branch nobody has seen run: proving it with a real
+  // 30MP image would mean allocating 120MiB inside a unit suite.
+  const cols = canProfileColumns(width, height, budget)
+    ? colInkProfile(full.buf, full.rowBytes, width, height, width, step)
+    : null;
+
+  const h = Math.min(band, height);
+  const bandRows = rowInkProfile(full.buf, full.rowBytes, width, h, h, 2);
+  const statusBar = detectStatusBar(bandRows);
+
+  return proposeCrop({ width, height, rows, cols, statusBar });
 }

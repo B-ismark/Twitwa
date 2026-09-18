@@ -47,6 +47,7 @@ import {
 import { File, Paths } from 'expo-file-system';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
+  interpolateColor,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -91,9 +92,8 @@ import {
   PAD_MAX,
   PAD_MIN,
 } from './src/shell';
-import { proposeCrop, canProfileColumns } from './src/autocrop';
-import { rowInkProfile, colInkProfile, detectStatusBar } from './src/pixels';
-import { readSubRect } from './src/read';
+import { proposeFromImage } from './src/autocrop';
+import { readRect } from './src/skia';
 import { maskToDestPixels, planOutput } from './src/plan';
 import { dragCrop, fitView, pickHandle, toImageDelta, toViewportRect, MIN_CROP } from './src/crop';
 import {
@@ -122,7 +122,6 @@ const FADE_MS = 160;
  * import on the whole image, not on a 400-row band: a 1440x3120 capture is
  * 3120 rows of 180 samples instead of 3120 of 720.
  */
-const PROFILE_STEP = 8;
 
 // A dead picker launcher is repaired by replacing the JS runtime, which throws
 // away everything in memory, including the fact that the owner had just asked
@@ -159,35 +158,6 @@ function takeResumeFlag() {
   } catch (e) {
     return null;
   }
-}
-
-/**
- * Profile the whole image and propose a crop.
- *
- * Both profiles cover every row and every column, which `proposeCrop` insists
- * on and throws about: `rowInkProfile` takes a row cap, so a capped profile is
- * one forgotten argument away at every call site and reports the flat run at
- * the CAP as the flat run at the bottom of the picture.
- *
- * The status-bar cut comes from the same detector the renderer uses, on the
- * same 400-row band, so the proposal and a later `trim: 'auto'` cannot
- * disagree about where the status bar ended.
- */
-function proposeFor(img) {
-  const width = img.width();
-  const height = img.height();
-  const full = readSubRect(img, { x: 0, y: 0, w: width, h: height });
-  const rows = rowInkProfile(full.buf, full.rowBytes, width, height, height, PROFILE_STEP);
-  // Asked before the read is used, not after. Past the ceiling the proposal
-  // trims vertically only and says so; see MAX_PROFILE_PX in src/autocrop.js
-  // for why this is the one whole-image read in the app and why it is bounded.
-  const cols = canProfileColumns(width, height)
-    ? colInkProfile(full.buf, full.rowBytes, width, height, width, PROFILE_STEP)
-    : null;
-  const band = Math.min(400, height);
-  const bandRows = rowInkProfile(full.buf, full.rowBytes, width, band, band, 2);
-  const statusBar = detectStatusBar(bandRows);
-  return proposeCrop({ width, height, rows, cols, statusBar });
 }
 
 export default function App() {
@@ -329,6 +299,25 @@ export default function App() {
   const cardLayer = useAnimatedStyle(() => ({ opacity: 1 - raw.value }));
   const rawLayer = useAnimatedStyle(() => ({ opacity: raw.value }));
 
+  // The stage's ground rides the same value as the two layers.
+  //
+  // `palette.stage` says what it is for in src/theme.js: "the ground behind
+  // the image WHILE IT IS BEING CROPPED", dark on purpose so that Paper does
+  // not tint the edges of a light screenshot and make the crop hard to judge.
+  // It was painted under the finished card too, which is a different job and
+  // the wrong answer for it: with Background = Paper the card came out light
+  // on a full-width black slab, so the card looked like it had an enormous
+  // black border. That was invisible for as long as anyone looked, because
+  // the DEFAULT is Match and Match on this fixture samples near-black — the
+  // slab and the card were the same colour. Found on a phone, on the first
+  // run that changed the background away from the default.
+  //
+  // Interpolated rather than switched so it crosses with the fade instead of
+  // snapping 160ms before or after it.
+  const stageGround = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(raw.value, [0, 1], [palette.background, palette.stage]),
+  }));
+
   // --- the picker ----------------------------------------------------------
   const recoverPicker = useCallback(
     (why) => {
@@ -393,21 +382,33 @@ export default function App() {
     const asset = res.assets[0];
     try {
       const decoded = await decodeFromUri(asset.uri);
-      // The URI is kept because renderCard takes one: a share arrives as a
-      // content:// URI, so that is the real input, not the already-decoded image.
-      setSrc({ ...decoded, uri: asset.uri });
-      setOverride(null);
       // The editor opens on a proposal, not on the whole screenshot. This is
       // the line that makes step 2 of the user flow true.
       const t0 = Date.now();
-      const p = proposeFor(decoded.img);
+      const p = proposeFromImage(decoded.img, readRect);
+      const proposeMs = Date.now() - t0;
+
+      // EVERYTHING ABOVE CAN THROW; EVERYTHING BELOW IS STATE. That order is
+      // the fix for a real crash and not a tidy-up. `setSrc` used to run
+      // first, so when the proposal threw the catch set `problem` and the
+      // render still went on to read `ed.tool` with `ed` null — the bottom bar
+      // keys off `src`, and `src` was now the only half of the pair that had
+      // been committed. The app died with "Cannot read property 'tool' of
+      // null", which names neither the throw nor the decode that caused it.
+      //
+      // Guarding the render with `ed &&` would have hidden that instead of
+      // fixing it. The invariant worth having is that src and ed are set
+      // together or not at all, so there is no state in which one exists
+      // without the other for a guard to paper over.
+      setSrc({ ...decoded, uri: asset.uri });
+      setOverride(null);
       setEd(editorState(p.crop));
       setSampled(sampleCropBackground(decoded.img, p.crop));
       emit('crop.propose', {
         crop: p.crop,
         trimmed: p.trimmed,
         reasons: p.reasons,
-        ms: Date.now() - t0,
+        ms: proposeMs,
       });
       emit('decode', {
         w: decoded.width,
@@ -868,13 +869,15 @@ export default function App() {
         </View>
       ) : null}
 
-      {/* The stage only paints its dark ground once there is an image on it.
-          Empty, it was a full-height black slab with one line of grey text at
-          the top, which reads as a broken viewport rather than as an empty
-          app. It was also unreadable: the stage is dark in BOTH themes, so in
-          light mode that line was light-Graphite on Ink at 2.37:1. */}
-      <View
-        style={[styles.stage, src ? { backgroundColor: palette.stage } : null]}
+      {/* The stage paints a ground only once there is an image on it, and
+          which ground depends on what is being shown — see `stageGround`.
+          Empty, the dark one was a full-height black slab with one line of
+          grey text at the top, which reads as a broken viewport rather than
+          as an empty app. It was also unreadable: the stage colour is dark in
+          BOTH themes, so in light mode that line was light-Graphite on Ink at
+          2.37:1. */}
+      <Animated.View
+        style={[styles.stage, src ? stageGround : null]}
         onLayout={onStageLayout}
       >
         {!src ? (
@@ -962,7 +965,7 @@ export default function App() {
             ) : null}
           </Animated.View>
         ) : null}
-      </View>
+      </Animated.View>
 
       {/* The way in to the measurement harness, and the only thing on this
           screen that is not for a person using the app. A long press rather

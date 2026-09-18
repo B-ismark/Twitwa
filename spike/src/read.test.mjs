@@ -95,6 +95,60 @@ if (BREAK === 'clamp_fields') {
     const { width, height, ...rest } = r;
     return { ...rest, w: width, h: height };
   };
+} else if (BREAK === 'colour_unchecked') {
+  // The state this module was in on 2026-09-18: no guard at all, so a caller
+  // that omits the colour gets `Cannot read property 'colorType' of undefined`
+  // thrown from inside here — an error naming this file and blaming nothing.
+  // That is exactly what shipped in App.js, and it crashed every import.
+  readSubRect = (img, box, colour) => {
+    const r = intersectForMutant(img.width(), img.height(), box);
+    if (!r) return null;
+    const buf = img.readPixels(r.x, r.y, {
+      width: r.w,
+      height: r.h,
+      colorType: colour.colorType,
+      alphaType: colour.alphaType,
+    });
+    if (!buf) return null;
+    return { buf, rowBytes: r.w * 4, width: r.w, height: r.h, rect: r, bytes: buf.length };
+  };
+} else if (BREAK === 'colour_half_checked') {
+  // Truthiness only. `{}` is truthy, so an empty or half-built shape sails
+  // past and Skia is handed `colorType: undefined` — which does NOT throw, it
+  // returns a null buffer, and the read then looks like an off-image rect. A
+  // guard that accepts the broken input is the expensive kind: it converts a
+  // crash into a wrong answer.
+  //
+  // This mutant must NOT delegate to the real readSubRect. The first version
+  // did, and it stayed green: the real guard behind it threw for `{}` anyway,
+  // so the mutation removed nothing and proved only that a wrapper forwards.
+  // A mutant that cannot reach the code it is mutating is worse than no
+  // mutant, because it reports a green that is about the wrong function.
+  readSubRect = (img, box, colour) => {
+    if (!colour) throw new Error('readSubRect: the third argument is missing; use readRect');
+    const r = intersectForMutant(img.width(), img.height(), box);
+    if (!r) return null;
+    const buf = img.readPixels(r.x, r.y, {
+      width: r.w,
+      height: r.h,
+      colorType: colour.colorType,
+      alphaType: colour.alphaType,
+    });
+    if (!buf) return null;
+    return { buf, rowBytes: r.w * 4, width: r.w, height: r.h, rect: r, bytes: buf.length };
+  };
+}
+
+// The clamp readSubRect does, duplicated for the `colour_unchecked` mutant
+// above and used by nothing else. A mutant has to be able to reach readPixels
+// to show what the unguarded version did.
+function intersectForMutant(iw, ih, box) {
+  const x1 = Math.max(0, Math.round(box.x));
+  const y1 = Math.max(0, Math.round(box.y));
+  const x2 = Math.min(iw, Math.round(box.x) + Math.round(box.w));
+  const y2 = Math.min(ih, Math.round(box.y) + Math.round(box.h));
+  if (x2 <= x1 || y2 <= y1) return null;
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
 
 let fails = 0;
@@ -262,6 +316,48 @@ console.log('a sweep over all four quadrants');
     bad.slice(0, 3).map((b) => JSON.stringify(b)).join(' | '));
   check('every swept rect got an answer', got + nulls === swept, `${got}+${nulls}`);
   void img;
+}
+
+console.log('\nthe colour shape is required, and the error says which argument');
+{
+  // WHY THIS BLOCK EXISTS. On 2026-09-18 App.js called
+  // `readSubRect(img, {x: 0, y: 0, w: width, h: height})` — two arguments of
+  // three. Every import of a screenshot threw, the editor never opened once,
+  // and Phase 4.5's central claim (that the editor opens on a proposed crop)
+  // had never run on a device. Nothing caught it: every suite in this repo
+  // passes the colour, `check-imports` verifies that a name RESOLVES and not
+  // how it is CALLED, and `expo export` is arity-blind.
+  //
+  // src/skia.js's two-argument `readRect` is the structural fix — a function
+  // that binds the colour cannot be called without it. This is the guard
+  // behind that, for any future caller that reaches past it.
+  const img = fakeImage(100, 100);
+  const box = { x: 0, y: 0, w: 10, h: 10 };
+
+  const threw = (c) => {
+    try { readSubRect(img, box, c); return null; } catch (e) { return e.message; }
+  };
+
+  const m = threw(undefined);
+  check('omitting the colour throws', m !== null, 'it did not throw');
+  check('and the message names the argument rather than the property',
+    !!m && m.includes('third argument') && !m.includes('of undefined'), String(m));
+  check('and it names the fix, so the reader does not have to find it',
+    !!m && m.includes('readRect'), String(m));
+
+  check('an explicit null throws', threw(null) !== null);
+  // The three a truthiness-only guard would wave through.
+  check('an empty object throws', threw({}) !== null, 'an empty object was accepted');
+  check('colorType without alphaType throws',
+    threw({ colorType: 'RGBA_8888' }) !== null, 'alphaType was not required');
+  check('alphaType without colorType throws',
+    threw({ alphaType: 'Unpremul' }) !== null, 'colorType was not required');
+
+  // The guard must not have eaten the working path, and must reject BEFORE
+  // touching the image — a guard that reads first is not a guard.
+  check('a complete colour still reads', readSubRect(img, box, RGBA) !== null);
+  check('and the six rejected calls read no pixels at all',
+    img.calls.length === 1, `${img.calls.length} readPixels calls, expected 1`);
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);
