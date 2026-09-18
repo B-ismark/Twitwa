@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1395 of the 1411 checks run in a clone**, and the 16 that cannot say so
+true: **1422 of the 1438 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -145,7 +145,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1411 checks and 203 mutations** counting the two PNG tools, all three
+none (**1438 checks and 209 mutations** counting the two PNG tools, all three
 config plugins, the update module and the six rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -162,14 +162,14 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1395 of those 1411 and reports 16 skipped**, and it runs all 203
+**A clone runs 1422 of those 1438 and reports 16 skipped**, and it runs all 209
 mutations with none surviving. Measured 2026-09-18 from `git write-tree` over
 the staged tree of this commit, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1411 − 1395 = 16, which is the skip count, so the
+That pairing is the check: 1438 − 1422 = 16, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -378,7 +378,7 @@ cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
-cd spike && node src/crop.test.mjs       # 91 checks on the crop-gesture arithmetic
+cd spike && node src/crop.test.mjs       # 111 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
 cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
@@ -439,7 +439,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 203 mutations
+done                                     # silence is the pass; 209 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

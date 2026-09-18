@@ -618,6 +618,11 @@ export default function App() {
   const liveCrop = useSharedValue(null);
   const grabbed = useSharedValue(null);
   const dragFrom = useSharedValue(null);
+  // 1 while a handle is held, 0 otherwise, and it is a SEPARATE value from
+  // `grabbed` rather than derived from it: `grabbed` has to flip the instant
+  // the finger lands or the first frame of the drag uses a stale handle, and
+  // this one has to take 120ms to get there. One value cannot be both.
+  const gridOn = useSharedValue(0);
 
   useEffect(() => {
     liveCrop.value = ed ? ed.crop : null;
@@ -641,6 +646,10 @@ export default function App() {
           const h = pickHandle({ x: e.x, y: e.y }, start, view);
           grabbed.value = h;
           dragFrom.value = h ? start : null;
+          // Only when something was actually grabbed. A finger landing outside
+          // the frame is not a drag, and flashing the thirds at it would say
+          // it was.
+          if (h) gridOn.value = withTiming(1, { duration: GRID_MS });
         })
         // translationX, not changeX. crop.js's header says deltas are measured
         // from the gesture start and applied to the rect as it was then; the
@@ -670,11 +679,12 @@ export default function App() {
           if (grabbed.value && liveCrop.value) runOnJS(commitCrop)(liveCrop.value);
           grabbed.value = null;
           dragFrom.value = null;
+          gridOn.value = withTiming(0, { duration: GRID_MS });
         })
     );
     // `ed` is deliberately NOT a dependency. It used to be, so every frame of
     // the old drag rebuilt the Gesture object it was in the middle of.
-  }, [view, src, commitCrop, liveCrop, grabbed, dragFrom]);
+  }, [view, src, commitCrop, liveCrop, grabbed, dragFrom, gridOn]);
 
   // Cover, still one box. Phase 3 makes it several objects with a selection and
   // a delete; this is the shipped behaviour moved onto the new state, not a new
@@ -1014,6 +1024,7 @@ export default function App() {
                       put the projection back in the render and undo the whole
                       change: React would have to re-render to move the frame. */}
                   <Scrim crop={liveCrop} view={view} stage={stage} />
+                  <CropGrid crop={liveCrop} view={view} on={gridOn} />
                   <CropFrame crop={liveCrop} view={view} />
                 </View>
               </GestureDetector>
@@ -1123,6 +1134,23 @@ export default function App() {
 const ZERO_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
 /** Corner bracket: the arm's length, and the thickness of the two sides drawn. */
+/**
+ * How long the rule-of-thirds grid takes to appear and go again.
+ *
+ * SHORTER THAN `FADE_MS` ON PURPOSE, and this is the app's second piece of
+ * motion after the canvas cross-fade, which the aesthetic notes call "the one
+ * piece of motion". The exception is argued rather than taken: the cross-fade
+ * is the app moving by itself between two views, and 160ms is a transition a
+ * person watches. This is a finger going down. It is bound to the touch, it
+ * has to be over before the drag is, and a hard cut at finger-up reads as a
+ * flicker rather than as an end. 120 is under the cross-fade so the two cannot
+ * be mistaken for the same gesture.
+ *
+ * NOT YET SEEN ON A DEVICE. Whether 120 is right is a judgement about motion,
+ * and nothing in this repo can make it.
+ */
+const GRID_MS = 120;
+
 const BRACKET = 22;
 const BRACKET_W = 3;
 
@@ -1224,6 +1252,56 @@ function CropFrame({ crop, view }) {
       <Animated.View style={[styles.cropCorner, box, styles.cornerNE, ne]} />
       <Animated.View style={[styles.cropCorner, box, styles.cornerSW, sw]} />
       <Animated.View style={[styles.cropCorner, box, styles.cornerSE, se]} />
+    </>
+  );
+}
+
+/**
+ * Rule of thirds, while a finger is down and not at rest.
+ *
+ * Every surveyed crop surface that has a grid shows it this way (X, Binance),
+ * and the ones that do not show a grid show brackets when idle -- which is
+ * what this already does. A grid drawn at rest turns the frame into a
+ * viewfinder and competes with the screenshot underneath it, which is the
+ * thing being judged.
+ *
+ * `on` is a shared value, so the grid appears and goes without a React render,
+ * the same reason `crop` is one. Four hooks rather than a loop because hooks
+ * cannot be called in one.
+ *
+ * The lines carry the corner brackets' treatment -- white with a dark outline
+ * -- for the reason written on `cropCorner`: a single-colour hairline over
+ * arbitrary screenshot pixels is invisible against some of them, and a grid
+ * that vanishes on a pale screenshot is worse than no grid, because the user
+ * cannot tell it from a grid that never appeared.
+ */
+function CropGrid({ crop, view, on }) {
+  const v1 = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x + r.w / 3, top: r.y, height: r.h, opacity: on.value };
+  });
+  const v2 = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x + (r.w * 2) / 3, top: r.y, height: r.h, opacity: on.value };
+  });
+  const h1 = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x, top: r.y + r.h / 3, width: r.w, opacity: on.value };
+  });
+  const h2 = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x, top: r.y + (r.h * 2) / 3, width: r.w, opacity: on.value };
+  });
+  return (
+    <>
+      <Animated.View style={[styles.gridV, v1]} />
+      <Animated.View style={[styles.gridV, v2]} />
+      <Animated.View style={[styles.gridH, h1]} />
+      <Animated.View style={[styles.gridH, h2]} />
     </>
   );
 }
@@ -1422,6 +1500,23 @@ const styles = StyleSheet.create({
   // Which two sides of each bracket are drawn. Static, so they stay out of the
   // animated styles that follow the finger — a worklet returning `left` and
   // `top` is two numbers a frame, one returning the whole style is nine.
+  // One device pixel of line with a dark outline around it, so the grid is
+  // legible over a white screenshot and a black one. Thinner than cropEdge
+  // because the frame is the statement and the thirds are a guide.
+  gridV: {
+    position: 'absolute',
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    outlineWidth: 1,
+    outlineColor: 'rgba(0,0,0,0.35)',
+  },
+  gridH: {
+    position: 'absolute',
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    outlineWidth: 1,
+    outlineColor: 'rgba(0,0,0,0.35)',
+  },
   cornerNW: { borderLeftWidth: BRACKET_W, borderTopWidth: BRACKET_W },
   cornerNE: { borderRightWidth: BRACKET_W, borderTopWidth: BRACKET_W },
   cornerSW: { borderLeftWidth: BRACKET_W, borderBottomWidth: BRACKET_W },

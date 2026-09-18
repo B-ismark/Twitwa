@@ -78,6 +78,30 @@ if (BREAK === 'fit_cover') {
       h: s.h,
     };
   };
+} else if (BREAK === 'handles_by_substring') {
+  // handlePoint written the obvious way, with string tests instead of the
+  // table -- and `'move'.includes('e')` is true, so the body handle reports
+  // the right edge's midpoint instead of nothing. The loupe would then open
+  // on a plain translation and magnify a point nobody is aligning.
+  F.handlePoint = (handle, crop) => {
+    if (!real.HANDLES.includes(handle)) throw new Error(`unknown handle: ${handle}`);
+    const x = handle.includes('w') ? crop.x
+      : handle.includes('e') ? crop.x + crop.w
+        : crop.x + crop.w / 2;
+    const y = handle.includes('n') ? crop.y
+      : handle.includes('s') ? crop.y + crop.h
+        : crop.y + crop.h / 2;
+    return { x, y };
+  };
+} else if (BREAK === 'loupe_fixed') {
+  // A picked magnification instead of one derived from the projection. Right
+  // for one screenshot width and wrong for every other, which is invisible
+  // because the loupe always shows SOMETHING.
+  F.loupeScale = () => 3;
+} else if (BREAK === 'loupe_shrinks') {
+  // The clamp goes, so a screenshot smaller than the stage gets a loupe that
+  // reduces. It still looks like a loupe.
+  F.loupeScale = (view, want = 2) => want / view.scale;
 } else if (BREAK === 'edge_steals_corner') {
   // Edge spans run the full side and are tested first, so the edge swallows
   // both corners and no corner can ever be grabbed.
@@ -321,6 +345,62 @@ console.log('pickHandle: corners beat edges, and outside is null');
   check('but not from beyond the touch target', at(330, 200) === null, at(330, 200));
 }
 
+console.log('handlePoint: the pixel the loupe has to magnify');
+{
+  const C = { x: 100, y: 200, w: 400, h: 600 };
+  const want = {
+    nw: [100, 200], n: [300, 200], ne: [500, 200],
+    w: [100, 500], e: [500, 500],
+    sw: [100, 800], s: [300, 800], se: [500, 800],
+  };
+  for (const h of Object.keys(want)) {
+    const p = F.handlePoint(h, C);
+    check(`${h} is at ${want[h][0]},${want[h][1]}`,
+      p && p.x === want[h][0] && p.y === want[h][1], JSON.stringify(p));
+  }
+  // The one the table exists for. `'move'.includes('e')` is true, so a
+  // substring implementation puts the body handle on the east edge.
+  check('move has no point to magnify', F.handlePoint('move', C) === null,
+    JSON.stringify(F.handlePoint('move', C)));
+
+  // Derived from HANDLES, so adding a handle without teaching this fails here
+  // rather than returning null at a gesture.
+  const unplaced = real.HANDLES.filter((h) => h !== 'move' && F.handlePoint(h, C) === null);
+  check('every handle but move has a point', unplaced.length === 0, unplaced.join(' '));
+
+  let threw = false;
+  try { F.handlePoint('nn', C); } catch (e) { threw = true; }
+  check('an unknown handle throws rather than returning a corner', threw);
+}
+
+console.log('loupeScale: magnification derived from the projection, not picked');
+{
+  // The real case: a 1080-wide screenshot contained in a 400pt stage.
+  const wide = F.fitView({ imageW: 1080, imageH: 2400, viewW: 400, viewH: 800 });
+  const k = F.loupeScale(wide);
+  check('one image pixel comes out two points across',
+    Math.abs(k * wide.scale - 2) < 1e-9, `${k} * ${wide.scale} = ${k * wide.scale}`);
+  check('which on this stage is a real magnification', k > 2, String(k));
+
+  // A DIFFERENT screenshot width must give a DIFFERENT factor, or the number
+  // is not derived from anything. A fixed 3x passes every check above that
+  // only looks at one projection.
+  const narrow = F.fitView({ imageW: 540, imageH: 1200, viewW: 400, viewH: 800 });
+  check('a narrower screenshot needs less magnification',
+    F.loupeScale(narrow) < k, `${F.loupeScale(narrow)} vs ${k}`);
+  check('and it is still two points per image pixel',
+    Math.abs(F.loupeScale(narrow) * narrow.scale - 2) < 1e-9, String(F.loupeScale(narrow) * narrow.scale));
+
+  // An image SMALLER than the stage is drawn bigger than life, so the honest
+  // magnification is below 1 -- which is a reduction wearing a loupe's shape.
+  const small = F.fitView({ imageW: 100, imageH: 200, viewW: 400, viewH: 800 });
+  check('a loupe never reduces', F.loupeScale(small) >= 1, String(F.loupeScale(small)));
+
+  let threw = false;
+  try { F.loupeScale({ scale: 0 }); } catch (e) { threw = true; }
+  check('a viewport with no scale throws rather than dividing by zero', threw);
+}
+
 console.log('every gesture, from every handle, lands somewhere legal');
 {
   // A constructed population, so it is counted rather than trusted: nine
@@ -385,10 +465,25 @@ console.log("every function on the drag path carries 'worklet'");
     first: m[3].trim(),
   }));
 
+  const exported = Object.keys(real).filter((k) => typeof real[k] === 'function');
+  const found = all.map((f) => f.name);
   check(
-    'the scan found every function in the module',
-    all.length === 9,
-    `${all.length}: ${all.map((f) => f.name).join(' ')}`,
+    // DERIVED, not a literal. This was `all.length === 9` and it did its job
+    // -- it went red the moment two functions were added, which is what a
+    // count assertion is for -- but the maintenance is to retype the number,
+    // and a number retyped on each change is a number that eventually gets
+    // retyped without being checked. The module's own exports are the list:
+    // every function it exports must be one the scan saw, so a scan that
+    // finds nothing fails against a non-empty list rather than passing over
+    // an empty one.
+    'the scan found every function the module exports',
+    exported.length > 0 && exported.every((n) => found.includes(n)),
+    `exports ${exported.join(' ')}; scan found ${found.join(' ') || '(nothing)'}`,
+  );
+  check(
+    'and the private helpers as well',
+    all.length > exported.length,
+    `${all.length} scanned vs ${exported.length} exported`,
   );
   for (const f of all) {
     check(`${f.name} opens with the directive`, f.first === "'worklet';", f.first || '(blank)');

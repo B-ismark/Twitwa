@@ -446,9 +446,53 @@ constant now crosses a module boundary into a worklet closure and that is the
 exact shape of the bug recorded below: the crop opened, a corner drag moved the
 card from 2178 to 2237 high, and nothing threw.
 
-**Still to do in this phase:** the rule-of-thirds grid on touch, the loupe at
-the dragged corner, and the status-bar band as something that can be dragged
-back in.
+**The rule-of-thirds grid is written and NOT SEEN ON A DEVICE**, 2026-09-18.
+`CropGrid` draws four lines off the same `liveCrop` shared value the frame
+uses, with opacity on a second shared value so it appears and goes without a
+React render. It shows only when `pickHandle` actually returned a handle -- a
+finger landing outside the frame is not a drag. The lines carry the corner
+brackets' white-with-a-dark-outline treatment, because a single-colour
+hairline over arbitrary screenshot pixels is invisible against some of them
+and a grid that vanishes on a pale screenshot cannot be told from one that
+never appeared.
+
+It is the app's SECOND piece of motion, against an aesthetic note that says
+there is one. Argued rather than taken: the cross-fade is the app moving by
+itself between two views and 160ms is a transition a person watches; this is
+bound to a finger, has to be over before the drag is, and a hard cut at
+finger-up reads as a flicker. `GRID_MS` is 120, under the cross-fade so the
+two cannot be mistaken for each other. **Whether that is right is a judgement
+about motion and no gate here can make it.**
+
+**The loupe's arithmetic is in `crop.js` and its surface is not built.**
+`handlePoint(handle, crop)` gives the image pixel a resize handle is holding,
+and null for `move` -- a translation has no point to align. It is a table
+rather than string tests for one reason worth keeping: `'move'.includes('e')`
+is TRUE, so the obvious implementation puts the body handle on the east edge
+unless an early return happens to catch it first. `handles_by_substring` is
+that version. `loupeScale(view, want = 2)` derives the magnification from the
+projection instead of picking a factor -- at 1080 wide in a 400pt stage one
+image pixel is about a sixth of a point, and a fixed 2x or 3x would be right
+for one screenshot width and wrong for the next. `loupe_fixed` returns 3 and
+`loupe_shrinks` drops the clamp that stops a "loupe" reducing.
+
+**Still to do in this phase:** the loupe's surface, and the status-bar band as
+something that can be dragged back in.
+
+**Queued for the next time the phone is connected**, because the owner
+unplugged it mid-session and none of the above has been seen:
+
+- the grid appears on finger-down and goes on finger-up, and is legible on a
+  pale screenshot as well as a dark one;
+- 120ms reads as bound to the finger rather than as a second transition;
+- the 48pt touch target has not made two adjacent handles fight on a small
+  crop (the corner-beats-edge rule says it cannot, and that is an argument,
+  not an observation);
+- `DEFAULT_RADIUS` 0.02 on a real card rather than on a cropped corner.
+
+What WAS available without the phone and was used: Metro still bundles, so
+`App.js` was built (9,292,035 bytes, `CropGrid` present) which catches a
+syntax error or an unresolved import. It cannot catch a crash at render.
 
 **The owner has now used it, 2026-09-18: "moving the crop is not as smooth as
 I'd expect."** That is the verdict this phase exists to answer, and the cause

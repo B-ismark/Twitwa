@@ -64,6 +64,22 @@ import { TOUCH } from './theme.js';
 export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w', 'move'];
 
 /**
+ * Where each handle sits on the rect, as a fraction of it.
+ *
+ * A TABLE RATHER THAN STRING TESTS, and the reason is one character. The
+ * obvious implementation is `handle.includes('e')` for the east edge -- and
+ * `'move'.includes('e')` is TRUE. Anything written that way puts the body
+ * handle on the right edge unless an early return happens to catch it first,
+ * which is a correctness bug hiding behind the order of two lines. The table
+ * cannot express that mistake. `handles_by_substring` is it.
+ */
+const HANDLE_AT = {
+  nw: [0, 0], n: [0.5, 0], ne: [1, 0],
+  w: [0, 0.5], e: [1, 0.5],
+  sw: [0, 1], s: [0.5, 1], se: [1, 1],
+};
+
+/**
  * The smallest crop, in IMAGE pixels, on either axis.
  *
  * In image pixels rather than screen pixels because it is a statement about the
@@ -254,6 +270,50 @@ export function dragCrop({ start, handle, dx = 0, dy = 0, bounds, min }) {
  * user cannot resize two axes at once anywhere. `BREAK=edge_steals_corner`
  * is that version.
  */
+/**
+ * The point a resize handle is actually holding, in IMAGE pixels.
+ *
+ * This is what the loupe magnifies: the finger covers the pixel being aligned,
+ * so something has to say which pixel that was. `null` for `move`, because a
+ * translation has no point to align -- the whole rect is the thing being
+ * moved, and a magnifier over its middle would show the picture at 1:1 with
+ * nothing to line it up against.
+ *
+ * In image pixels like everything else in this module. The loupe converts on
+ * the way out, once, with the same `view` the gesture used.
+ */
+export function handlePoint(handle, crop) {
+  'worklet';
+  if (!HANDLES.includes(handle)) throw new Error(`unknown handle: ${handle}`);
+  const at = HANDLE_AT[handle];
+  if (!at) return null;
+  return { x: crop.x + crop.w * at[0], y: crop.y + crop.h * at[1] };
+}
+
+/**
+ * How much the loupe has to magnify to make one image pixel legible.
+ *
+ * DERIVED, not a picked factor, and that is the whole point of the control.
+ * `fitView` contains a screenshot in the stage, so on a 1080-wide capture in a
+ * roughly 400pt stage one screen point is about six image pixels -- which is
+ * why trimming a status bar by eye is not something a person can do, and why
+ * the survey found a loupe in every app that expects precision. A fixed 2x or
+ * 3x would be right for one screenshot width and wrong for the next.
+ *
+ * So the loupe asks for a number of POINTS PER IMAGE PIXEL and works back:
+ * `want / view.scale`. At `want = 2` a single image pixel is two points
+ * across, which is a thing a thumb can be aligned against.
+ *
+ * Clamped at 1 because magnification below 1 is a reduction, and a "loupe"
+ * that shrinks the picture is worse than none: it looks like it is working.
+ */
+export function loupeScale(view, want = 2) {
+  'worklet';
+  if (!(view && view.scale > 0)) throw new Error('loupeScale: view has no scale');
+  const k = want / view.scale;
+  return k < 1 ? 1 : k;
+}
+
 export function pickHandle(point, crop, view, { touch } = {}) {
   'worklet';
   const v = toViewportRect(view, crop);

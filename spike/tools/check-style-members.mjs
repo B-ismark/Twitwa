@@ -1,5 +1,6 @@
 // Fails when our source reads a `StyleSheet.<member>` that the installed
-// React Native does not define.
+// React Native does not define, or a `styles.<name>` its own StyleSheet does
+// not define.
 //
 //   cd spike && node tools/check-style-members.mjs
 //
@@ -40,6 +41,19 @@
 //     object inside the export cannot contribute a false member;
 //   - it REFUSES when it finds implausibly few members, because a parse that
 //     silently returns nothing would let every call site through.
+// WHY THE SECOND CHECK IS HERE. `styles.gridV` for a style called `gridVv` is
+// `undefined`, and React Native accepts `undefined` in a style array without a
+// word. The view renders with no styling at all -- for an absolutely
+// positioned element that means it is not positioned, so it lands at 0,0 or
+// collapses to nothing, and it reads as a layout mistake rather than as a
+// typo. That is the same failure as `absoluteFillObject` above, one level
+// down, and on 2026-09-18 this gate was shown NOT to catch it: renaming a
+// `styles.` reference in App.js to something that does not exist left the run
+// green. Four new references had just been added behind that hole.
+//
+// Nothing else covers it. No gate in this repository loads App.js, which is
+// the recorded blind spot that shipped a crash on every import for a day, and
+// a `styles.` typo is the cheapest thing that blind spot can hide.
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -64,6 +78,14 @@ const MUTANTS = {
   // Comments count as code again, so the prose explaining the removed member
   // fails the gate -- a false alarm on every file that documents the bug.
   comment_blind: 'comment_blind',
+  // The second check stops comparing, so `styles.anythingAtAll` passes.
+  styles_blind: 'styles_blind',
+  // Keys nested inside one style are counted as top-level, which would make
+  // `styles.borderLeftWidth` -- a property of a style, not a style -- valid.
+  styles_depth_blind: 'styles_depth_blind',
+  // A file with references and no parsable StyleSheet.create reads as a pass
+  // instead of a refusal, which is how a changed shape stops being checked.
+  styles_floor_blind: 'styles_floor_blind',
 };
 
 if (process.argv.includes('--list-mutants')) {
@@ -161,6 +183,67 @@ function stripComments(text) {
     out += c;
   }
   return out;
+}
+
+/**
+ * The style names one file's own `StyleSheet.create({...})` defines.
+ *
+ * The same brace-depth walk as `defaultExportKeys`, against a different
+ * opening marker, because the failure it guards against is the same one: keys
+ * nested inside a style (`borderLeftWidth`, `position`) are not styles, and
+ * counting them would let `styles.position` through.
+ */
+function styleKeys(src) {
+  const at = src.indexOf('StyleSheet.create({');
+  if (at === -1) return [];
+  let i = at + 'StyleSheet.create('.length;
+  let depth = 0;
+  const keys = [];
+  let line = '';
+  const KEY = /^\s*([A-Za-z_$][\w$]*)\s*:/;
+  const take = () => {
+    const want = blind('styles_depth_blind') ? depth >= 1 : depth === 1;
+    if (!want) return;
+    const m = line.match(KEY);
+    if (m) keys.push(m[1]);
+  };
+  for (; i < src.length; i++) {
+    const c = src[i];
+    const two = src.slice(i, i + 2);
+    if (two === '//') { while (i < src.length && src[i] !== '\n') i++; line = ''; continue; }
+    if (two === '/*') { const end = src.indexOf('*/', i); i = end === -1 ? src.length : end + 1; line = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c;
+      i++;
+      while (i < src.length && src[i] !== quote) i += src[i] === '\\' ? 2 : 1;
+      continue;
+    }
+    if (c === '{') { take(); depth++; line = ''; continue; }
+    if (c === '}') { depth--; line = ''; if (depth === 0) break; continue; }
+    if (c === '\n') { take(); line = ''; continue; }
+    line += c;
+  }
+  return [...new Set(keys)];
+}
+
+/** Every `styles.<name>` written in one file, comments excluded. */
+function styleRefs(text) {
+  const code = stripComments(text);
+  return [...new Set([...code.matchAll(/\bstyles\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))];
+}
+
+/**
+ * The whole second rule, as one function over one file's text, so the checks
+ * below and the self-checks can run the SAME code. A self-check that exercised
+ * a copy of this logic would be a second source of truth for the rule, and
+ * would keep passing while the real path broke.
+ */
+function styleReport(src) {
+  const refs = styleRefs(src);
+  const defined = styleKeys(src);
+  const refuse = refs.length > 0 && defined.length === 0 && !blind('styles_floor_blind');
+  const missing = blind('styles_blind') ? [] : refs.filter((r) => !defined.includes(r));
+  return { refs, defined, missing, refuse };
 }
 
 /** Every `StyleSheet.<member>` written in one file. */
@@ -306,6 +389,57 @@ for (const f of files) {
 }
 ran += files.length;
 fails += bad;
+
+// --- and every `styles.<name>` is a style that file defines -----------------
+console.log('');
+for (const f of files) {
+  const src = readFileSync(f, 'utf8');
+  const r = styleReport(src);
+  if (!r.refs.length) continue;
+  if (r.refuse) {
+    console.log(`\nREFUSING: ${f} reads styles.${r.refs[0]} and no StyleSheet.create({...}) parsed out of it.`);
+    console.log('Either the literal changed shape or the styles moved to another module.');
+    console.log('Read it and fix the extractor; a parse that finds nothing lets every');
+    console.log('reference through, which is the hole this section was added to close.');
+    process.exit(1);
+  }
+  check(`${f}: all ${r.refs.length} styles.* of ${r.defined.length} defined`,
+    r.missing.length === 0, `missing: ${r.missing.join(', ')}`);
+}
+
+// --- self-checks on the second rule ----------------------------------------
+//
+// The real tree passes, which is the point of it and also the problem: with
+// every reference valid, a gate that had stopped comparing would look exactly
+// like a gate that had compared. So the rule is run against sources written to
+// break it. Without these three, `styles_blind`, `styles_depth_blind` and
+// `styles_floor_blind` all stayed GREEN when they were first added -- observed
+// on 2026-09-18, which is why they are here.
+{
+  const FIXTURE = [
+    "const styles = StyleSheet.create({",
+    // Spread over lines on purpose. Written on one line the walk never sees
+    // the inner keys at all -- the closing brace clears the buffer before the
+    // newline that would have read them -- so a one-line fixture passes under
+    // `styles_depth_blind` and proves nothing. Observed doing exactly that.
+    "  ok: {",
+    "    position: 'absolute',",
+    "    borderLeftWidth: 3,",
+    "  },",
+    "});",
+    "const a = styles.ok;",
+    "const b = styles.gone;",
+  ].join('\n');
+  const r = styleReport(FIXTURE);
+  check('a reference to a style that does not exist is reported',
+    r.missing.length === 1 && r.missing[0] === 'gone', r.missing.join(', '));
+  check('and a property INSIDE a style is not a style',
+    !r.defined.includes('borderLeftWidth') && r.defined.includes('ok'), r.defined.join(', '));
+
+  const NO_SHEET = 'const a = styles.ok;';
+  check('a file with references and no parsable StyleSheet.create is refused',
+    styleReport(NO_SHEET).refuse === true, JSON.stringify(styleReport(NO_SHEET)));
+}
 
 console.log(`\n-> ${ran} check(s), ${fails} failing`);
 process.exit(fails ? 1 : 0);
