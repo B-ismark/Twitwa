@@ -2,8 +2,18 @@
 // a place to remember the last check, and a way to hand a URL to the browser.
 //
 // Everything here is a thin adapter. The decisions all live in src/update.js,
-// which is pure and has a test; this file has no test because there is nothing
-// in it to be wrong about except plumbing, and plumbing fails loudly.
+// which is pure and has a test.
+//
+// This file used to say it needed no test "because there is nothing in it to be
+// wrong about except plumbing, and plumbing fails loudly". That was wrong twice
+// over, and a device run proved it: the plumbing was wrong, and it failed in
+// total silence. `readLastChecked` called the async `text()` as if it were
+// synchronous, its own try/catch turned the resulting throw into "never
+// checked", and the once-a-day throttle simply did not exist. Nothing logged,
+// nothing failed, and the only visible symptom was a network request on every
+// launch -- which you only notice if you read two launches' logs side by side.
+// `tools/check-fs-sync.mjs` now derives the async member names from
+// expo-file-system's own native module and fails on this shape.
 //
 // WHY expo-application RATHER THAN app.json. `Constants.expoConfig.android.
 // versionCode` is a copy of app.json baked into the JS bundle. The number
@@ -41,7 +51,17 @@ function readLastChecked() {
   try {
     const f = stateFile();
     if (!f.exists) return null;
-    const v = JSON.parse(f.text()).lastCheckedAt;
+    // textSync, NOT text. `text` is declared with AsyncFunction in
+    // expo-file-system's native module, so it returns a promise; JSON.parse of
+    // a promise throws, the catch below swallows it, and this function then
+    // answers "never checked" on every single launch. The throttle silently
+    // stops existing and the app makes its one network call every time it is
+    // opened, which is the opposite of what update.js's header promises.
+    // Observed on device 2026-09-18: two launches three minutes apart both
+    // logged `"action":"current"` where the second had to be `"skipped"`.
+    // App.js's takeResumeFlag already carried this warning in a comment; this
+    // module was written afterwards and made the same mistake anyway.
+    const v = JSON.parse(f.textSync()).lastCheckedAt;
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
   } catch (e) {
     return null;

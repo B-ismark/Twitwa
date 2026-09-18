@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **657 of the 669 checks run in a clone**, and the 12 that cannot say so
+true: **668 of the 680 checks run in a clone**, and the 12 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -118,6 +118,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `tools/make-tall.mjs` | Tall synthetic PNGs for the Q5 ramp; 82MiB-as-RGBA costs 0.14MiB on disk |
 | `tools/check-imports.mjs` | Verifies named imports between our own modules exist; `expo export` resolves modules but not named exports. Prints whether each module was loaded or source-parsed, because the Skia-importing ones cannot be loaded in node |
 | `tools/check-dead.mjs` | Finds exported names nothing outside their own module refers to. Comments are stripped first, because this repo's comments name functions constantly and a dead export otherwise stays alive by being discussed |
+| `tools/check-fs-sync.mjs` | Fails on an expo-file-system member used as if it were synchronous. The trap names are derived from the library's own Kotlin module rather than listed here, so the list cannot drift on an upgrade. Exists because this defect was made twice: fixed and written into a comment in `App.js`, then written again into `src/update-io.js` — see "A throttle that never throttled" |
 | `tools/chunks.mjs` | Reads a PNG's chunk table and any embedded ICC profile, and names the colour space **by its primaries** — the profile's name cannot, since Skia names both of the ones it writes "Skia". For the Display P3 question, which only the bytes can answer |
 | `tools/capture.mjs` | Drains the device's `PHASE0` log lines into `results/phase0-device-raw.txt`; exits 1 rather than write an empty capture |
 | `fixtures/screenshots/` | The four real captures every measured number rests on |
@@ -126,13 +127,13 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 422 checks and 71 mutations between them while the renderer carries
-none (**669 checks and 120 mutations** counting the two PNG tools, both config
-plugins, the update module and the three rule-checking gates). Three of them are
+none (**680 checks and 121 mutations** counting the two PNG tools, both config
+plugins, the update module and the four rule-checking gates). Three of them are
 not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, and `update.js`
 decides whether a newer APK exists.
 
-**A clone runs 657 of those 669 and reports 12 skipped**, which is the number to
+**A clone runs 668 of those 680 and reports 12 skipped**, which is the number to
 trust, because it is the artifact anyone else gets. The skips are in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
 published, and in the two plugin suites, which compare against the generated
@@ -258,6 +259,7 @@ cd spike && node tools/check-imports.mjs # 52 imports + 7 self-checks on its own
 cd spike && node tools/check-dead.mjs    # 83 exports + 7 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
+cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (37 after a prebuild)
 cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
@@ -303,7 +305,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 120 mutations
+done                                     # silence is the pass; 121 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -392,8 +394,17 @@ filters and measured on the installed package: `ACTION_SEND` and
 `ACTION_SEND_MULTIPLE` both resolve for `image/png`, `image/jpeg` and
 `image/webp`, and `text/plain` is correctly refused. But a real share is consumed
 by `DevLauncherActivity` and never reaches the app, because Expo appends filters
-to the main activity and in a dev client that is the launcher. Registration is
-verified; delivery needs a release-style build. See `spike/results/phase0-device.md`.
+to the main activity and in a dev client that is the launcher.
+
+**Settled on the release APK, 2026-09-18, and the answer has two halves.** In a
+standalone build the filter does resolve straight to `dev.bismark.twitwa/
+.MainActivity` with no launcher in the way, which is what the dev client could
+never show. But sharing an image to it does nothing, because **nothing in the
+app reads an incoming intent**: there is no `getInitialURL`, no share handler,
+no consumer of `EXTRA_STREAM` anywhere in `App.js`. Earlier wording here said
+only that "delivery needs a release-style build", which read as though the code
+were waiting on a build. It is not written yet. See
+`spike/results/phase0-device.md`.
 
 ## Building it — local Android
 
@@ -578,9 +589,55 @@ done:
   HTTPS GET to `raw.githubusercontent.com`, no identifier, no query string. But
   GitHub sees the IP and the time, and a check happens when the app is used, so
   anyone watching that traffic learns roughly when this person opens Twitwa.
-  Hence once a day, never before the app is opened. A switch to turn it off
+  Hence once a day, never before the app is opened — though see below: the
+  throttle did not work at all until a device run caught it. A switch to turn it off
   belongs in Settings and does not exist yet, because Settings does not exist
   yet.
+
+### A throttle that never throttled
+
+The first thing a device run found, and nothing else could have found it.
+
+Two launches of the release APK three minutes apart, from logcat:
+
+```
+I ReactNativeJS: 'PHASE0', 'P0.updateCheck {"action":"current","installed":1,"latest":1,"reason":null}'
+I ReactNativeJS: 'PHASE0', 'P0.updateCheck {"action":"current","installed":1,"latest":1,"reason":null}'
+```
+
+The second had to read `"action":"skipped"`. `current` means it went to the
+network, three minutes into a twenty-four hour throttle.
+
+The cause is one word. `readLastChecked` called `f.text()`, and `text` is
+declared with `AsyncFunction` in expo-file-system's native module — it returns a
+promise. `JSON.parse` of a promise throws, the function's own `try/catch` turned
+that into `null`, and `null` means "never checked". So the throttle did not
+degrade: it did not exist, and the app made its one network call on every single
+launch. The privacy cost written three paragraphs above was not being paid down
+at all.
+
+Three things about this are worth more than the fix:
+
+- **Nothing failed.** No log line, no crash, no red test. The only visible
+  evidence was two launches' output side by side, which is not a thing anyone
+  looks at unless they are already suspicious.
+- **The `try/catch` did the damage.** It was there to keep a corrupt file from
+  bricking the check, and it is right to be there. But it cannot tell a corrupt
+  file from a programming error, and it answered the same way for both. A
+  `catch` that returns a plausible value converts a crash into a wrong answer,
+  which is strictly worse.
+- **It had already been found once.** `takeResumeFlag` in `App.js` carries a
+  comment saying exactly this, written after the same mistake cost a debugging
+  session on the resume flag. `src/update-io.js` was written afterwards, by
+  someone who had read that comment, and made the same mistake anyway. That is
+  the whole argument for `tools/check-fs-sync.mjs`: a comment is a thing you
+  have to be reading at the moment you need it, and a gate is not.
+
+The gate derives the trap names — `text`, `bytes`, `base64`, `copy`, `move` — by
+reading which members expo-file-system declares with `AsyncFunction` and which
+have a `*Sync` twin, out of the library's own Kotlin source. Typing that list
+here would be the same defect one level up, and it would go stale silently on
+the next upgrade.
 
 `versionCode` is `1` and is set explicitly in `app.json`. Expo's own default is
 `config.android?.versionCode ?? 1`, rewritten on every prebuild, so leaving it
