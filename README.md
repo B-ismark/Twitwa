@@ -80,7 +80,7 @@ What the extra recipients *do* change, none of it about policy:
   free.
 - **The APK has to be small enough to send.** The first signed build was
   **124,548,439 bytes**, which is not a thing anyone sends over a chat app. It
-  is now **32,886,141 bytes**. See "Making the APK small enough to send" below —
+  is now **32,886,397 bytes**. See "Making the APK small enough to send" below —
   the whole of the problem was in `lib/`, and the whole of the fix was two
   Gradle properties.
 - **Nothing tells a recipient that a new version exists.** There is no store, so
@@ -508,7 +508,7 @@ Two more things a review established about this path, both counter-intuitive:
   beats failing loudly.
 - **The APK was 124,548,439 bytes**, and 61,374,008 of that was `x86` /
   `x86_64` native libraries that no phone can use. **Fixed 2026-09-18**: it is
-  32,886,141 bytes. (Byte counts throughout, not MB — an earlier version of
+  32,886,397 bytes. (Byte counts throughout, not MB — an earlier version of
   this bullet quoted MiB while the section below quoted bytes, so the same file
   appeared in this file as both 31.3 and 32.9.) See
   "Making the APK small enough to send" above for the measurements. Note that
@@ -519,8 +519,12 @@ Two more things a review established about this path, both counter-intuitive:
 
 The first signed build was **124,548,439 bytes**. There is no store here, so that
 number is not an abstraction: it is the size of a file a person has to receive
-over a chat app before they can use this at all. It is now **32,886,141 bytes**,
-a 73.6% cut, with no change to what the app does.
+over a chat app before they can use this at all. It is now **32,886,397 bytes**,
+a 73.6% cut, with no change to what the app does. (The build the size work was
+measured against was 32,886,141; the shipped artifact is 256 bytes larger
+because two later bug fixes changed the JS bundle. The reduction is the
+measurement, the larger number is the file people receive, and quoting either
+one as the other is how a byte count stops meaning anything.)
 
 The whole of the problem was in `lib/`, and `unzip -v` said so before anything
 was changed:
