@@ -246,6 +246,145 @@ chosen against WhatsApp's recompression and have never been checked against it.
 WhatsApp-derived constant exists in `sizing.js`, so the exposure is one number)
 and the exact steps that would close it.
 
+## What comparable apps do — surveyed 2026-09-18
+
+Twenty-four shipped surfaces were read before writing Phase 2 and Phase 3: ten
+crop screens and eight redaction screens on Mobbin, six canvas and background
+editors, plus the Android crop libraries and the screenshot-beautifier category
+on the web. This section is the evidence those two phases are written against,
+so that the next person does not re-derive it. Sources are named inline; the
+Mobbin screens are iOS, which is the survey's main limitation and is recorded
+at the bottom.
+
+### Seven things that are in every crop surface
+
+1. **Outside the frame is dimmed or black.** Reddit, Google Photos, Apple
+   Photos, X, eBay, Unfold, Yazio, Binance — all of them. The crop is the only
+   lit region, so "what you keep" needs no label and no hint text. Twitwa draws
+   its box on a fully lit image, which is why the box reads as a sticker rather
+   than a frame.
+2. **Corner brackets mean a frame; eight dots mean an object.** Apple Photos
+   uses brackets in Crop and eight dots plus a floating toolbar in Markup. Same
+   app, two vocabularies, and the line between them is exactly the line the
+   owner drew: brackets for the frame the whole image sits inside, dots for a
+   thing sitting on top of it. VSCO and Freeform agree on the dots. This is a
+   free way to make Crop and Cover unmistakable without a word of copy.
+3. **The grid appears on touch, not at rest.** X and Binance show rule-of-thirds
+   during a drag; Reddit, Google Photos and Apple Photos show brackets only when
+   idle. uCrop and Android-Image-Cropper both name "show on touch" as an option,
+   which is what a convention looks like once it has reached a library's API.
+4. **An aspect row.** `Original / Freeform / Square / 9:16 / 4:5` (Reddit),
+   `Free / 9:16 / 2:3 / 3:4 / 4:5 / 1:1 / 5:4` (Unfold), a dropdown in Google
+   Photos, an icon row in X. Universal.
+5. **Auto-detect is a first-class button, not a setting.** Google Photos
+   "Auto Frame", Apple Photos "AUTO", Alan "Detect", Apple Notes' automatic
+   quadrilateral. See below: this is the one thing Twitwa can do better than a
+   general photo cropper.
+6. **A loupe at the dragged corner.** Apple Notes and Alan both float a
+   magnifier where the finger is, because the finger covers the pixel being
+   aligned. At a 1080-wide screenshot in a roughly 400pt stage, one screen pixel
+   is about six image pixels, so trimming a status bar by eye is not something a
+   person can do. Either a loupe or a pinch-zoom is required; the loupe is
+   cheaper and does not touch the coordinate model.
+7. **Cancel, reset, done — three controls, not one.** Google Photos is
+   `X / Crop / check`; Reddit is `Cancel / revert / Save`. There is always a way
+   back to the original that is not "start over".
+
+### Crop and redaction are never the same surface
+
+LINE lists them as sibling rows in one menu: "Crop and rotate", "Pixelate and
+blur". Apple Photos puts Crop on a tab and Markup behind a different entry
+point. Telegram gives blur its own mode row — Off, Radial, Linear — with a
+strength slider. Nothing surveyed asks one rectangle to do both jobs.
+
+And the redaction model is consistently **objects, not "the box"**: drag to add,
+tap to select, a floating toolbar or a trash icon to remove. Apple Photos
+Markup, VSCO, Freeform and Obsidian all show the same selected-object chrome.
+Google Photos and CapCut go further, to a brush with a size slider, which is the
+right shape for an irregular region and the wrong shape for a handle or a face.
+Phase 3's "multiple boxes" is the settled answer in this category, not a
+refinement of ours.
+
+### The frame moves; the image does not
+
+Two models exist and they are not interchangeable:
+
+  - **Fixed frame, image pans and zooms underneath.** Avatar pickers. Correct
+    when the aspect is locked and the subject is a face.
+  - **Frame moves over a fixed, contain-fitted image.** Reddit, Google Photos,
+    eBay, X. Correct when the aspect is free and the user is trimming chrome.
+
+`src/crop.js` already implements the second, and the second is right for
+screenshots. That decision does not need revisiting. What it is missing is
+listed further down.
+
+### The category around us, and what to take from it
+
+Beyond the crop surface, the screenshot-to-shareable-image category has settled
+on a fairly short feature list. Read against Twitwa:
+
+| What they do | Who | Verdict |
+| --- | --- | --- |
+| Auto-trim the phone chrome: status bar, nav bar, compose bar | Picsew "clean the status bar", Xnapper "auto balance" | **Take.** Phase 2 already promises the status-bar band; generalise it |
+| Auto-redact detected sensitive text | Xnapper, on Apple's Vision OCR | **Take, as Phase 3's other half.** Feasibility note below |
+| Background: solid, gradient, or sampled from the image | Pika, Xnapper, PostSpark, Photoroom | **Have it.** Sampled is already the product |
+| Padding or inset control | Pika, Xnapper, Photoroom "Resize" | **Have it.** `PADDING` snug/standard/roomy in `src/sizing.js` |
+| Corner radius and drop shadow on the inner image | Pika, PostSpark, Photoroom "Shadows" | **Later.** Cheap in Skia, and the single biggest "looks designed" lever |
+| Aspect presets named by destination rather than by ratio | Pika social sizes, TweetPik | **Later**, and name them by destination |
+| Device or browser frames around the shot | Picsew, Pika, PostSpark | **Skip.** The input is already a phone screenshot; framing a phone inside a phone is noise |
+| Stitch several screenshots into one long image | Picsew, Tailor, LongShot (Android, free, no watermark) | **Skip for v1.** A different product, and LongShot already owns it on Android |
+| Text, stickers, arrows, annotation | PostSpark, Photoroom, Apple Markup | **Skip.** Against the stated no-chrome principle |
+| Watermark | most of the paid ones | **Skip.** Explicitly against the product |
+| Copy to clipboard beside Share | Xnapper, Pika | **Take.** One control, and it is how a card reaches a desktop chat |
+| Remembered settings, so the second card costs one tap | Pika presets, Xnapper defaults | **Take later.** The whole pitch is speed |
+
+### Auto-propose the crop — the thing only we can do well
+
+Twitwa already samples the screenshot's background colour. The same scan finds
+the horizontal bands that are *pure* background and touch both edges: the status
+bar, the navigation bar, the compose bar, the tab bar. A general photo cropper
+cannot assume any of that. We can, because the input is known to be a
+screenshot, and the assumption is cheap to be wrong about — the proposal is a
+starting rect the user drags, not a decision the user has to undo.
+
+That turns Phase 2's "status bar pre-trimmed, shown as an excluded band that can
+be dragged back in" from a special case into the general mechanism, and it gives
+the surface the auto-detect button every surveyed app has.
+
+The same machinery serves Phase 3. On-device OCR with word-level bounding boxes
+is reachable from this stack — ML Kit Text Recognition v2 on Android, wrapped by
+`expo-mlkit-ocr` among others — which would let Cover propose boxes over a
+handle or an @mention the way Xnapper proposes them over an email address. That
+is a native module and a model download, so it is a real dependency decision and
+not a Phase 3 given. It is recorded here as the known route, not as a
+commitment.
+
+### What `src/crop.js` is missing against the list above
+
+| Missing | Consequence |
+| --- | --- |
+| No `aspect` parameter on `dragCrop` or `normalizeCrop` | Blocks the aspect row entirely |
+| No user zoom: `fitView` derives scale from the viewport alone | Six image pixels per screen pixel, so precise trimming is not possible |
+| No reset-to-original | Every surveyed app has one |
+| `TOUCH = 44` | That is the **iOS** floor. Material's minimum touch target is **48dp**, and this is an Android-first app |
+
+### What this survey did not establish
+
+- **Every Mobbin screen read was iOS.** The Android conventions came from
+  library documentation (uCrop, Android-Image-Cropper) rather than from shipped
+  Android surfaces, because the search tool available here covers iOS and web
+  only.
+- **Nothing here has been on the phone.** It is a survey of other people's
+  decisions, not a measurement of ours.
+- **The 48dp figure is Material's published floor**, not something measured
+  against Twitwa's stage.
+- **WhatsApp's recompression is still unmeasured.** Secondary sources say the
+  long edge is capped near 1600px, and that PNG is re-encoded to JPEG on the
+  photo path while the document path is lossless. `src/sizing.js` deliberately
+  rejected a 1600px long-edge cap, with its reasoning in the header, so these
+  claims bear on a decision already taken on other grounds. Settling it needs a
+  real send to a real device, which is the only way it can be settled.
+
 ## Phase 2 — the crop gesture
 
 **NEXT, and the owner said why on 2026-09-18: the app has no crop at all.** What
@@ -264,11 +403,28 @@ being a refinement and become the rest of the answer. Until both land, the
 single Cover box should be understood as a placeholder that the owner has
 already called out as the wrong shape.
 
+The list below is what the survey above says a crop surface is. Items marked
+NEW came out of that survey and were not in the original plan.
+
 - Pan and resize from corners and edge midpoints, gesture-handler + reanimated,
   worklets so it runs off the JS thread
 - Minimum crop clamped at ~120px on the short edge — clamp the gesture, do not error
-- Status bar pre-trimmed, shown as an excluded band that can be dragged back in
-- Corner brackets per the aesthetic notes
+- Corner brackets per the aesthetic notes, and **NEW:** brackets specifically,
+  because eight dots is the other vocabulary and it means Cover
+- **NEW: a scrim over everything outside the crop.** Present in every surveyed
+  surface without exception, and it is what makes the frame read as a frame
+- **NEW: rule-of-thirds grid while a finger is down, and not at rest**
+- **NEW: a loupe at the dragged corner.** Six image pixels per screen pixel
+  means the alternative is guessing, and the finger covers the target
+- **NEW: a reset-to-original control**, distinct from Start over
+- **NEW: `TOUCH` raised from 44 to 48.** 44 is the iOS floor; Material's is 48dp
+- Status bar pre-trimmed, shown as an excluded band that can be dragged back in,
+  and **NEW:** as the visible case of a general auto-propose, which is the one
+  place this app can beat a general photo cropper
+
+Deferred out of Phase 2 on purpose, with the survey's reasoning: the aspect row
+(needs an `aspect` parameter that `dragCrop` and `normalizeCrop` do not have)
+and user pinch-zoom (the loupe answers the same need for less).
 
 **Started 2026-09-18: the arithmetic exists, the surface does not.**
 `spike/src/crop.js` holds the geometry -- contain-fit projection, viewport-to-image
@@ -290,6 +446,14 @@ surface that stutters is the one performance failure a user cannot ignore.
   never the mean, which text in the ring drags off the background
 - Surface `coverage` when it is low: the box is misplaced, not the background rough
 - Show the fill as it will look — no preview/apply split
+- **NEW from the survey:** a box is an *object*, so it carries eight dots and a
+  small floating toolbar with a delete, which is what Apple Markup, VSCO and
+  Freeform all do. Tap-to-remove with no selected state is a gesture nobody
+  else uses and nobody will guess
+- **NEW, not a commitment:** on-device OCR (ML Kit Text Recognition v2) could
+  propose boxes over handles and @mentions the way Xnapper proposes them over
+  email addresses. A native module and a model download, so it is a dependency
+  decision to take deliberately, not a given
 
 ## Phase 4 — chrome
 
