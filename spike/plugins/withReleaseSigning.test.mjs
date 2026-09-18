@@ -388,9 +388,35 @@ if (!existsSync(LIVE)) {
   const live = readFileSync(LIVE, 'utf8');
   check('the generated file is patched, so the plugin really ran in prebuild',
     live.includes(S.VAR));
-  check('patch(fixture) reproduces the generated file byte-for-byte',
-    out !== null && out === live,
-    out === null ? 'patch() threw' : `${out.length} vs ${live.length} bytes`);
+  // EVERY plugin that edits build.gradle, applied in the order app.json
+  // declares them -- not this one alone. The live file is the product of all
+  // of them, so comparing one plugin's output against it fails the moment a
+  // second plugin is added. That is exactly what happened: withDebugSuffix
+  // landed and this check went red at 9774 vs 9969 bytes while nothing was
+  // wrong with the signing patch.
+  //
+  // The list is DERIVED from app.json rather than typed here, so the next
+  // plugin does not break it either. This module's own patch comes from the
+  // loaded copy -- mutated when BREAK is set -- so the mutants still redden.
+  const declared = JSON.parse(readFileSync('app.json', 'utf8')).expo.plugins || [];
+  const chain = [];
+  for (const entry of declared) {
+    const name = typeof entry === 'string' ? entry : entry[0];
+    if (typeof name !== 'string' || !name.startsWith('./plugins/')) continue;
+    if (name.endsWith('withReleaseSigning')) { chain.push(['withReleaseSigning', patch]); continue; }
+    const mod = require('.' + name.slice('./plugins'.length) + '.js');
+    if (typeof mod.patch === 'function') chain.push([name, mod.patch]);
+  }
+  check('the build.gradle plugin chain was derived from app.json',
+    chain.some(([n]) => n === 'withReleaseSigning'), chain.map(([n]) => n).join(' -> '));
+  let composed = pristine;
+  let chainError = null;
+  try {
+    for (const [, fn] of chain) composed = fn(composed);
+  } catch (e) { chainError = e; composed = null; }
+  check('every build.gradle plugin, in app.json order, reproduces the generated file',
+    composed !== null && composed === live,
+    chainError ? chainError.message.split('\n')[0] : `${composed.length} vs ${live.length} bytes (chain: ${chain.map(([n]) => n).join(' -> ')})`);
   check('no debug-signed release survives in the generated file',
     !live.includes(S.RELEASE_SIGNING));
 }

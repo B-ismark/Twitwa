@@ -48,6 +48,13 @@ const PALETTE = {
     // the app background: a screenshot needs a neutral surround, and Paper
     // tints the edges of a light screenshot enough to misjudge the crop.
     stage: '#0E1013',
+    // Text ON the stage. The stage is dark in BOTH themes, so these two are
+    // the same in both: a component running light that reached for `graphite`
+    // here measured 2.37:1 and was unreadable, which is exactly what happened
+    // to the empty-state message and to the developer log. Having them as
+    // tokens is what lets contrast.py check the pair at all.
+    onStage: '#F6F4EF',
+    onStageMuted: '#949BA2',
   },
   dark: {
     background: '#15181D', // Ink
@@ -58,6 +65,8 @@ const PALETTE = {
     signal: '#7C9AE0',
     onSignal: '#15181D',
     stage: '#0E1013',
+    onStage: '#F6F4EF',
+    onStageMuted: '#949BA2',
   },
 };
 

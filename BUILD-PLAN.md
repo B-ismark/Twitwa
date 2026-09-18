@@ -275,6 +275,17 @@ surface that stutters is the one performance failure a user cannot ignore.
 
 ## Phase 4 — chrome
 
+**Started, and on a phone: 2026-09-18.** `src/theme.js` is the token table,
+`src/copy.js` every user-facing word, and the screen is three states with at
+most three controls. Run on a Pixel 6 Pro through the debug build: empty state,
+source state, Cover, Make card, result, Share (the chooser opens), and the long
+press into the old measurement harness. Gated by `tools/check-copy.mjs`,
+`tools/check-style-members.mjs` and `contrast.py`.
+
+Not done here: the nav island and the one morph below, which belong to a second
+screen this app does not have yet; and the dark palette, which exists and is
+measured but has never been drawn -- this phone locks night mode.
+
 - `theme.ts` with the token table, both themes, Graphite-dark `#949BA2` and
   Signal-dark `#7C9AE0`
 - Nav island, the detached pick-a-screenshot island, gradient fade

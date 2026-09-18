@@ -43,6 +43,7 @@ export default function DevPanel({
   src,
   covered,
   showingResult,
+  scheme,
   onMeasureCheap,
   onStress,
   onCompose,
@@ -101,9 +102,9 @@ export default function DevPanel({
       </View>
 
       <Text style={[styles.state, { color: palette.graphite }]}>
-        {src
+        {(src
           ? `${src.width}x${src.height}  ${src.megapixels}MP  ${src.rgbaMiB}MiB RGBA  ${showingResult ? 'result' : 'source'}  ${covered ? 'covered' : 'uncovered'}`
-          : 'no image'}
+          : 'no image') + `  scheme:${scheme === null || scheme === undefined ? 'null' : scheme}`}
       </Text>
 
       <ScrollView style={[styles.logWrap, { backgroundColor: palette.stage }]}>
@@ -111,7 +112,7 @@ export default function DevPanel({
           <Text
             key={i}
             selectable
-            style={[styles.logLine, { color: palette.graphite, borderBottomColor: palette.hairline }]}
+            style={[styles.logLine, { color: palette.onStageMuted, borderBottomColor: palette.hairline }]}
           >
             {entry.label + '  ' + JSON.stringify(entry.payload, null, 1)}
           </Text>
@@ -122,7 +123,22 @@ export default function DevPanel({
 }
 
 const styles = StyleSheet.create({
-  sheet: { ...StyleSheet.absoluteFillObject, paddingTop: SPACE.xxl + SPACE.lg, paddingHorizontal: SPACE.md },
+  // The four inset properties are written out rather than spread from
+  // StyleSheet.absoluteFillObject, which DOES NOT EXIST in React Native 0.86 --
+  // the export is `absoluteFill`. Spreading a property that is not there is a
+  // no-op with no warning, so this panel laid out in flow underneath the
+  // controls instead of covering the screen, and looked like a flexbox
+  // mistake. tools/check-style-members.mjs now fails on a StyleSheet member
+  // the installed React Native does not define.
+  sheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    paddingTop: SPACE.xxl + SPACE.lg,
+    paddingHorizontal: SPACE.md,
+  },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { ...TYPE.title },
   close: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.sm },

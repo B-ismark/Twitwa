@@ -616,7 +616,16 @@ export default function App() {
         </View>
       ) : null}
 
-      <View style={[styles.stage, { backgroundColor: palette.stage }]} onLayout={onStageLayout}>
+      {/* The stage only paints its dark ground once there is an image on it.
+          Empty, it was a full-height black slab with one line of grey text at
+          the top, which reads as a broken viewport rather than as an empty
+          app. It was also unreadable: the stage is dark in BOTH themes, so in
+          light mode that line was light-Graphite on Ink at 2.37:1. contrast.py
+          now checks the stage pairs, which is how that ratio was found. */}
+      <View
+        style={[styles.stage, shown ? { backgroundColor: palette.stage } : null]}
+        onLayout={onStageLayout}
+      >
         {shown && map && stage ? (
           <Canvas style={{ width: stage.w, height: stage.h }}>
             <SkiaImage image={shown} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
@@ -684,6 +693,7 @@ export default function App() {
           src={src}
           covered={covered}
           showingResult={showingResult}
+          scheme={scheme}
           onMeasureCheap={measureCheap}
           onStress={stress}
           onCompose={compose}
@@ -744,7 +754,11 @@ const styles = StyleSheet.create({
   updateRow: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.md },
 
   stage: { flex: 1, marginHorizontal: SPACE.md, borderRadius: RADIUS.md, overflow: 'hidden' },
-  empty: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl },
+  // flex, not an absolute fill. It was `...StyleSheet.absoluteFillObject`,
+  // which is not a member of React Native 0.86's StyleSheet -- the export is
+  // `absoluteFill` -- so the spread contributed nothing and this text sat at
+  // the top of the stage rather than in the middle of it.
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl },
   emptyText: { ...TYPE.body, textAlign: 'center' },
 
   // White core plus a dark outline, because a coloured handle over arbitrary

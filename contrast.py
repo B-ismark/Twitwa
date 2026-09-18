@@ -80,7 +80,8 @@ def token(body, key):
 
 
 light_body, dark_body = block('light'), block('dark')
-WANT = ['background', 'surface', 'text', 'graphite', 'signal', 'onSignal']
+WANT = ['background', 'surface', 'text', 'graphite', 'signal', 'onSignal', 'stage',
+        'onStage', 'onStageMuted']
 tokens = {}
 missing = []
 for theme, body in (('light', light_body), ('dark', dark_body)):
@@ -117,6 +118,25 @@ ship = [
 # measured 2.78:1 on dark and failed the moment it was first run.
 ship.append(('onSignal-L on Signal-L', tokens['light.onSignal'], tokens['light.signal'], 4.5))
 ship.append(('onSignal-D on Signal-D', tokens['dark.onSignal'],  tokens['dark.signal'],  4.5))
+
+# The stage: the ground the screenshot sits on. It is DARK IN BOTH THEMES, on
+# purpose -- Paper tints the edges of a light screenshot enough to misjudge a
+# crop -- and that is the trap. A component running light reaches for the light
+# palette, and light Graphite on the stage measures 2.37:1: it fails AA and the
+# 3:1 UI floor. That is not hypothetical. The empty-state message was drawn
+# exactly that way and shipped in the Phase 4 commit; it was read off a
+# screenshot, then measured here.
+#
+# So the rule is: anything drawn ON the stage takes the DARK palette's
+# foreground, whatever scheme the app is running. These two pairs are what that
+# rule permits. The light pair is deliberately absent rather than listed as an
+# expected failure -- a table of things that are allowed to fail is a table
+# nobody reads.
+for theme in ('light', 'dark'):
+    ship.append((f'onStage-{theme[0].upper()} on Stage',
+                 tokens[f'{theme}.onStage'], tokens[f'{theme}.stage'], 4.5))
+    ship.append((f'onStageMuted-{theme[0].upper()} on Stage',
+                 tokens[f'{theme}.onStageMuted'], tokens[f'{theme}.stage'], 4.5))
 
 fails = 0
 for name, a, b, need in ship:

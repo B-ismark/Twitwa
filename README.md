@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **752 of the 764 checks run in a clone**, and the 12 that cannot say so
+true: **1032 of the 1048 checks run in a clone**, and the 15 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -110,14 +110,22 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
 | `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, and Q1/Q2/Q3/Q4 were all re-measured after that merge and reproduce exactly |
-| `App.js` | The spike screen: one button per Phase 0 question, plus two that run the Phase 1 pipeline and draw the written card back off disk |
+| `App.js` | The screen. Three states and at most three controls: choose a screenshot, cover something, make the card, share it. The eleven-button Phase 0 harness it used to be still exists, behind a long press on the caption |
+| `src/theme.js` | The token table, and the only place a colour is written down. Plain data with no react-native import, so `contrast.py` reads the shipped values out of this file rather than a second copy of them |
+| `src/copy.js` | Every user-facing word, as plain strings. A view that writes its own text is a gate failure, not a style preference |
+| `src/crop.js` | Phase 2's gesture arithmetic, separated from the gesture: fit, drag, resize, clamp, handle hit-testing, all in image-pixel space. Pure, so the arithmetic is testable without a finger. **Wired to nothing yet** |
+| `src/DevPanel.js` | The Phase 0/1 measurement harness, kept reachable because every measured number in this repository came out of its buttons. Deliberately outside `check-copy.mjs`'s view list: "Q1+Q3" is the right label for a cable, and the wrong one for a person |
 | `plugins/withReleaseSigning.js` | Signs release builds with the project's own key instead of the debug key the RN template ships. A config plugin because `android/` is generated and gitignored, so a direct edit does not survive `prebuild`. Reads the keystore path from `TWITWA_KEYSTORE_PROPERTIES`, so no path and no secret is committed |
+| `plugins/withAndroidSize.js` | The gradle properties that took the release APK from 124.5 MB down. Re-reads what it wrote, because both of the settings involved fail by silently doing nothing |
+| `plugins/withDebugSuffix.js` | Gives the debug build `applicationIdSuffix '.debug'`, so a dev client and the released app coexist on one phone. Without it they share a package name and carry different signing keys, so testing either one means uninstalling the other |
 | `tools/png.mjs` | PNG decoder built on node's `zlib`, no dependency |
 | `tools/probe.mjs` | Answers Q1, Q3 and the card background from a PNG on disk |
 | `tools/make-fixture.mjs` | Synthetic screenshot with known band positions |
 | `tools/make-tall.mjs` | Tall synthetic PNGs for the Q5 ramp; 82MiB-as-RGBA costs 0.14MiB on disk |
 | `tools/check-imports.mjs` | Verifies named imports between our own modules exist; `expo export` resolves modules but not named exports. Prints whether each module was loaded or source-parsed, because the Skia-importing ones cannot be loaded in node |
 | `tools/check-dead.mjs` | Finds exported names nothing outside their own module refers to. Comments are stripped first, because this repo's comments name functions constantly and a dead export otherwise stays alive by being discussed |
+| `tools/check-copy.mjs` | Fails when the app's words break the copy voice, or when a view writes its own words instead of taking them from `src/copy.js`. Reads the values by importing the module, not by grepping its source |
+| `tools/check-style-members.mjs` | Fails on a `StyleSheet.<member>` the installed React Native does not define. The member list is read out of React Native's own source, so it cannot drift on an upgrade. Exists because `StyleSheet.absoluteFillObject` was removed in 0.86 and spreading a missing property is silent: two styles lost their positioning with no warning and no failing test |
 | `tools/check-fs-sync.mjs` | Fails on an expo-file-system member used as if it were synchronous. The trap names are derived from the library's own Kotlin module rather than listed here, so the list cannot drift on an upgrade. Exists because this defect was made twice: fixed and written into a comment in `App.js`, then written again into `src/update-io.js` — see "A throttle that never throttled" |
 | `tools/chunks.mjs` | Reads a PNG's chunk table and any embedded ICC profile, and names the colour space **by its primaries** — the profile's name cannot, since Skia names both of the ones it writes "Skia". For the Display P3 question, which only the bytes can answer |
 | `tools/capture.mjs` | Drains the device's `PHASE0` log lines into `results/phase0-device-raw.txt`; exits 1 rather than write an empty capture |
@@ -127,16 +135,26 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**764 checks and 131 mutations** counting the two PNG tools, both config
-plugins, the update module and the four rule-checking gates). Four of them are
-not pixel work at all: `recover.js` is the picker's self-repair policy,
-`plugins/withReleaseSigning.js` is the release-signing patch, and `update.js`
+none (**1048 checks and 149 mutations** counting the two PNG tools, all three
+config plugins, the update module and the six rule-checking gates). Four of them
+are not pixel work at all: `recover.js` is the picker's self-repair policy,
+`plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
 decides whether a newer APK exists, and `crop.js` is Phase 2 gesture arithmetic.
 
-**A clone runs 752 of those 764 and reports 12 skipped**, which is the number to
-trust, because it is the artifact anyone else gets. The skips are in
+Those two numbers have a convention, because without one they are not
+comparable between readings: every check each gate prints as run, on a tree
+where `android/` exists, summed; and every mutant the loops below enumerate.
+They were re-derived by running all of it on 2026-09-18, not by adding to the
+previous figure. Doing that arithmetic instead is what published three wrong
+counts in this file before.
+
+**A clone runs 1032 of those 1048 and reports 15 skipped**, which is the number
+to trust, because it is the artifact anyone else gets. That was measured by
+copying `src/`, `tools/`, `plugins/` and `app.json` somewhere with no `android/`
+and no fixtures and running them there, which is the only honest way to read a
+clone's number from a warm tree. The skips are 7 in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
-published, and in the two plugin suites, which compare against the generated
+published, and 3, 2 and 3 in the three plugin suites, which compare against the generated
 `android/` tree that `prebuild` creates. Both print the skips and the reason
 rather than a full green total — a review found the signing suite printing
 `18/18 checks passed` in a clone while silently dropping its strongest check,
@@ -272,14 +290,17 @@ cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 53 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 94 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 64 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 103 exports + 7 self-checks on its own rule
+cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
+cd spike && node tools/check-style-members.mjs  # 48 checks; fails on a StyleSheet member RN does not define
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
-cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (37 after a prebuild)
+cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
 cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
+cd spike && node plugins/withDebugSuffix.test.mjs     # 15 checks on the debug application id (18 after a prebuild)
 cd spike && bash tools/verify-apk.sh     # which key actually signed the APK
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
 ```
@@ -309,7 +330,8 @@ cd spike
 # were red and for mutants that were not, indiscriminately. Do not put it
 # back.
 for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
-         src/update.test.mjs; do
+         plugins/withDebugSuffix.test.mjs tools/check-copy.mjs \
+         tools/check-style-members.mjs src/update.test.mjs; do
   for b in $(node "$p" --list-mutants); do
     BREAK=$b node "$p" >/dev/null 2>&1
     [ $? -eq 1 ] || echo "NOT RED: $p $b"
@@ -323,7 +345,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 131 mutations
+done                                     # silence is the pass; 149 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -371,6 +393,38 @@ python -c "import tarfile;tarfile.open('fixtures/og-pages.tar.gz').extractall('f
 python og.py fixtures/pages/*.html       # expect exit 0 across 8 pages
 ```
 
+## A style that was never applied
+
+`StyleSheet.absoluteFillObject` does not exist in React Native 0.86. The export
+that survives is `absoluteFill`. Two styles in this app spread the missing one,
+and spreading `undefined` is legal and silent:
+
+    empty: { ...StyleSheet.absoluteFillObject, alignItems: 'center', ... }
+    sheet: { ...StyleSheet.absoluteFillObject, paddingTop: ..., ... }
+
+Neither produced a warning, a red box, or a failing test. What they produced was
+an empty-state message pinned to the top of the stage instead of its middle, and
+a developer panel that laid out in flow below the controls instead of covering
+the screen. Both look like flexbox mistakes and both were found by eye on a
+phone on 2026-09-18, which is the expensive way to find anything.
+
+Two things came out of it. The four inset properties are now written out in
+full, which costs three lines and cannot half-apply. And
+`tools/check-style-members.mjs` reads the member list out of React Native's own
+source and fails on any `StyleSheet.<member>` this repository uses that the
+installed version does not define. It was shown failing on the real defect
+before being believed: a file spreading `absoluteFillObject` exits 1 and names
+the file.
+
+The same run turned up the contrast version of the same mistake, and the fix has
+the same shape. The stage is dark **in both themes**, so a component running
+light that reached for `graphite` drew at **2.37:1** on it — failing AA and the
+3:1 UI floor. That is what the empty-state message did, and what the developer
+log did. `contrast.py` could not see it because no pair involving `stage` was in
+its table. There are now `onStage` and `onStageMuted` tokens, identical in both
+palettes, and `contrast.py` checks both against the stage in both: 16 pairs, 0
+failing.
+
 ## Unverified
 
 The pixel math is tested against synthetic buffers in Node, which proves the
@@ -406,6 +460,22 @@ Pixel 6 Pro without a single signature error — decode, sub-rect `readPixels`,
 Still unverified: WhatsApp's real recompression, crop-gesture performance on
 mid-range hardware, **Q1 on an actual display** (every number predicts no seam;
 nobody has looked), and whether the Display P3 colour chunk survives into the PNG.
+
+**The dark palette has never been on a screen, and this phone cannot show it.**
+`dumpsys uimode` reports `mNightModeLocked=true` with a 22:00-06:00 schedule, so
+`adb shell cmd uimode night yes` is accepted and then ignored: `mCurUiMode`
+stays `0x21`, which is UI_MODE_NIGHT_NO. The app was asked directly rather than
+guessed at -- the harness state line now prints `scheme:<value>` -- and it read
+`scheme:light` throughout. So every dark value in `src/theme.js` is measured by
+`contrast.py` and drawn by nobody. Check it after 22:00, or on a phone that does
+not lock the setting.
+
+**Phase 4 was run on the phone on 2026-09-18**, through the debug build. The
+empty state, the three-control source state, the Cover box, Make card, the
+result state, the long press into Developer tools and **Share** were each
+exercised and screenshotted. Share was the one with no prior evidence at all:
+`Sharing.isAvailableAsync()` resolves true in this build and the Android chooser
+opens on the rendered card.
 
 **The share target registers but cannot be exercised here.** Rebuilt with the
 filters and measured on the installed package: `ACTION_SEND` and

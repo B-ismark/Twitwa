@@ -61,6 +61,14 @@ const KNOWN = [
   'emdash_blind', 'caps_blind', 'bang_blind', 'dead_copy_blind',
   'literal_text_blind', 'floor_blind', 'label_len_blind',
 ];
+// Published rather than hand-copied into the README's mutation loop. Three
+// hand-written copies of a list in this repository had already fallen behind
+// the thing they listed, which is the same defect as a mutation that cannot
+// fire: the loop reports a green it never ran.
+if (process.argv.includes('--list-mutants')) {
+  console.log(KNOWN.slice().sort().join('\n'));
+  process.exit(0);
+}
 if (BREAK && !KNOWN.includes(BREAK)) {
   console.log(`unknown BREAK: ${BREAK}`);
   process.exit(2);

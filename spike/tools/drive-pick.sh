@@ -94,7 +94,19 @@ tap_text() {
 }
 
 # Pick button lives in the RN view; find it by text
-tap_text "Pick" || exit 3
+# The label is READ OUT OF src/copy.js, never typed here. It was typed here
+# once, as "Pick", and Phase 4 renamed it to "Choose screenshot" -- at which
+# point this script stopped being able to find the button it exists to press,
+# and said "NOMATCH 'Pick'" as though the app were broken. Every user-facing
+# word in this app lives in one module precisely so a second copy cannot drift.
+COPY_JS="$(cd "$S/.." && pwd -W 2>/dev/null)/src/copy.js"
+PICK_LABEL=$(node -e "import('file:///$COPY_JS').then(m => console.log(m.COPY.choose))" 2>/dev/null)
+if [ -z "$PICK_LABEL" ]; then
+  echo "  could not read COPY.choose out of src/copy.js; refusing to guess the button's label" >&2
+  exit 3
+fi
+echo "  the pick button's label, read from src/copy.js: '$PICK_LABEL'"
+tap_text "$PICK_LABEL" || exit 3
 sleep 3
 # The Photos/Collections tabs are Jetpack Compose nodes that uiautomator does not
 # report, so this one is a fixed coordinate rather than a text match. Verified by
