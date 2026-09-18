@@ -97,12 +97,17 @@ read as photographic and add less visual noise than a full border.
 composed card on its sampled background — not a crop outline in isolation. Crop mode
 while dragging, result mode on release.
 
-**Three stops, not a slider.** Snug / Standard / Roomy as a small segmented pill.
-Decisive defaults beat fiddling, and it is one gesture instead of a continuous one.
+**Three stops, and a drag between them** (revised 2026-09-18). Snug / Standard /
+Roomy as a small segmented pill, with a continuous fine-tune on the drag. Decisive
+defaults beat fiddling, so a tap is the common path; the drag is there because the
+owner asked to be able to set the white space, and stops alone cannot.
 
-**Two radii, one shadow, one motion.** Pill for chrome, 14px for the card. The only
-shadow in the app is under the nav pill. The only animation is Save morphing into
-the export sheet — gestures track the finger 1:1 with no easing theatrics.
+**Two radii, two shadows, one motion.** Pill for chrome, and the card's own radius
+is now a control rather than a fixed 14px (2026-09-18). Two shadows, not one: the
+chrome shadow under the island, and the card's own — which is a Skia shadow inside
+the exported PNG, not platform elevation. The only animation is the cross-fade
+between the composed card and the raw screenshot when Crop or Cover takes the bar;
+gestures track the finger 1:1 with no easing theatrics.
 
 **Two type sizes, two weights.** System font. Empty states are one line of Graphite,
 centred, no illustration.
@@ -326,11 +331,11 @@ on a fairly short feature list. Read against Twitwa:
 | What they do | Who | Verdict |
 | --- | --- | --- |
 | Auto-trim the phone chrome: status bar, nav bar, compose bar | Picsew "clean the status bar", Xnapper "auto balance" | **Take.** Phase 2 already promises the status-bar band; generalise it |
-| Auto-redact detected sensitive text | Xnapper, on Apple's Vision OCR | **Take, as Phase 3's other half.** Feasibility note below |
+| Auto-redact detected sensitive text | Xnapper, on Apple's Vision OCR | **Declined by the owner, 2026-09-18.** It would have been Cover's other half; the ML Kit native module and model download are not being added |
 | Background: solid, gradient, or sampled from the image | Pika, Xnapper, PostSpark, Photoroom | **Have it.** Sampled is already the product |
 | Padding or inset control | Pika, Xnapper, Photoroom "Resize" | **Have it.** `PADDING` snug/standard/roomy in `src/sizing.js` |
-| Corner radius and drop shadow on the inner image | Pika, PostSpark, Photoroom "Shadows" | **Later.** Cheap in Skia, and the single biggest "looks designed" lever |
-| Aspect presets named by destination rather than by ratio | Pika social sizes, TweetPik | **Later**, and name them by destination |
+| Corner radius and drop shadow on the inner image | Pika, PostSpark, Photoroom "Shadows" | **Take, 2026-09-18.** Two knobs in Style, reversing the spec's own "no border or shadow controls" |
+| Aspect presets named by destination rather than by ratio | Pika social sizes, TweetPik | **Skip.** Retracted 2026-09-18: the spec's argument is better than this one — the crop already *is* the aspect, so a preset can only fight it by padding unevenly or by discarding content the user chose |
 | Device or browser frames around the shot | Picsew, Pika, PostSpark | **Skip.** The input is already a phone screenshot; framing a phone inside a phone is noise |
 | Stitch several screenshots into one long image | Picsew, Tailor, LongShot (Android, free, no watermark) | **Skip for v1.** A different product, and LongShot already owns it on Android |
 | Text, stickers, arrows, annotation | PostSpark, Photoroom, Apple Markup | **Skip.** Against the stated no-chrome principle |
@@ -351,13 +356,11 @@ That turns Phase 2's "status bar pre-trimmed, shown as an excluded band that can
 be dragged back in" from a special case into the general mechanism, and it gives
 the surface the auto-detect button every surveyed app has.
 
-The same machinery serves Phase 3. On-device OCR with word-level bounding boxes
-is reachable from this stack — ML Kit Text Recognition v2 on Android, wrapped by
-`expo-mlkit-ocr` among others — which would let Cover propose boxes over a
-handle or an @mention the way Xnapper proposes them over an email address. That
-is a native module and a model download, so it is a real dependency decision and
-not a Phase 3 given. It is recorded here as the known route, not as a
-commitment.
+The equivalent for Phase 3 would have been on-device OCR proposing boxes over
+handles and @mentions, the way Xnapper proposes them over email addresses. **The
+owner declined it on 2026-09-18**, so the ML Kit native module and its model
+download are not being added. Recorded here because the survey turned it up, and
+a later reader should find the decision rather than the idea.
 
 ### What `src/crop.js` is missing against the list above
 
@@ -450,10 +453,8 @@ surface that stutters is the one performance failure a user cannot ignore.
   small floating toolbar with a delete, which is what Apple Markup, VSCO and
   Freeform all do. Tap-to-remove with no selected state is a gesture nobody
   else uses and nobody will guess
-- **NEW, not a commitment:** on-device OCR (ML Kit Text Recognition v2) could
-  propose boxes over handles and @mentions the way Xnapper proposes them over
-  email addresses. A native module and a model download, so it is a dependency
-  decision to take deliberately, not a given
+- **Not being built:** auto-redaction over OCR, declined by the owner on
+  2026-09-18. Every box is one the user drew
 
 ## Phase 4 — chrome
 
@@ -478,6 +479,38 @@ measured but has never been drawn -- this phone locks night mode.
 **Verification.** Run `contrast.py` against whatever ends up in `theme.ts`, not
 against what this plan says. It exits 1 on failure.
 
+## Phase 4.5 — the editor shell and Style
+
+**Added 2026-09-18, after the owner settled the IA.** It comes before Phase 5
+because Crop and Cover both hang off this shell, and because it is where the
+render step gets deleted.
+
+- **Delete the "Make card" step.** The canvas becomes the live card, composed at
+  screen resolution, and re-composes on every change. `showingResult` and its
+  two-preview state machine go with it. This is the preview/apply split that
+  Phase 3's own line forbids and that nothing in the survey has
+- One island, primary, **Share**. Save to Photos and Copy image move into an
+  overflow with Start over and Settings
+- A three-item tool bar: Crop, Cover, Style. Crop and Cover take the bar over and
+  return with Done; Style opens a control strip and needs no apply
+- The canvas cross-fades between the composed card and the raw screenshot when a
+  takeover tool opens. The one piece of motion in the app
+- **Style: padding, corners, shadow, background.** Padding is three stops plus a
+  drag to fine-tune, so `PADDING` in `src/sizing.js` needs a continuous path
+  beside its named stops. Corners and shadow are new to the product and reverse
+  the spec's own "no border or shadow controls"
+- **The card's shadow is drawn in Skia, not by elevation.** It has to be in the
+  exported PNG; elevation is a compositor effect and never reaches the pixels.
+  That means the shadow has to be inside the padding budget, or it is clipped —
+  which is the one thing in this phase that can silently produce a wrong card
+- Auto-propose the crop from the pure-background bands, which is what makes step
+  2 of the user flow true: the editor opens on a finished card
+
+**Verification.** The composed card and the exported PNG must be the same
+composition at two scales. A gate that renders both and compares geometry, not
+pixels: same aspect, same padding fraction, same radius fraction, shadow inside
+the bounds at both sizes.
+
 ## Phase 5 — save and share
 
 - MediaStore save, scoped-storage behaviour per API level
@@ -485,21 +518,24 @@ against what this plan says. It exits 1 on failure.
 - Photos permission denied falls back to the share sheet silently, no nag
 - Picker via the permissionless photo picker, not a full-gallery permission
 
-## Phase 6 — Library
+## Phase 6 — Library — **CUT 2026-09-18**
 
-- **Copy the incoming image into app-owned storage at import**, while access is
-  guaranteed. A shared `content://` URI is a grant, not a file: it can be revoked,
-  and the source can move or be deleted without the user thinking of it as deleting
-  a card. Storing a reference and calling it "store the source" was a contradiction
-  in an earlier draft of this plan — it promised re-editability and then described
-  losing it.
-- Persist crop rect and mask boxes in **source-image pixel space**, so they survive
-  a different screen, a different density, and a re-render at a different size
-- Re-edit opens the crop surface in its prior state
-- **Two distinct destructive actions, never one button.** "Clear rendered outputs"
-  frees space and loses nothing — outputs regenerate from source + rect + masks.
-  "Delete originals" destroys re-editability permanently and must say so.
-- At 200KB–2MB per source plus its output, this grows; size is shown per entry
+The owner settled the app at one screen. There is no Library, no saved cards, no
+grid, no card detail, and no re-edit path. That deletes a destination, a
+persistence layer, six states and the only reason a nav bar existed.
+
+One piece of it survives into Phase 4.5 and is not optional: **copy the incoming
+image into app-owned storage at import**, while access is guaranteed. A shared
+`content://` URI is a grant and not a file — it can be revoked, and the source
+can move or be deleted mid-session. It is session-scoped now rather than
+persistent.
+
+The rest is kept here as the design to return to if a Library is ever wanted:
+crop rect and mask boxes persisted in **source-image pixel space** so they
+survive a different screen, a different density and a re-render at a different
+size; two distinct destructive actions, never one button, because "clear
+rendered outputs" loses nothing and "delete originals" destroys re-editability;
+and a per-entry size, because 200KB–2MB per source adds up.
 
 ## Phase 7 — device matrix and polish
 
@@ -515,6 +551,13 @@ gestures because a beautiful crop surface producing wrong-sized output is worse 
 an ugly one producing right-sized output. Chrome at Phase 4 rather than Phase 1
 because the aesthetic depends on seeing real crops in it — designing the island
 against a placeholder rectangle is how apps end up looking generic.
+
+**Revised 2026-09-18.** Phase 4.5 now sits between chrome and save, because the
+IA changed under the build: the editor shell is what Crop and Cover hang off, and
+the live card it introduces is what makes them worth having. Phase 4's screen was
+built around a render button that the shell deletes, so doing Phase 2 first would
+mean building the crop surface into a state machine already scheduled for
+removal.
 
 ## What is still unverified
 

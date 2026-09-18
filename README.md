@@ -50,9 +50,17 @@ Treat the device figures as recorded measurements, not as reproducible ones.
 Decided: screenshot input; Cover tool with a flat sampled fill; card background
 sampled from the crop's edges with a Paper/Ink fallback; no aspect presets (the crop
 *is* the aspect); PNG **width-bounded** at `min(1080, crop + padding)` with height
-following the crop; sRGB SDR output; Library keeps an app-owned **copy** of the
-source plus crop rect and mask boxes, so cards stay re-editable whatever happens in
-Photos; link input deferred to the appendix.
+following the crop; sRGB SDR output; link input deferred to the appendix.
+
+Settled 2026-09-18, and they changed the shape of the app: **one screen and no
+navigation**, so there is no Library and nothing persists past a session; **Share
+is the primary action**, with Save to Photos and Copy image in an overflow;
+**padding is three stops plus a drag** to fine-tune; **corner radius and a drop
+shadow are in**, reversing the spec's own refusal of them; **auto-redaction is
+out**. The incoming image is still copied into app-owned storage at import,
+because a `content://` URI from a share is a revocable grant and not a file — it
+is just session-scoped now. See `social-card-renderer.md` for the IA and
+`BUILD-PLAN.md` for the survey those decisions were taken against.
 
 Distribution is sideload: the owner's own phone, **plus an APK handed to a
 handful of known people** (decided 2026-09-18 — an earlier draft of this file said
@@ -66,7 +74,7 @@ What the extra recipients *do* change, none of it about policy:
 
 - **A stable keystore must exist before anyone installs anything.** Android
   refuses an update signed by a different key, so a v1 shipped under a throwaway
-  debug key forces every recipient to uninstall — which deletes their Library.
+  debug key forces every recipient to uninstall.
   This is the one decision here that is expensive to take late and free to take
   first. **Done 2026-09-18**; `tools/verify-apk.sh` proves which key signed a
   given APK.
