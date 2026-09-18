@@ -481,6 +481,43 @@ export function rowInkProfile(buf, rowBytes, width, height, rows, step = 2) {
 }
 
 /**
+ * Per-COLUMN ink coverage, the same measurement turned ninety degrees.
+ *
+ * Phase 4.5's auto-proposed crop trims the flat bands off all four edges, and
+ * three of the four cannot be seen in a row profile: a uniform left gutter and
+ * a uniform right gutter both leave every row inked, because the post in the
+ * middle of the row is what the row's coverage is measuring.
+ *
+ * `step` subsamples ROWS here, where the row version subsamples columns, so
+ * the two cost about the same on the same image and the coverage stays a ratio
+ * either way.
+ *
+ * Not tested against a naive reimplementation, unlike `rowInkProfile`. It is
+ * tested against `rowInkProfile` of a transposed buffer, which is a stronger
+ * oracle than a second copy of the same loop: a transpose cannot share a bug
+ * with either, and a second copy written from the first usually does.
+ */
+export function colInkProfile(buf, rowBytes, width, height, cols, step = 2) {
+  const limit = Math.min(cols, width);
+  const hist = new Int32Array(4096);
+  const out = new Float32Array(limit);
+  for (let x = 0; x < limit; x++) {
+    hist.fill(0);
+    let n = 0;
+    let best = 0;
+    for (let y = 0; y < height; y += step) {
+      const i = y * rowBytes + x * 4;
+      const k = ((buf[i] >> 4) << 8) | ((buf[i + 1] >> 4) << 4) | (buf[i + 2] >> 4);
+      const c = ++hist[k];
+      if (c > best) best = c;
+      n++;
+    }
+    out[x] = n ? 1 - best / n : 0;
+  }
+  return out;
+}
+
+/**
  * `rowInkProfile` written the obvious way, kept as the reference the fast one is
  * tested against.
  *

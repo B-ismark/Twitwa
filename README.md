@@ -329,6 +329,7 @@ cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 69 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
+cd spike && node src/autocrop.test.mjs   # 46 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
 cd spike && node tools/check-imports.mjs # 65 imports + 7 self-checks on its own rule
 cd spike && node tools/check-dead.mjs    # 109 exports + 7 self-checks on its own rule
@@ -379,7 +380,7 @@ for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
 done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
-         src/compose.test.mjs src/shell.test.mjs \
+         src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
          tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do

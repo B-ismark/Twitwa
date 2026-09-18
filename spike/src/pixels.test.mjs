@@ -27,6 +27,28 @@ if (BREAK === 'ring_flat') {
   F.ringStats = () => null;
 } else if (BREAK === 'ink') {
   F.rowInkProfile = (b, rb, w, h, rows) => new Float32Array(Math.min(rows, h));
+} else if (BREAK === 'col_is_row') {
+  // The transposition bug in its purest form: a column profile that is a row
+  // profile. Identical on a square image, and the auto-crop's left and right
+  // trims then come from the top and bottom of the screenshot.
+  F.colInkProfile = (buf, rowBytes, width, height, cols, step = 2) =>
+    real.rowInkProfile(buf, rowBytes, width, height, cols, step);
+} else if (BREAK === 'col_limit_height') {
+  // `cols` clamped against the height instead of the width. On a tall phone
+  // screenshot this returns a profile longer than the image is wide, whose
+  // tail is read from off the right-hand edge.
+  F.colInkProfile = (buf, rowBytes, width, height, cols, step = 2) => {
+    const full = real.colInkProfile(buf, rowBytes, width, height, width, step);
+    const out = new Float32Array(Math.min(cols, height));
+    for (let i = 0; i < out.length; i++) out[i] = full[i] || 0;
+    return out;
+  };
+} else if (BREAK === 'col_no_step') {
+  // Subsample nothing, so the answer is right and the cost is not. Invisible
+  // against a reference that also ignores step; caught by the transpose,
+  // which does not.
+  F.colInkProfile = (buf, rowBytes, width, height, cols) =>
+    real.colInkProfile(buf, rowBytes, width, height, cols, 1);
 } else if (BREAK === 'ink_fast_max') {
   // The running-max optimisation done wrong: take the LAST bucket's count
   // instead of the largest. Plausible, and silently changes every row.
@@ -732,6 +754,90 @@ console.log('the fast row-ink loop agrees exactly with the obvious one');
   // Without this the whole group would pass on two all-zero arrays.
   check('the reference produced some non-zero ink, so equality means something',
     anyNonZero);
+}
+
+// ===========================================================================
+console.log('colInkProfile is rowInkProfile turned ninety degrees');
+{
+  // The oracle is a transpose, not a second copy of the loop. A reimplemented
+  // reference and the thing it checks are written by the same hand minutes
+  // apart and share the bug that matters; a transposed buffer cannot.
+  //
+  // This also covers the asymmetric case on purpose: every fixture below is
+  // non-square with different content on each axis, because a column profile
+  // that is secretly reading rows is exactly right on a square and exactly
+  // wrong everywhere else.
+  const transpose = (buf, rb, w, h) => {
+    const trb = h * 4;
+    const out = new Uint8Array(trb * w);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * rb + x * 4;
+        const j = x * trb + y * 4;
+        out[j] = buf[i]; out[j + 1] = buf[i + 1]; out[j + 2] = buf[i + 2]; out[j + 3] = buf[i + 3];
+      }
+    }
+    return { buf: out, rb: trb, w: h, h: w };
+  };
+
+  const cases = [];
+  {
+    // Flat gutters of DIFFERENT widths on the two sides, with a striped middle.
+    // 11 left, 23 right: equal gutters would hide a lead/trail swap.
+    const w = 120, h = 40, rb = w * 4;
+    const buf = new Uint8Array(rb * h);
+    buf.fill(255);
+    for (let y = 0; y < h; y++) {
+      for (let x = 11; x < w - 23; x++) {
+        const i = y * rb + x * 4;
+        const v = (x + y) % 7 === 0 ? 20 : 240;
+        buf[i] = v; buf[i + 1] = v; buf[i + 2] = v; buf[i + 3] = 255;
+      }
+    }
+    cases.push(['unequal gutters with a striped middle', buf, rb, w, h]);
+  }
+  {
+    // A single inked column, so most columns score exactly 0.
+    const w = 33, h = 17, rb = w * 4;
+    const buf = new Uint8Array(rb * h);
+    buf.fill(90);
+    for (let y = 0; y < h; y++) {
+      const i = y * rb + 19 * 4;
+      buf[i] = y * 13 & 255; buf[i + 1] = 200; buf[i + 2] = 5;
+    }
+    cases.push(['one inked column in a flat field', buf, rb, w, h]);
+  }
+
+  let anyNonZero = false;
+  let anyZero = false;
+  for (const [label, buf, rb, w, h] of cases) {
+    const t = transpose(buf, rb, w, h);
+    for (const step of [1, 2, 3]) {
+      const cols = F.colInkProfile(buf, rb, w, h, w, step);
+      const rows = real.rowInkProfile(t.buf, t.rb, t.w, t.h, t.h, step);
+      let same = cols.length === rows.length;
+      for (let i = 0; same && i < cols.length; i++) if (cols[i] !== rows[i]) same = false;
+      check(`${label}, step ${step}: columns === rows of the transpose`, same,
+        Array.from(cols).slice(0, 4) + ' vs ' + Array.from(rows).slice(0, 4));
+      for (const v of rows) { if (v > 0) anyNonZero = true; else anyZero = true; }
+    }
+  }
+  // Both, because all-zero and all-inked each make the equality vacuous in a
+  // different direction.
+  check('the transpose produced some inked columns', anyNonZero);
+  check('and some flat ones', anyZero);
+
+  // `cols` bounds the scan the way `rows` does, and it bounds the WIDTH.
+  // Reading it as a height is the transposition bug in the argument list
+  // rather than in the loop, and it is silent on a square image.
+  const w = 50, h = 9, rb = w * 4;
+  const flat = new Uint8Array(rb * h);
+  flat.fill(7);
+  check('cols bounds the number of columns returned', F.colInkProfile(flat, rb, w, h, 12).length === 12);
+  check('and is clamped to the width, not to the height',
+    F.colInkProfile(flat, rb, w, h, 9999).length === w,
+    String(F.colInkProfile(flat, rb, w, h, 9999).length));
+  check('a flat image has no inked column', Array.from(F.colInkProfile(flat, rb, w, h, w)).every((v) => v === 0));
 }
 
 // ===========================================================================
