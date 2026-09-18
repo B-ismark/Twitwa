@@ -479,14 +479,45 @@ zero and one. Frames PRODUCED go up, which is the same finding from the other
 side: the old build was dropping frames of the gesture, not drawing them
 cheaply.
 
-**One counter moved the wrong way and is not explained.** "Number High input
-latency" rose from 106/213 to 824/964. It is reported here rather than left
-out, because a table that shows only the columns that agree with the change is
-not a measurement. The plausible reading is that it is an artifact of
-`input swipe`: synthetic events are injected on a schedule that has nothing to
-do with the display, and the counter is a gap between an input timestamp and a
-frame. That is a guess. A real thumb would settle it and has not been asked
-for one.
+**One counter moved the wrong way, and it was chased down rather than left as
+a caveat.** "Number High input latency" rose from 106/213 to 824/964. It is
+reported here rather than left out, because a table showing only the columns
+that agree with the change is not a measurement.
+
+It is not a latency regression. Three things settle it, measured 2026-09-18
+after the owner asked:
+
+- **A control in an unrelated app.** The same synthetic swipes against
+  `com.android.settings` gave 343 of 1097 frames flagged at 0.09% jank. The
+  counter fires freely in a healthy app that this change cannot have touched.
+- **The end-to-end latency itself, from `framestats` rather than from a
+  counter.** One swipe each, same gesture, minutes apart:
+
+  | | frames | janky | missed vsync | high input latency | app work p50 | to panel p50 / p99 | frames carrying an InputEventId |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | `setEd` per frame | 108 | 0 | 0 | 0 | 4.45ms | 27.10 / 27.15ms | 83 of 107 |
+  | worklet | 138 | 0 | 0 | 100 | 7.06ms | 27.10 / 27.14ms | 61 of 120 |
+
+  `DisplayPresentTime - IntendedVsync` is the input-to-photon figure and it is
+  **identical**: a fixed three-vsync pipeline, 50 microseconds of spread
+  across a whole run. The counter moved; the latency did not.
+- **What did change.** The new build draws about 28% more frames for the same
+  gesture and only half of them carry a fresh `InputEventId`, because
+  `input swipe` injects slower than a 120Hz panel refreshes. Per-frame app
+  work rose 4.45ms to 7.06ms against a 16.6ms deadline — the cost of drawing
+  every frame instead of dropping them, which is the same finding as "frames
+  produced went up" seen from a third side.
+
+**What was NOT derived:** the exact AOSP predicate behind the counter. The
+obvious guess — that it equals the frames with no `InputEventId` — was tested
+and is wrong (100 flagged against roughly 68 such frames), so it is recorded
+as a failed hypothesis rather than repeated as an explanation. Note also that
+`framestats` on this Android prints `InputEventId` and no longer prints
+`OldestInputEvent`, which is the field the counter is computed from, so the
+predicate cannot be reproduced from this output at all.
+
+The owner used the build on 2026-09-18 and said "it's smooth now", which is
+the instrument that matters and the one that had said otherwise.
 
 **Two defects were found by putting this on the phone, neither visible to any
 desktop check.** The first is the one that shipped: `pickHandle`'s
@@ -498,11 +529,13 @@ for a gesture that was throwing on every touch. Both are now guarded:
 the bench takes a screenshot as a positive control before its number is
 believed.
 
-**Still verification, not done.** 60fps under a real thumb, on the slowest
-device available rather than the fastest. `input swipe` is not a finger: it
+**The thumb has now confirmed it.** The owner used the build on 2026-09-18
+and said "it's smooth now". That closes the complaint this phase opened with,
+and it is the only instrument that could: `input swipe` is not a finger — it
 cannot vary its pressure, it cannot pause, and it moves in a straight line.
-The owner's own report is the only instrument that has said "not smooth" so
-far, and it is the one that has to say otherwise.
+
+**Still not done:** the same check on the slowest device available rather
+than the fastest. Every frame number here is from a Pixel 6 Pro.
 
 ## Phase 3 — Cover
 
