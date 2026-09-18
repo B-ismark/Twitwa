@@ -23,11 +23,33 @@ following the crop; sRGB SDR output; Library keeps an app-owned **copy** of the
 source plus crop rect and mask boxes, so cards stay re-editable whatever happens in
 Photos; link input deferred to the appendix.
 
-Distribution is personal sideload. That settles store policy and the platform
-display requirements — neither is engaged by an app that reads pixels the user
-already had — and settles nothing about the rights in someone else's post. Those are
-three questions and an earlier draft of this file answered all three with the first
-one's answer.
+Distribution is sideload: the owner's own phone, **plus an APK handed to a
+handful of known people** (decided 2026-09-18 — an earlier draft of this file said
+"personal sideload" and stopped there). That still settles store policy and the
+platform display requirements — neither is engaged by an app that reads pixels the
+user already had, and no listing exists — and it still settles nothing about the
+rights in someone else's post. Those are three questions and an older draft answered
+all three with the first one's answer.
+
+What the extra recipients *do* change, none of it about policy:
+
+- **A stable keystore must exist before anyone installs anything.** Android
+  refuses an update signed by a different key, so a v1 shipped under a throwaway
+  debug key forces every recipient to uninstall — which deletes their Library.
+  This is the one decision here that is expensive to take late and free to take
+  first.
+- **`adb logcat` is no longer the observability story.** Every measured number in
+  this repo came off a cable attached to one phone. A friend's failure arrives as
+  "it didn't work", so the app needs to be able to hand its own diagnostic text to
+  the person holding it.
+- **The device matrix stops being hypothetical.** Phase 7 was one device and a
+  list of aspirations; it is now other people's phones, which is also the only way
+  the Q1 "no visible seam" verdict gets seen by an eye that is not the author's.
+- **No dev client.** Everything observed so far ran under `expo-dev-client` with
+  Metro attached. Cold start, release JS, and human-readable failure copy are all
+  unmeasured.
+- **The interface is now load-bearing.** A debug harness is fine for the author of
+  the harness. Phase 4 is not optional and not thin.
 
 Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 

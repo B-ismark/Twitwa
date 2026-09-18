@@ -417,7 +417,7 @@ Every knob beyond that is a different product.
 | Aspect presets | **Dropped** | The crop determines the output shape; padding is the only shape control. Inherited from the link design, where text could be re-laid-out to any ratio — with committed pixels a preset must either pad asymmetrically or discard content the user chose to include. |
 | Typography | System font, chrome only | The card draws no app text, so there is nothing to bundle and no cross-OS fidelity problem. |
 | Library storage | A **copy** of the source in app-owned storage, plus crop rect + mask rects + settings in source-pixel space | Fully re-editable and immune to the source moving or being deleted — a `content://` URI from a share is a revocable grant, not a file. Costs real storage, 200KB–2MB per source, so Settings has two separate actions: "clear rendered outputs" (lossless, they regenerate) and "delete originals" (destroys re-editability, and says so). |
-| Distribution | **Personal / sideload** | Three separate things, previously collapsed into one. **Store policy**: not engaged, there is no listing. **Platform display requirements**: written for API and embed consumers, and this app consumes neither — it reads pixels the user already had. **Content rights**: unchanged by any of that. Someone else's post stays someone else's, and re-sharing it stripped of attribution is the user's call to make, not a thing sideloading licenses. The branding-free design stands on the first two; the third is a reason to keep the tool personal rather than a reason it is safe. |
+| Distribution | **Sideload — the owner, plus an APK given to a few known people** (widened 2026-09-18; it read "Personal / sideload") | Three separate things, previously collapsed into one. **Store policy**: not engaged, there is no listing. **Platform display requirements**: written for API and embed consumers, and this app consumes neither — it reads pixels the user already had. **Content rights**: unchanged by any of that. Someone else's post stays someone else's, and re-sharing it stripped of attribution is the user's call to make, not a thing sideloading licenses. The branding-free design stands on the first two; the third is a reason to keep the tool small rather than a reason it is safe — and once the APK is in someone else's hands, that call is theirs to make and the app is not in a position to make it for them. |
 | Link input | **Deferred to v2** | Kept in the appendix with its measured behaviour intact. It earns its place later as "paste a link for a perfectly typeset card" on public posts, where font and theme control genuinely beat a screenshot. |
 | Platform order | Android first, iOS after | See below. |
 
@@ -630,9 +630,10 @@ X's oEmbed returns `cache_age: 3153600000`, so aggressive caching is sanctioned.
 X's Display Requirements require full name, @username, post text, profile picture,
 the X logo in close proximity, a timestamp linking to the post, and unmodified
 content. Meta's Platform Terms are similar in spirit. The branding-free design
-conflicts on four counts. Irrelevant for personal sideloading — the decision taken —
-but it would need a platform mark and timestamp for store distribution, and the
-timestamp is available from X's oEmbed, so that concession is cheap.
+conflicts on four counts. Irrelevant for sideloading, including handing the APK to
+a few known people — the decision taken — but it would need a platform mark and
+timestamp for store distribution, and the timestamp is available from X's oEmbed, so
+that concession is cheap.
 
 ---
 
