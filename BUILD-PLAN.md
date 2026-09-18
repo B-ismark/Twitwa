@@ -439,10 +439,49 @@ constraint below. What is left is the part that needs the phone: the
 gesture-handler/reanimated surface, the corner brackets, the excluded status-bar
 band, and the frame rate.
 
+**The owner has now used it, 2026-09-18: "moving the crop is not as smooth as
+I'd expect."** That is the verdict this phase exists to answer, and the cause
+is already located rather than suspected. The crop gesture commits through
+`setEd` on every move — a React setState per frame — and each one recomposes
+the Skia card. The projection arithmetic is off the JS thread in name only:
+`src/crop.js` is pure, but it is being called from the JS thread and its
+result is being routed through React state. Worklets are not a refinement
+here, they are the fix.
+
+Two things to do in the same pass, because both are "get the work off the main
+thread" and doing them separately means measuring twice:
+
+- The drag itself, as a worklet driving shared values, with React state
+  written once on gesture end rather than once per frame
+- The auto-crop's whole-image read, **measured at 200–234ms on the JS thread
+  at import** on 2026-09-18. It is the largest single cost in the import
+
 **Verification.** 60fps on the slowest device available, not on the fastest. A crop
 surface that stutters is the one performance failure a user cannot ignore.
+There is now a first-hand report that it does; a frame-rate number that
+disagrees with that report is measuring the wrong thing.
 
 ## Phase 3 — Cover
+
+**OPEN QUESTION, raised by the owner on 2026-09-18 after using the build:
+"the Cover feature is still here, not sure its use."** Unresolved on purpose
+rather than answered here, because it decides whether this phase happens at
+all and it is not a question the code can settle.
+
+What Cover was for, per the owner's own earlier reasoning recorded above:
+Crop chooses what the card IS, Cover hides things inside that choice — a
+handle here, a face there. The two were called out as not substitutes.
+
+What has changed since that reasoning: the editor now opens on an auto-proposed
+crop that already removes the status bar, so the most common thing anyone
+wanted to hide is gone before the user sees the card. What remains for Cover
+is redaction — a handle, a face, a name — which is a real need but a rarer
+one, and the current single box is the shape the owner already called wrong.
+
+So the fork is: **cut Cover** (one screen, one job, and the overflow gets the
+room), or **build it properly** as the objects-with-eight-dots surface below.
+Shipping the placeholder indefinitely is the one option to rule out — it is
+a control whose purpose its own author could not state.
 
 - Drag to add a mask box, tap a box to remove it, multiple boxes. **The one
   box in the Phase 4 build is the placeholder this replaces**: it cannot cover
