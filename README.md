@@ -659,8 +659,39 @@ have a `*Sync` twin, out of the library's own Kotlin source. Typing that list
 here would be the same defect one level up, and it would go stale silently on
 the next upgrade.
 
-`versionCode` is `1` and is set explicitly in `app.json`. Expo's own default is
+`versionCode` is `2` as of 1.0.1, and is set explicitly in `app.json`. Expo's own default is
 `config.android?.versionCode ?? 1`, rewritten on every prebuild, so leaving it
 implicit meant it could never move: two materially different APKs would have
 been indistinguishable to Android and to whoever was holding one. **Bump it for
 every build handed to anyone.**
+
+### The update path, end to end, on the phone
+
+Publishing 1.0.1 made the whole path exercisable for the first time, against a
+real release on a real phone holding a real older build. Every step below is an
+observation, not an inference:
+
+| Step | What was observed |
+| --- | --- |
+| The throttle holds | A launch with the day's check already done logged `"action":"skipped"` |
+| The check fires | After clearing it: `P0.updateCheck {"action":"update","installed":1,"latest":2}` |
+| The banner renders | Title, the manifest's `notes`, and both buttons, in a screenshot |
+| "Get it" opens | `P0.update {"opened":true,"url":".../v1.0.1/twitwa-1.0.1.apk"}`, focus moves to Chrome's `CustomTabActivity` |
+| The download works | Chrome: `twitwa-1.0.1.apk`, 32.89 MB of 32.89 MB |
+
+Two things are worth keeping from the run.
+
+**The throttle got in the way of testing the throttle, which is how you know it
+works.** The first launch after publishing answered `skipped`, correctly, because
+the day's check had already happened. There is no force path in the app and a
+release build is not debuggable, so `run-as` cannot reach the state file:
+`adb shell pm clear` is the only way to re-arm it. Worth knowing before the next
+person spends an hour on it — and worth noting that the same absence would stop
+a user checking on demand, which is an argument for a manual check button in
+Phase 4 rather than a defect now.
+
+**`release/latest.json` moves after the release, never before.** It is stated in
+`release/README.md`; what publishing proved is the cost of the other order. Every
+installed copy reads that file on launch, so a manifest naming a release that
+does not exist yet sends all of them to a 404 — and the app cannot tell that
+apart from a download the user cancelled.

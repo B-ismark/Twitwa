@@ -34,10 +34,53 @@ a download that 404s.
    on a GitHub Release tagged `v<versionName>`. The tag and the filename both
    appear in the URL, and the gate checks that the URL agrees with the
    `versionName` in the manifest.
+
+   Create the release and attach the APK in **one** command, with the title and
+   the notes supplied on the command line:
+
+   ```
+   gh release create v1.0.1 /path/to/twitwa-1.0.1.apk \
+     --target <the commit whose app.json carries this version> \
+     --title "Twitwa 1.0.1" --notes-file /path/to/notes.md \
+     -R B-ismark/Twitwa
+   ```
+
+   Both halves of that are paid for. Omitting `--title` or `--notes` makes
+   `gh` go **interactive**, and in a terminal that cannot prompt it leaves an
+   untagged draft with no asset behind — twice, on 1.0.0 and again on 1.0.1.
+   And creating the release first and uploading second leaves a window in which
+   the release exists with nothing attached; if anything deletes that draft in
+   between, the upload fails with a bare `HTTP 404` naming a release id that no
+   longer exists, which reads like a permissions problem and is not.
 4. **Now** edit `latest.json` to match, and run
    `cd spike && node tools/check-release-manifest.mjs`.
 5. Commit. The app reads the raw file from the default branch, so the commit is
    the publish.
+
+6. **Verify the published thing, not the local one.** The filename is not
+   evidence: 1.0.0 and 1.0.1 are both exactly 32,886,397 bytes, so the only way
+   to tell them apart is to read them.
+
+   ```
+   gh release view v<versionName> -R B-ismark/Twitwa --json isDraft,assets
+   curl -s -o /dev/null -w "%{http_code}\n" -L -r 0-0 <the manifest's url>
+   ```
+
+   The asset's `digest` must equal the local file's sha256, `state` must be
+   `uploaded`, `isDraft` must be false, and the URL must answer 206. GitHub
+   records a digest for every asset, which makes this free.
+
+7. **Watch the banner on a phone holding the previous build**, once per release.
+   Nothing else exercises the manifest, the reader, the banner and the browser
+   hand-off together.
+
+   The throttle will get in the way, and that is correct behaviour: if the day's
+   check already ran, the launch logs `"action":"skipped"` and no banner appears.
+   There is no force path in the app, and a release build is not debuggable, so
+   `run-as` cannot reach the state file. `adb shell pm clear dev.bismark.twitwa`
+   is the only way to re-arm it — it erases Twitwa's app data, which today is the
+   check timestamp and the picker resume flag, and will not be that once Library
+   exists.
 
 ## Why the download link is restricted to one prefix
 
