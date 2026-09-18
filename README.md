@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1032 of the 1048 checks run in a clone**, and the 15 that cannot say so
+true: **1109 of the 1125 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -144,11 +144,13 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1048 checks and 149 mutations** counting the two PNG tools, all three
-config plugins, the update module and the six rule-checking gates). Four of them
+none (**1125 checks and 158 mutations** counting the two PNG tools, all three
+config plugins, the update module and the six rule-checking gates). Five of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
-decides whether a newer APK exists, and `crop.js` is Phase 2 gesture arithmetic.
+decides whether a newer APK exists, `crop.js` is Phase 2 gesture arithmetic,
+and `compose.js` is Phase 4.5's rule that the live preview and the exported
+PNG are one composition projected to two widths rather than two compositions.
 
 Those two numbers have a convention, because without one they are not
 comparable between readings: every check each gate prints as run, on a tree
@@ -157,17 +159,44 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1032 of those 1048 and reports 15 skipped**, which is the number
-to trust, because it is the artifact anyone else gets. That was measured by
-copying `src/`, `tools/`, `plugins/` and `app.json` somewhere with no `android/`
-and no fixtures and running them there, which is the only honest way to read a
-clone's number from a warm tree. The skips are 7 in
+**A clone runs 1109 of those 1125 and reports 16 skipped**, which is the number
+to trust, because it is the artifact anyone else gets. The skips are 7 in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
-published, and 3, 2 and 3 in the three plugin suites, which compare against the generated
-`android/` tree that `prebuild` creates. Both print the skips and the reason
-rather than a full green total — a review found the signing suite printing
-`18/18 checks passed` in a clone while silently dropping its strongest check,
-and six mutants surviving in exactly that state.
+published, and 4, 2 and 3 in the three plugin suites, which compare against the
+generated `android/` tree that `prebuild` creates. Each prints the skips and
+the reason rather than a full green total — a review found the signing suite
+printing `18/18 checks passed` in a clone while silently dropping its strongest
+check, and six mutants surviving in exactly that state.
+
+**How to measure that, because the method published here before was wrong.**
+It said to copy `src/`, `tools/`, `plugins/` and `app.json` somewhere with no
+`android/`. That omits `App.js` and every root file, so `check-imports`,
+`check-dead` and `check-release-manifest` crash instead of running and
+`check-copy` fails three — an instrument that under-reports and looks like a
+smaller app rather than like a broken measurement. A clone is the tracked tree
+and nothing else, so take it from git:
+
+```
+git add <your work> && T=$(git write-tree)
+git archive --format=tar "$T" | tar -x -C /tmp/clone
+cd /tmp/clone && git init -q . && printf 'node_modules/\n' >> .git/info/exclude
+git add -A && git -c user.email=x@y -c user.name=x commit -qm clone
+# then junction or install node_modules under /tmp/clone/spike and run the list above
+```
+
+The `git init` is not ceremony: `check-dead` derives its file list from
+`git ls-files` rather than walking the filesystem, which is the right design
+and means a directory without a `.git` is not a clone. Reading its crash as a
+defect in the gate, rather than in the instrument, is the mistake that costs an
+afternoon.
+
+**The signing suite's skip count was one short, and that was found this way.**
+A warm run printed 38 and the clone 34, but only 3 SKIP lines — so one check
+produced no line at all, and one SKIP line named `patch(fixture) reproduces the
+generated file byte-for-byte`, a check renamed earlier the same day when it
+became a plugin-chain comparison. Two hand-maintained copies of one list. Both
+branches now read their names from a single `LIVE_CHECKS` object, so 34 + 4
+equals 38 and the arithmetic itself is the check.
 
 `renderCard()` was run four times on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
@@ -298,14 +327,15 @@ cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery poli
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
+cd spike && node src/compose.test.mjs    # 69 checks that the preview and the export are one composition
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 64 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 103 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 65 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 109 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
-cd spike && node tools/check-style-members.mjs  # 48 checks; fails on a StyleSheet member RN does not define
+cd spike && node tools/check-style-members.mjs  # 49 checks; fails on a StyleSheet member RN does not define
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
 cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
@@ -348,13 +378,14 @@ for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
 done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
+         src/compose.test.mjs \
          tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 149 mutations
+done                                     # silence is the pass; 158 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

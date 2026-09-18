@@ -376,17 +376,32 @@ check('poisoning twice does not stack headers', after2 === after1 && ok2 === tru
 check('poisoning a tree with no build.gradle reports failure rather than throwing',
   plugin.poisonOnDisk({ modRequest: { platformProjectRoot: join(pdir, 'nope') } }) === false);
 
+// The four checks that need a prebuilt android/. Named once, so the skip
+// branch and the live branch cannot drift apart.
+//
+// They did drift. On 2026-09-18 a warm run printed 38 checks and a real clone
+// printed 34 with only 3 SKIP lines: the fourth check produced no line at all,
+// and one of the three SKIP lines named 'patch(fixture) reproduces the
+// generated file byte-for-byte', a check renamed earlier that same day when it
+// became a plugin-chain comparison. So the clone's output accounted for a
+// check that no longer existed and stayed silent about one that did. Both
+// halves of that are the same defect: two hand-maintained copies of one list.
+const LIVE_CHECKS = {
+  patched: 'the generated file is patched, so the plugin really ran in prebuild',
+  chain: 'the build.gradle plugin chain was derived from app.json',
+  reproduces: 'every build.gradle plugin, in app.json order, reproduces the generated file',
+  noDebug: 'no debug-signed release survives in the generated file',
+};
+
 console.log('\nagainst what prebuild actually wrote');
 if (!existsSync(LIVE)) {
   // Counted, not hidden. `spike/android/` is gitignored, so absent is the
   // NORMAL state of every clone — and the old suite printed a full green
   // "18/18 checks passed" here while silently dropping its strongest check.
-  skip('the generated file is patched, so the plugin really ran in prebuild', `${LIVE} absent`);
-  skip('patch(fixture) reproduces the generated file byte-for-byte', `${LIVE} absent`);
-  skip('no debug-signed release survives in the generated file', `${LIVE} absent`);
+  for (const name of Object.values(LIVE_CHECKS)) skip(name, `${LIVE} absent`);
 } else {
   const live = readFileSync(LIVE, 'utf8');
-  check('the generated file is patched, so the plugin really ran in prebuild',
+  check(LIVE_CHECKS.patched,
     live.includes(S.VAR));
   // EVERY plugin that edits build.gradle, applied in the order app.json
   // declares them -- not this one alone. The live file is the product of all
@@ -407,17 +422,17 @@ if (!existsSync(LIVE)) {
     const mod = require('.' + name.slice('./plugins'.length) + '.js');
     if (typeof mod.patch === 'function') chain.push([name, mod.patch]);
   }
-  check('the build.gradle plugin chain was derived from app.json',
+  check(LIVE_CHECKS.chain,
     chain.some(([n]) => n === 'withReleaseSigning'), chain.map(([n]) => n).join(' -> '));
   let composed = pristine;
   let chainError = null;
   try {
     for (const [, fn] of chain) composed = fn(composed);
   } catch (e) { chainError = e; composed = null; }
-  check('every build.gradle plugin, in app.json order, reproduces the generated file',
+  check(LIVE_CHECKS.reproduces,
     composed !== null && composed === live,
     chainError ? chainError.message.split('\n')[0] : `${composed.length} vs ${live.length} bytes (chain: ${chain.map(([n]) => n).join(' -> ')})`);
-  check('no debug-signed release survives in the generated file',
+  check(LIVE_CHECKS.noDebug,
     !live.includes(S.RELEASE_SIGNING));
 }
 
