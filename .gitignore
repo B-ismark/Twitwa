@@ -1,10 +1,68 @@
-# The spike is its own repository and throwaway by design.
-spike/
+# ---------------------------------------------------------------------------
+# One repository, two trees: the docs at the top level and the Phase 0/1 spike
+# under spike/. The spike used to be its own git repository and was ignored
+# here, which meant the entire codebase was invisible to the repo that carried
+# all the reasoning about it. It is imported as one squashed commit; its 14
+# original commits are kept only locally, because their history carries the
+# fixture blobs excluded below.
+# ---------------------------------------------------------------------------
+
+# --- Not published, and the reason is not size ----------------------------
+# The real captures are screenshots of real posts by identifiable people, and
+# the rendered cards contain the same content. Publishing them would put other
+# people's handles, faces and words in a public repo under this project's name,
+# which is the one thing the design's "no attribution" choice must not be used
+# to do. They stay on the machine that took them.
+#
+# Consequence, stated because it is a real cost: a stranger cannot re-derive
+# the measured device numbers in spike/results/. `node tools/make-fixture.mjs`
+# builds synthetic screenshots with known band positions, which is enough to
+# run every gate, and not enough to reproduce the numbers taken from real
+# captures.
+spike/fixtures/screenshots/
+spike/results/cards/
 
 # Fetched HTML used once to measure the oEmbed / Open Graph responses.
 # measured-endpoints.md is the artifact; these are the raw bytes it came from.
 fixtures/pages/
 fixtures/og-pages.tar.gz
 
+# --- Signing material. Never commit any of it. ----------------------------
+# The release keystore is what lets a recipient take an update: Android refuses
+# an update signed by a different key. Losing it is bad; publishing it is worse,
+# because anyone could then sign an APK that installs over this one.
+*.jks
+*.keystore
+*.p12
+*.p8
+*.key
+*.pem
+*.mobileprovision
+keystore.properties
+
+# --- Build output and dependencies ----------------------------------------
+node_modules/
+spike/.expo/
+spike/dist/
+spike/web-build/
+spike/expo-env.d.ts
+spike/android/
+spike/ios/
+spike/.kotlin/
+spike/.metro-health-check*
+*.orig.*
+
+# --- Scratch written by tools/drive-pick.sh on each run -------------------
+spike/tools/ui.xml
+spike/tools/hit.txt
+spike/tools/hit.err
+
+# --- Local env, editor, OS ------------------------------------------------
+.env*.local
+*.tsbuildinfo
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
 __pycache__/
 *.pyc

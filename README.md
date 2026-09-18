@@ -14,6 +14,28 @@ background matched to the screenshot. Android first, Expo, no network in v1.
 | `spike/PHASE0.md` | What the Phase 0 spike measures, what counts as a pass, and the Android toolchain setup |
 | `spike/results/` | Measured results: `phase0-q1-q3.md`, `phase0-device.md`, `phase1-card-background.md`, `phase1-pipeline.md` |
 
+### Two things to know about this repository
+
+**`spike/` is one squashed commit, not a history.** It was its own git repository
+for Phase 0 and Phase 1, and the root repository *ignored* it — so the tree
+carrying every argument about the code did not contain the code. It is imported
+here as a single commit. Its original 14 commits exist only on the machine that
+made them, because their history carries the fixture files described next.
+
+**The real captures are not published, and that is not a size decision.**
+`spike/fixtures/screenshots/` and `spike/results/cards/` are gitignored. They are
+screenshots of real posts by identifiable people — handles, profile photos, words
+— and the rendered cards contain the same content by construction. A public repo
+under this project's name is the last place that should live, particularly one
+whose design deliberately removes attribution.
+
+The cost is real and worth naming rather than hiding: **a stranger cannot
+reproduce the measured device numbers** in `spike/results/`. Those rest on inputs
+that are not here. What a stranger *can* do is run every gate, because
+`node tools/make-fixture.mjs` builds synthetic screenshots with known band
+positions, and the pure modules do not care where their pixels came from. Treat
+the device figures as recorded measurements, not as reproducible ones.
+
 ## State
 
 Decided: screenshot input; Cover tool with a flat sampled fill; card background
@@ -335,7 +357,10 @@ single backslashes as escapes), and `rootProject.name` must not contain a space.
 `spike/android/local.properties` pins `sdk.dir`, so Gradle works in a shell with no
 `ANDROID_HOME`.
 
-**The device is `21241FDEE0019C`** (Pixel 6 Pro, density override 476). It is
+**The device is a Pixel 6 Pro** (density override 476); its serial is in the
+`TWITWA_DEVICE` environment variable rather than in this file, because the repo is
+public and an adb serial is a hardware identifier with no upside in being read by
+strangers. `adb devices -l` prints it. It is
 authorized and has carried every device run since Phase 0; this paragraph used to
 say it read `unauthorized` and needed the "Allow USB debugging" prompt, which was
 true on the first attempt only. If a fresh checkout does read `unauthorized`, that
