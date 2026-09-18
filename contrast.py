@@ -144,5 +144,47 @@ for name, a, b, need in ship:
     ok = r >= need
     fails += (not ok)
     print(f'{name:24s} {r:5.2f}:1  need {need}  {"PASS" if ok else "FAIL"}')
-print(f'-> {len(ship)} pair(s) checked, {fails} failing')
+
+# --- and the dark palette has to be REACHABLE -----------------------------
+#
+# Everything above proves the dark tokens pass. None of it proves anything
+# ever selects them, and for the whole life of this project nothing did.
+# `app.json` carried `"userInterfaceStyle": "light"` -- the create-expo-app
+# default, never revisited -- and expo-dev-launcher reads that key out of the
+# manifest Metro serves and overwrites React Native's AppearanceModule with
+# it (DevLauncherExpoAppLoader.applyUserInterfaceStyle). So `useColorScheme()`
+# returned 'light' on a phone sitting in night mode, the whole dark half of
+# the table was measured and drawn by nobody, and the repo recorded the cause
+# as "this phone locks night mode" -- which was the wrong diagnosis of a real
+# observation. The owner found it by looking at the phone.
+#
+# Worse, that override lives in expo-dev-launcher's DEBUG source set only, and
+# this app ships no expo-updates, so the RELEASE build never had it. The
+# untested theme was the one other people were given.
+#
+# Hence this check, here rather than in a gate of its own: a contrast table
+# for a palette nothing can select is decoration, which is the same fault this
+# file's own header warns about one section up.
+print('\n=== the dark palette is reachable ===')
+import json
+
+APP_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'spike', 'app.json')
+try:
+    with open(APP_JSON, encoding='utf-8') as fh:
+        expo_cfg = json.load(fh)['expo']
+except (OSError, KeyError, ValueError) as e:
+    print(f'REFUSING: cannot read expo config from {APP_JSON}: {e}')
+    print('This check has nothing to read, which is not the same as a pass.')
+    raise SystemExit(1)
+
+style = expo_cfg.get('userInterfaceStyle', 'light')
+style_ok = style == 'automatic'
+fails += (not style_ok)
+print(f'{"userInterfaceStyle":24s} {style!r:>9}  need \'automatic\'  '
+      f'{"PASS" if style_ok else "FAIL"}')
+if not style_ok:
+    print("  -> the dev client forces this scheme, so useColorScheme() never "
+          "reports the device's. Every dark row above is then unreachable.")
+
+print(f'-> {len(ship) + 1} pair(s)/config checked, {fails} failing')
 raise SystemExit(1 if fails else 0)

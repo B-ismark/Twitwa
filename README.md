@@ -363,7 +363,7 @@ ceilings, which the spec currently carries as visible guesses. Full exit criteri
 Both exit 1 on failure and have been verified to actually go red:
 
 ```
-python contrast.py                       # WCAG ratios for every token pair
+python contrast.py                       # 16 WCAG token pairs + the scheme config
 python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 179 checks on the pixel math
 cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
@@ -509,7 +509,9 @@ light that reached for `graphite` drew at **2.37:1** on it — failing AA and th
 log did. `contrast.py` could not see it because no pair involving `stage` was in
 its table. There are now `onStage` and `onStageMuted` tokens, identical in both
 palettes, and `contrast.py` checks both against the stage in both: 16 pairs, 0
-failing.
+failing. A seventeenth row was added later and is not a colour pair at all --
+it asserts that something can actually SELECT the dark palette. See the
+night-mode note below for why that was needed.
 
 ## Unverified
 
@@ -547,14 +549,39 @@ Still unverified: WhatsApp's real recompression, crop-gesture performance on
 mid-range hardware, **Q1 on an actual display** (every number predicts no seam;
 nobody has looked), and whether the Display P3 colour chunk survives into the PNG.
 
-**The dark palette has never been on a screen, and this phone cannot show it.**
-`dumpsys uimode` reports `mNightModeLocked=true` with a 22:00-06:00 schedule, so
-`adb shell cmd uimode night yes` is accepted and then ignored: `mCurUiMode`
-stays `0x21`, which is UI_MODE_NIGHT_NO. The app was asked directly rather than
-guessed at -- the harness state line now prints `scheme:<value>` -- and it read
-`scheme:light` throughout. So every dark value in `src/theme.js` is measured by
-`contrast.py` and drawn by nobody. Check it after 22:00, or on a phone that does
-not lock the setting.
+**The dark palette was drawn for the first time on 2026-09-18, and the reason
+it had never been drawn was in `app.json`, not in the phone.** What this
+section used to say — that the Pixel locks night mode, so dark could not be
+shown — was the wrong diagnosis of a real observation, and it stood long
+enough to leave half the theme untested.
+
+`spike/app.json` carried `"userInterfaceStyle": "light"`. That is the
+create-expo-app default and nobody had revisited it. expo-dev-launcher reads
+the key out of the manifest Metro serves and overwrites React Native's
+`AppearanceModule` with it — `DevLauncherExpoAppLoader.applyUserInterfaceStyle`,
+which reaches in and sets both `overrideColorScheme` and `colorScheme` by
+reflection. So `useColorScheme()` returned `light` on a phone whose Activity
+configuration said `night`, and the harness line that was quoted as evidence
+(`scheme:light`) was reporting the override rather than the device.
+
+The half that was right: `cmd uimode night no` really is accepted and then
+ignored here — the Activity config stays `night` through `no`, `yes` and
+`auto` alike, which is Bedtime mode holding it. The wrong half was concluding
+from that that the phone could not show dark. It shows dark all evening; the
+app was being told not to.
+
+Set to `automatic`, `scheme:dark` is what the harness prints and the whole
+dark palette renders. **Two things worth keeping in mind about the scope of
+that bug.** The override lives in expo-dev-launcher's **debug** source set
+only, and this app ships no expo-updates, so the **release** APK never had it:
+the theme nobody had tested was the one other people were given. And
+`userInterfaceStyle` needs no rebuild to change — the dev client re-reads the
+manifest from Metro on relaunch.
+
+`contrast.py` now checks the key alongside the sixteen colour pairs, because a
+contrast table for a palette nothing can select is decoration. It has been
+observed failing two ways — the key set to `light`, and the key absent — and
+green either side of both.
 
 **Phase 4 was run on the phone on 2026-09-18**, through the debug build. The
 empty state, the three-control source state, the Cover box, Make card, the

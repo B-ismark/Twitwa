@@ -550,8 +550,23 @@ press into the old measurement harness. Gated by `tools/check-copy.mjs`,
 `tools/check-style-members.mjs` and `contrast.py`.
 
 Not done here: the nav island and the one morph below, which belong to a second
-screen this app does not have yet; and the dark palette, which exists and is
-measured but has never been drawn -- this phone locks night mode.
+screen this app does not have yet.
+
+**The dark palette was drawn on 2026-09-18**, after the owner noticed the app
+staying light on a phone that was in night mode. `app.json` carried
+create-expo-app's `"userInterfaceStyle": "light"`, which expo-dev-launcher
+applies by overwriting React Native's AppearanceModule; the line this plan
+used to carry -- "this phone locks night mode" -- was the wrong diagnosis and
+it kept half the theme untested for the life of the project. Set to
+`automatic`, the whole dark palette renders and the harness reports
+`scheme:dark`. `contrast.py` now gates the key as well as the sixteen colour
+pairs, and has been observed failing on `light` and on the key being absent.
+
+Seen in dark on 2026-09-18: the empty state, the card, the Style strip, Crop
+with its scrim and brackets, the overflow menu and Developer tools. Nothing
+was wrong in any of them. **Not seen in dark, and named rather than implied:**
+the error states, and the Share chooser — that one is the system's sheet and
+it lists the owner's contacts, so it is not screenshotted here.
 
 - `theme.ts` with the token table, both themes, Graphite-dark `#949BA2` and
   Signal-dark `#7C9AE0`
