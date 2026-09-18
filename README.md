@@ -55,9 +55,10 @@ following the crop; sRGB SDR output; link input deferred to the appendix.
 Settled 2026-09-18, and they changed the shape of the app: **one screen and no
 navigation**, so there is no Library and nothing persists past a session; **Share
 is the primary action**, with Save to Photos and Copy image in an overflow;
-**padding is three stops plus a drag** to fine-tune; **corner radius and a drop
-shadow are in**, reversing the spec's own refusal of them; **auto-redaction is
-out**. The incoming image is still copied into app-owned storage at import,
+**padding is three stops plus a drag** to fine-tune; **corner radius is in**,
+partly reversing the spec's own refusal of it, while the **drop shadow was wanted
+and dropped the same day** because it could not be platform elevation and a Skia
+one clips against the padding budget in the export; **auto-redaction is out**. The incoming image is still copied into app-owned storage at import,
 because a `content://` URI from a share is a revocable grant and not a file — it
 is just session-scoped now. See `social-card-renderer.md` for the IA and
 `BUILD-PLAN.md` for the survey those decisions were taken against.

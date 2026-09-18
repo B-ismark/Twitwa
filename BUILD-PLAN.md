@@ -102,12 +102,13 @@ Roomy as a small segmented pill, with a continuous fine-tune on the drag. Decisi
 defaults beat fiddling, so a tap is the common path; the drag is there because the
 owner asked to be able to set the white space, and stops alone cannot.
 
-**Two radii, two shadows, one motion.** Pill for chrome, and the card's own radius
-is now a control rather than a fixed 14px (2026-09-18). Two shadows, not one: the
-chrome shadow under the island, and the card's own — which is a Skia shadow inside
-the exported PNG, not platform elevation. The only animation is the cross-fade
-between the composed card and the raw screenshot when Crop or Cover takes the bar;
-gestures track the finger 1:1 with no easing theatrics.
+**Two radii, one shadow, one motion.** Pill for chrome, and the card's own radius
+is now a control rather than a fixed 14px (2026-09-18). Still exactly one shadow
+in the app, under the island: a second one on the card was wanted and dropped the
+same day, because it could not be elevation and a Skia shadow clips against the
+padding budget in the export where nobody would see it. The only animation is the
+cross-fade between the composed card and the raw screenshot when Crop or Cover
+takes the bar; gestures track the finger 1:1 with no easing theatrics.
 
 **Two type sizes, two weights.** System font. Empty states are one line of Graphite,
 centred, no illustration.
@@ -334,7 +335,8 @@ on a fairly short feature list. Read against Twitwa:
 | Auto-redact detected sensitive text | Xnapper, on Apple's Vision OCR | **Declined by the owner, 2026-09-18.** It would have been Cover's other half; the ML Kit native module and model download are not being added |
 | Background: solid, gradient, or sampled from the image | Pika, Xnapper, PostSpark, Photoroom | **Have it.** Sampled is already the product |
 | Padding or inset control | Pika, Xnapper, Photoroom "Resize" | **Have it.** `PADDING` snug/standard/roomy in `src/sizing.js` |
-| Corner radius and drop shadow on the inner image | Pika, PostSpark, Photoroom "Shadows" | **Take, 2026-09-18.** Two knobs in Style, reversing the spec's own "no border or shadow controls" |
+| Corner radius on the inner image | Pika, PostSpark | **Take, 2026-09-18.** One slider in Style, partly reversing the spec's own "no border or shadow controls" |
+| Drop shadow on the inner image | Pika, PostSpark, Photoroom "Shadows" | **Wanted, then declined the same day.** It cannot be elevation, so it is a Skia shadow that must fit inside the padding budget or clip — in the export only, where nobody is looking |
 | Aspect presets named by destination rather than by ratio | Pika social sizes, TweetPik | **Skip.** Retracted 2026-09-18: the spec's argument is better than this one — the crop already *is* the aspect, so a preset can only fight it by padding unevenly or by discarding content the user chose |
 | Device or browser frames around the shot | Picsew, Pika, PostSpark | **Skip.** The input is already a phone screenshot; framing a phone inside a phone is noise |
 | Stitch several screenshots into one long image | Picsew, Tailor, LongShot (Android, free, no watermark) | **Skip for v1.** A different product, and LongShot already owns it on Android |
@@ -495,21 +497,24 @@ render step gets deleted.
   return with Done; Style opens a control strip and needs no apply
 - The canvas cross-fades between the composed card and the raw screenshot when a
   takeover tool opens. The one piece of motion in the app
-- **Style: padding, corners, shadow, background.** Padding is three stops plus a
-  drag to fine-tune, so `PADDING` in `src/sizing.js` needs a continuous path
-  beside its named stops. Corners and shadow are new to the product and reverse
-  the spec's own "no border or shadow controls"
-- **The card's shadow is drawn in Skia, not by elevation.** It has to be in the
-  exported PNG; elevation is a compositor effect and never reaches the pixels.
-  That means the shadow has to be inside the padding budget, or it is clipped —
-  which is the one thing in this phase that can silently produce a wrong card
+- **Style: padding, corners, background.** Padding is three stops plus a drag to
+  fine-tune, so `PADDING` in `src/sizing.js` needs a continuous path beside its
+  named stops. Corners are new to the product and partly reverse the spec's own
+  "no border or shadow controls"
+- **No drop shadow.** Wanted on 2026-09-18 and dropped the same day: it cannot be
+  platform elevation, which never reaches the exported pixels, so it would be a
+  Skia shadow that has to fit inside the padding budget or clip — and clip in the
+  PNG only, where nobody is looking. That failure mode is invisible on screen and
+  permanent in the output, which is the expensive kind
 - Auto-propose the crop from the pure-background bands, which is what makes step
   2 of the user flow true: the editor opens on a finished card
 
 **Verification.** The composed card and the exported PNG must be the same
-composition at two scales. A gate that renders both and compares geometry, not
-pixels: same aspect, same padding fraction, same radius fraction, shadow inside
-the bounds at both sizes.
+composition at two scales, because the canvas runs at screen resolution and the
+export runs at up to 1080 wide. A gate that composes both and compares geometry
+rather than pixels: same aspect, same padding as a fraction of crop width, same
+radius as a fraction of crop width. Break each of those three on purpose and
+watch the gate go red before trusting it.
 
 ## Phase 5 — save and share
 

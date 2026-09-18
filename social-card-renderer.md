@@ -83,7 +83,7 @@ visible fill.
    default. **There is nothing to press to make this happen.**
 3. Optional: **Crop** to a different region.
 4. Optional: **Cover** anything left over — like counts, a stray icon, a face.
-5. Optional: **Style** — padding, corner radius, shadow, background.
+5. Optional: **Style** — padding, corner radius, background.
 6. Share. The chooser opens on the card.
 
 Steps 3 to 5 are optional by design, and the default path is share in, then share
@@ -278,9 +278,9 @@ can express, so it is a device check.
   Expo Go cannot register.
 - **Depth**: no blur library. Solid surfaces, `expo-linear-gradient` for the fade
   under the tool bar (already in the Expo stack), platform elevation for the
-  chrome shadow. The card's own shadow is drawn in Skia, not by elevation — it
-  has to be in the exported PNG, and elevation is a compositor effect that never
-  reaches the pixels.
+  chrome shadow. The card itself carries no shadow: it would have to be drawn in
+  Skia to reach the exported PNG, since elevation is a compositor effect that
+  never reaches the pixels, and a Skia one clips against the padding budget.
 - **Styling/tokens**: a typed `theme.ts` exporting the token table, used with
   `StyleSheet` — **not** NativeWind. For four screens and five tokens a typed theme
   enforces the palette better than utility classes: a wrong token is a TypeScript
@@ -314,7 +314,7 @@ Editor — the only screen
     ├── Crop     ── takes over the bar ── Cancel / Reset / Done
     ├── Cover    ── takes over the bar ── Cancel / Done
     ├── Style    ── a control strip, no takeover
-    │                Padding · Corners · Shadow · Background
+    │                Padding · Corners · Background
     ├── island: Share
     └── overflow ⋯
         ├── Save to Photos
@@ -335,7 +335,7 @@ use for their crop. Style is four knobs whose effect is already visible on the
 canvas, so it needs no takeover and no apply.
 
 **What the canvas shows depends on the tool.** Style and the resting state show
-the composed card — background, padding, radius, shadow. Crop and Cover show the
+the composed card — background, padding, radius. Crop and Cover show the
 raw screenshot, full-bleed, because padding around a crop you are still choosing
 is noise. Switching tools cross-fades between the two. This is the one piece of
 motion in the app.
@@ -415,19 +415,26 @@ Done.
 | --- | --- | --- |
 | Padding | Three stops — Snug / Standard / Roomy — and drag between them to fine-tune | Standard (6% of crop width) |
 | Corners | Slider, 0 to ~4% of crop width | A small radius, not zero |
-| Shadow | Off / Soft / Deep | Soft |
 | Background | Match screenshot / Paper / Ink | Match |
 
 Padding is stops **and** a drag, settled by the owner on 2026-09-18: one tap gets
 the common case right, and a drag is there for the card that needs it. Stops alone
 could not be fine-tuned; a bare slider would make every card a judgement call.
 
-Corners and shadow are **new on 2026-09-18 and reverse this document's own earlier
-"no border or shadow controls"**. The reason that line existed was that the app
-should not become a photo editor. The reason it is overruled: a flat rectangle on
-a flat ground reads as a crop, and a radius plus one soft shadow is what makes it
-read as a card. It is two knobs, it costs nothing in Skia, and it is the largest
-visible return in the app for the effort.
+Corners are **new on 2026-09-18 and partly reverse this document's own earlier
+"no border or shadow controls"**. That line existed so the app would not become a
+photo editor. A radius is overruled because a flat rectangle on a flat ground
+reads as a crop rather than as a card, and it is one knob that costs nothing.
+
+**The shadow was wanted and then dropped, the same day, and the reason is worth
+keeping.** A shadow on the card cannot be platform elevation: elevation is a
+compositor effect and never reaches the exported pixels, so it would have to be
+drawn in Skia, inside the composition. That means it has to fit within the
+padding budget or it is clipped at the card's edge — and it is clipped *in the
+exported PNG only*, where nobody is looking. A control whose failure mode is
+invisible on screen and permanent in the output is worth more than it returns,
+for an effect a radius mostly already achieves. The shadow is out; if it ever
+comes back, it comes back with a gate that measures the exported bounds.
 
 Deliberate omissions, unchanged: no filters, no colour adjustment, no text or
 sticker overlay, no device frames, no watermark, **and no aspect presets** — the
@@ -503,7 +510,8 @@ not on a blocking overlay.
 | Output | PNG, width `min(1080, crop + padding)`, height unbounded below the encode ceiling, sRGB SDR | Width-bounded because a long-edge cap turns a long thread into 9px text. One colour space because wide gamut and HDR are different problems and only one of them fits in an SDR PNG. |
 | App shape | **One screen, no navigation** (2026-09-18) | Editor only. No Library, no saved cards, no grid, no card-detail state, no re-edit path, and no nav bar. Deletes a destination, a persistence layer and six states from the build, and removes the only reason a nav pill existed. Settings survives as a sheet behind the overflow. |
 | Padding control | **Three stops, plus drag to fine-tune** (2026-09-18) | `PADDING` in `src/sizing.js` already has the stops; the drag is new. One tap for the common case, a continuous value for the card that needs it. |
-| Corner radius and drop shadow | **In** (2026-09-18, reversing "no border or shadow controls" above) | Two knobs in Style. A flat rectangle on a flat ground reads as a crop; a radius and one soft shadow are what make it read as a card. Cheap in Skia and the largest visible return for the effort in the app. |
+| Corner radius | **In** (2026-09-18, partly reversing "no border or shadow controls" above) | One slider in Style. A flat rectangle on a flat ground reads as a crop; a radius is what makes it read as a card, and it costs nothing. |
+| Drop shadow | **Wanted, then declined the same day** (2026-09-18) | It cannot be platform elevation, which never reaches the exported pixels, so it would be a Skia shadow inside the composition and would have to fit within the padding budget or be clipped — clipped in the PNG only, where nobody is looking. An invisible-on-screen, permanent-in-the-output failure mode is too much for an effect the radius mostly delivers. |
 | Primary action | **Share** (2026-09-18) | The island opens the system chooser on the card. Save to Photos and Copy image move to the overflow. Matches the stated destination, and Share is the path already exercised on the phone; MediaStore and its permission-denied state stay in Phase 5. |
 | Auto-redaction | **Declined** (2026-09-18) | Xnapper proposes redactions over OCR and it would have been Cover's other half. Not being built, and the ML Kit native module and model download it required are not being added. |
 | Aspect presets | **Dropped** | The crop determines the output shape; padding is the only shape control. Inherited from the link design, where text could be re-laid-out to any ratio — with committed pixels a preset must either pad asymmetrically or discard content the user chose to include. |
@@ -557,6 +565,7 @@ not on a blocking overlay.
 - Device or browser frames around the shot — the input is already a phone
   screenshot, and framing a phone inside a phone is noise
 - A watermark, of ours or anyone's
+- A drop shadow on the card (declined 2026-09-18 — see Decisions settled)
 - Auto-redaction over OCR (declined 2026-09-18 — see Decisions settled)
 - Real inpainting beyond a sampled flat fill
 - Alt text on the exported image
