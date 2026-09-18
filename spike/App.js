@@ -1,24 +1,37 @@
-// Phase 0 spike. Throwaway by design: one screen, no nav, no theme.
-// See PHASE0.md for what each button is meant to answer.
+// The app's one screen.
 //
-// Each question has its own button rather than one "Measure" that runs them
-// all. Q5 is a deliberate out-of-memory probe, and a single button would lose
-// the four cheap answers every time the expensive one died.
+// It was the Phase 0 harness: eleven buttons, a JSON log, and a caption that
+// read "1440x3120 2.3MP 16.5MiB RGBA — showing source". That was the right
+// shape for answering measurement questions and the wrong shape for anything
+// else, and it is now behind a long press. See src/DevPanel.js, which still
+// holds every one of those buttons, because the numbers in this repository
+// came out of them.
+//
+// What replaced it is three states and never more than three controls:
+// nothing picked, a screenshot to work on, a finished card. Words come from
+// src/copy.js and colours from src/theme.js; neither is written here, and
+// tools/check-copy.mjs fails the build if a view starts writing its own.
+//
+// NOT DONE HERE, deliberately: saving to Photos. That needs MediaStore and
+// scoped-storage handling per API level, which is Phase 5. Share hands the
+// file to the system sheet, which is the path the product exists for, and it
+// uses expo-sharing, which was already a dependency and previously unused.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DevSettings,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
+  useColorScheme,
   useWindowDimensions,
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import { Canvas, Image as SkiaImage, ColorSpace } from '@shopify/react-native-skia';
+import { Canvas, Image as SkiaImage } from '@shopify/react-native-skia';
 import * as ImagePicker from 'expo-image-picker';
+import * as Sharing from 'expo-sharing';
 
 import {
   decodeFromUri,
@@ -37,20 +50,22 @@ import {
   resumeDecision,
 } from './src/recover';
 import { check as checkForUpdate, openDownload, installedVersionCode } from './src/update-io';
+import { COPY, fill } from './src/copy';
+import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
+import DevPanel from './src/DevPanel';
 
 const PAPER = '#F6F4EF';
-const INK = '#15181D';
 const LOG = 'PHASE0';
 
 // A dead picker launcher is repaired by replacing the JS runtime, which throws
-// away everything in memory — including the fact that the owner had just asked
+// away everything in memory, including the fact that the owner had just asked
 // to pick a picture. This file carries that one intention across the reload, so
 // the recovery costs one tap instead of two.
 //
 // In the cache directory on purpose: it is a hint, not data. Android may delete
 // it at any time and the only cost is the extra tap this exists to avoid.
 // `src/recover.js` bounds its age, because there is no moment at which this can
-// reliably be cleaned up — the runtime that writes it is about to be destroyed.
+// reliably be cleaned up: the runtime that writes it is about to be destroyed.
 const RESUME_FLAG = 'pick-resume.json';
 
 function writeResumeFlag() {
@@ -64,21 +79,16 @@ function writeResumeFlag() {
   }
 }
 
-/** Read it and delete it in one go: a resume flag must never be usable twice. */
 function takeResumeFlag() {
   try {
     const f = new File(Paths.cache, RESUME_FLAG);
     if (!f.exists) return null;
-    // textSync, NOT text. text() returns a promise, so the delete below raced
-    // the read: the file was gone before the read resolved, the rejection was
-    // an unhandled promise rather than something this try/catch could see, and
-    // the log showed ENOENT on a file that had just been written successfully.
-    const text = f.textSync();
-    // Deleted BEFORE it is parsed. A flag whose contents throw would otherwise
-    // be re-read on every launch, and the failure it describes is the one that
-    // ends in a reload.
+    // textSync, not text. `text` is an AsyncFunction in expo-file-system's
+    // native module, so it returns a promise and JSON.parse throws on it. The
+    // catch below would then answer "no flag" every single time.
+    const flag = JSON.parse(f.textSync());
     f.delete();
-    return JSON.parse(text);
+    return flag;
   } catch (e) {
     return null;
   }
@@ -93,21 +103,37 @@ function fit(imgW, imgH, boxW, boxH) {
 }
 
 export default function App() {
-  const { width: screenW, fontScale, scale: pixelScale } = useWindowDimensions();
-  const canvasW = screenW;
-  const canvasH = 420;
+  const { fontScale, scale: pixelScale } = useWindowDimensions();
+  const scheme = useColorScheme();
+  const palette = paletteFor(scheme);
+
+  // The stage measures itself rather than taking a fixed height, so the
+  // screenshot gets the whole screen. Null until the first layout pass: every
+  // colour and every coordinate below depends on it, and rendering a canvas
+  // against a zero-sized box puts a one-frame black rectangle on screen.
+  const [stage, setStage] = useState(null);
 
   const [src, setSrc] = useState(null);      // { img, width, height, ... }
   const [shown, setShown] = useState(null);  // SkImage currently drawn
   const [covered, setCovered] = useState(false);
   // Which image is on the canvas: the source, or a result. The Cover box is only
-  // meaningful over the source — `map` converts view coordinates to SOURCE
+  // meaningful over the source. `map` converts view coordinates to SOURCE
   // pixels, and a result is trimmed, padded and rescaled, so the same on-screen
   // rectangle points at different content. Showing a result with the box still
-  // live meant the next Render covered a region other than the one selected.
+  // live meant the next render covered a region other than the one selected.
   // Two previews, one box, and the box belongs to exactly one of them.
   const [showingResult, setShowingResult] = useState(false);
   const [log, setLog] = useState([]);
+
+  // Whether the Cover box is in use. The box is hidden until it is, because a
+  // rectangle sitting on someone's screenshot with no explanation is the single
+  // most confusing thing the old screen did.
+  const [useCover, setUseCover] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const [cardPath, setCardPath] = useState(null);
+  const [cardSize, setCardSize] = useState(null);
+  const [devOpen, setDevOpen] = useState(false);
 
   // A newer APK, if there is one. Twitwa is handed out as a file, so nothing
   // tells a person that a new version exists unless the app does. See
@@ -118,13 +144,14 @@ export default function App() {
   // The picker launcher is dead until this runtime is replaced. See
   // src/recover.js for the measurement behind that claim.
   const [staleLauncher, setStaleLauncher] = useState(false);
-  // Survives the reload through the flag file, not through this ref — a reload
+  // Survives the reload through the flag file, not through this ref: a reload
   // creates a new runtime in which every ref is fresh, so a ref alone would
   // permit an endless reload loop. The mount effect below sets it when this
   // runtime IS the recovery.
   const recoveryUsed = useRef(false);
   const lastConfig = useRef(null);
   const updateAsked = useRef(false);
+  const lastStage = useRef(null);
 
   // Mask box in VIEW coordinates. Shared values so the drag stays on the UI thread.
   const bx = useSharedValue(40);
@@ -133,8 +160,8 @@ export default function App() {
   const bh = useSharedValue(52);
 
   const map = useMemo(
-    () => (src ? fit(src.width, src.height, canvasW, canvasH) : null),
-    [src, canvasW, canvasH],
+    () => (src && stage ? fit(src.width, src.height, stage.w, stage.h) : null),
+    [src, stage],
   );
 
   const emit = useCallback((label, payload) => {
@@ -144,6 +171,25 @@ export default function App() {
     console.log(LOG, line);
     setLog((prev) => [{ label, payload }, ...prev].slice(0, 12));
   }, []);
+
+  // A box drawn in one viewport means something different in another, which is
+  // the same rule the crop rect follows. The stage changes size on rotation and
+  // on a display-zoom change, so rather than let the box quietly point at
+  // different pixels, it goes back to a default inside the new stage and says
+  // so. Skipped on the first layout, where there is no previous viewport.
+  const onStageLayout = useCallback((e) => {
+    const { width, height } = e.nativeEvent.layout;
+    const next = { w: Math.round(width), h: Math.round(height) };
+    const prev = lastStage.current;
+    lastStage.current = next;
+    setStage(next);
+    if (!prev || (prev.w === next.w && prev.h === next.h)) return;
+    bx.value = Math.round(next.w * 0.1);
+    by.value = Math.round(next.h * 0.2);
+    bw.value = Math.round(next.w * 0.6);
+    bh.value = Math.round(next.h * 0.08);
+    emit('cover.reset', { from: prev, to: next, note: 'the box was drawn in a viewport that no longer exists' });
+  }, [bx, by, bw, bh, emit]);
 
   // Ask once per mount whether a newer APK exists. Deliberately fire-and-forget:
   // nothing waits on it, nothing is blocked by it, and a failure is a log line.
@@ -164,7 +210,7 @@ export default function App() {
 
   // Replace the runtime, because nothing short of that re-registers the
   // launcher: backgrounding does not, and a second activity recreation does not
-  // either. Both were measured on 2026-09-18 — see src/recover.js.
+  // either. Both were measured on 2026-09-18. See src/recover.js.
   const recoverPicker = useCallback(
     (why) => {
       // __DEV__ is load-bearing, not decoration: DevSettings.reload exists in a
@@ -172,7 +218,12 @@ export default function App() {
       const canReload = canReloadRuntime(DevSettings, __DEV__);
       const plan = recoveryPlan({ canReload, alreadyTried: recoveryUsed.current });
       emit('pick.recover', { why, action: plan.action, message: plan.message });
-      if (plan.action !== 'reload') return;
+      if (plan.action !== 'reload') {
+        // The release build lands here, and this is the branch that could never
+        // be reached while the guard tested only for the method's existence.
+        setProblem(COPY.pickerStale);
+        return;
+      }
       recoveryUsed.current = true;
       emit('pick.recover.reload', { resumeFlagWritten: writeResumeFlag() });
       DevSettings.reload();
@@ -181,13 +232,14 @@ export default function App() {
   );
 
   const pick = useCallback(async () => {
+    setProblem(null);
     // The launch is INSIDE the boundary, and reports under its own label.
     //
     // It used to sit above the try, so its rejection escaped as an unhandled
     // promise and the button simply stopped working with nothing on screen. The
     // failure is real and reproduced on device: after the activity is recreated
-    // — a font-scale or density change does it, and rotation cannot, because
-    // `configChanges` absorbs rotation — `launchImageLibraryAsync` rejects with
+    // (a font-scale or density change does it, and rotation cannot, because
+    // `configChanges` absorbs rotation) `launchImageLibraryAsync` rejects with
     // "Attempting to launch an unregistered ActivityResultLauncher".
     //
     // The app now repairs itself instead of reporting and stopping: see
@@ -196,9 +248,6 @@ export default function App() {
     // dead before it is used; the catch here covers every route to the same
     // fault that the detector does not watch for.
     //
-    // A separate label from `decode.error` on purpose. One says the picker never
-    // opened, the other says it returned something unreadable, and reporting
-    // both as a decode failure is what made the first one look like a bad file.
     // Known dead: do not launch. The rejection is certain, and calling anyway
     // puts a scary stack trace in front of the owner on the way to the same
     // repair. The detector that sets this is the config-change effect below.
@@ -223,6 +272,7 @@ export default function App() {
         return;
       }
       emit('pick.error', { message, note: 'the picker did not open, and not because of the launcher' });
+      setProblem(COPY.pickFailed);
       return;
     }
     if (res.canceled) return;
@@ -235,6 +285,8 @@ export default function App() {
       setShown(decoded.img);
       setCovered(false);
       setShowingResult(false);
+      setCardPath(null);
+      setCardSize(null);
       emit('decode', {
         w: decoded.width,
         h: decoded.height,
@@ -244,13 +296,14 @@ export default function App() {
       });
     } catch (e) {
       emit('decode.error', { message: String(e && e.message ? e.message : e) });
+      setProblem(COPY.pickFailed);
     }
     // staleLauncher and recoverPicker belong here. With `[emit]` alone this
     // callback kept the first render's `staleLauncher: false` for the life of
     // the component, so the proactive branch above could never fire and every
     // recreation went the long way round: launch, reject, report, recover. The
     // reactive path caught it, which is exactly why the omission was invisible
-    // on the device -- the repair still worked, one scary stack trace later.
+    // on the device: the repair still worked, one scary stack trace later.
   }, [emit, staleLauncher, recoverPicker]);
 
   /** Mask box in image pixels, from the on-screen box. */
@@ -363,7 +416,7 @@ export default function App() {
       setCovered(withMask);
       setShowingResult(true);
       emit('Q2.compose', {
-        space: colorSpace === ColorSpace.DisplayP3 ? 'DisplayP3' : 'sRGB',
+        space: colorSpace ? 'DisplayP3' : 'sRGB',
         withMask,
         out: out.outW + 'x' + out.outH,
         mp: out.outMegapixels,
@@ -389,14 +442,16 @@ export default function App() {
 
   // --- Phase 1: the real pipeline, end to end -----------------------------
   //
-  // Unlike the Q2 buttons above, nothing here composes anything itself: the crop,
-  // the trim, the padding, the frame colour and every Cover fill come from
+  // Unlike the Q2 buttons, nothing here composes anything itself: the crop, the
+  // trim, the padding, the frame colour and every Cover fill come from
   // renderCard. The card is then decoded back off disk and shown, which is both
   // the cheapest possible check that the written file is a real PNG and the only
-  // way to answer Q1 by eye — the question no measurement can settle.
+  // way to answer Q1 by eye, the question no measurement can settle.
   const render = useCallback(
     async (withMask, space) => {
       if (!src) return;
+      setProblem(null);
+      setBusy(true);
       const masks = withMask ? [boxInImageSpace()] : [];
       try {
         const t0 = Date.now();
@@ -414,6 +469,7 @@ export default function App() {
         const wallMs = Date.now() - t0;
         if (out.error) {
           emit('P1.render.error', { error: out.error, plan: out.plan && out.plan.width });
+          setProblem(COPY.renderFailed);
           return;
         }
         // Read the file back rather than trusting the return value. A wrong
@@ -423,6 +479,8 @@ export default function App() {
         setShown(back);
         setCovered(withMask);
         setShowingResult(true);
+        setCardPath(out.path);
+        setCardSize({ width: out.width, height: out.height });
         emit('P1.render', {
           path: out.path,
           space: space ? 'DisplayP3' : 'sRGB',
@@ -450,10 +508,39 @@ export default function App() {
         });
       } catch (e) {
         emit('P1.render.throw', { message: String(e && e.message ? e.message : e) });
+        setProblem(COPY.renderFailed);
+      } finally {
+        setBusy(false);
       }
     },
     [src, boxInImageSpace, emit],
   );
+
+  // Hand the PNG to the system sheet. Not "Save to Photos": that is MediaStore
+  // and scoped storage per API level, which is Phase 5. This is the path the
+  // product exists for, and expo-sharing was already a dependency.
+  const share = useCallback(async () => {
+    if (!cardPath) return;
+    setProblem(null);
+    try {
+      // Asked, not assumed. A device with no sharing target throws from
+      // shareAsync, and "nothing happened" is the worst possible answer.
+      const can = await Sharing.isAvailableAsync();
+      if (!can) {
+        emit('P1.share', { ok: false, reason: 'no sharing target' });
+        setProblem(COPY.shareFailed);
+        return;
+      }
+      await Sharing.shareAsync(cardPath, {
+        mimeType: 'image/png',
+        UTI: 'public.png',
+      });
+      emit('P1.share', { ok: true, path: cardPath });
+    } catch (e) {
+      emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
+      setProblem(COPY.shareFailed);
+    }
+  }, [cardPath, emit]);
 
   // --- Q5: the probe that is allowed to die -------------------------------
   const stress = useCallback(() => {
@@ -467,6 +554,9 @@ export default function App() {
     setShown(src.img);
     setShowingResult(false);
     setCovered(false);
+    setCardPath(null);
+    setCardSize(null);
+    setProblem(null);
   }, [src]);
 
   // --- gestures -----------------------------------------------------------
@@ -491,43 +581,53 @@ export default function App() {
     height: bh.value,
   }));
 
+  const showBox = Boolean(src) && !showingResult && useCover;
+
+  let caption = '';
+  if (problem) caption = problem;
+  else if (busy) caption = COPY.working;
+  else if (showingResult && cardSize) {
+    caption = `${COPY.ready}. ${fill(COPY.cardSize, cardSize)}`;
+  } else if (showingResult) caption = COPY.ready;
+  else if (showBox) caption = COPY.coverHint;
+
   return (
-    <GestureHandlerRootView style={styles.root}>
+    <GestureHandlerRootView style={[styles.root, { backgroundColor: palette.background }]}>
       {update ? (
-        <View style={styles.updateBar}>
-          <Text style={styles.updateText}>
-            {`Twitwa ${update.versionName} is out (you have build ${update.installedVersionCode}).`}
+        <View style={[styles.update, { backgroundColor: palette.surface, borderColor: palette.signal }]}>
+          <Text style={[styles.updateTitle, { color: palette.text }]}>
+            {fill(COPY.updateTitle, { version: update.versionName })}
           </Text>
-          {update.notes ? <Text style={styles.updateNotes}>{update.notes}</Text> : null}
+          {update.notes ? (
+            <Text style={[styles.updateNotes, { color: palette.graphite }]}>{update.notes}</Text>
+          ) : null}
           <View style={styles.updateRow}>
-            <Btn
-              label="Get it"
+            <Action
+              label={COPY.updateGet}
+              palette={palette}
+              primary
               onPress={async () => {
                 const ok = await openDownload(update.url);
                 emit('P0.update', { opened: ok, url: ok ? update.url : 'refused' });
               }}
             />
-            <Btn label="Later" onPress={() => setUpdate(null)} />
+            <Action label={COPY.updateLater} palette={palette} onPress={() => setUpdate(null)} />
           </View>
         </View>
       ) : null}
-      <View style={[styles.canvasWrap, { width: canvasW, height: canvasH }]}>
-        {shown && map ? (
-          <Canvas style={{ width: canvasW, height: canvasH }}>
-            <SkiaImage
-              image={shown}
-              x={0}
-              y={0}
-              width={canvasW}
-              height={canvasH}
-              fit="contain"
-            />
+
+      <View style={[styles.stage, { backgroundColor: palette.stage }]} onLayout={onStageLayout}>
+        {shown && map && stage ? (
+          <Canvas style={{ width: stage.w, height: stage.h }}>
+            <SkiaImage image={shown} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
           </Canvas>
         ) : (
-          <Text style={styles.hint}>Pick a screenshot</Text>
+          <View style={styles.empty}>
+            <Text style={[styles.emptyText, { color: palette.graphite }]}>{COPY.emptyTitle}</Text>
+          </View>
         )}
 
-        {src && !showingResult ? (
+        {showBox ? (
           <GestureDetector gesture={move}>
             <Animated.View style={[styles.box, boxStyle]}>
               <GestureDetector gesture={resize}>
@@ -538,79 +638,118 @@ export default function App() {
         ) : null}
       </View>
 
-      <View style={styles.row}>
-        <Btn label="Pick" onPress={pick} />
-        <Btn label="Q1+Q3" onPress={measureCheap} disabled={!src || showingResult} />
-        <Btn label="Q5 stress" onPress={stress} disabled={!src} />
-      </View>
-      <View style={styles.row}>
-        <Btn label="Cover on" onPress={() => compose(undefined, true)} disabled={!src || showingResult} />
-        <Btn label="Cover off" onPress={() => compose(undefined, false)} disabled={!src || showingResult} />
-        <Btn label="P3" onPress={() => compose(ColorSpace.DisplayP3, true)} disabled={!src || showingResult} />
-      </View>
-      <View style={styles.row}>
-        <Btn label="Render" onPress={() => render(false)} disabled={!src || showingResult} />
-        <Btn label="Render + cover" onPress={() => render(true)} disabled={!src || showingResult} />
-        {/* Q4 through the real pipeline. The "P3" button above drives Phase 0's
-            composeAndEncode, which is a different encoder call; the default
-            render writes no iCCP at all, so this is the only way to find out
-            whether renderCard tags a P3 card. */}
-        <Btn
-          label="Render P3"
-          onPress={() => render(false, ColorSpace.DisplayP3)}
-          disabled={!src || showingResult}
-        />
-        {/* The only way out of result mode, and the only thing that puts the box
-            back. Without it the box stayed live over a rendered card and the next
-            render covered a region other than the one selected. */}
-        <Btn label="Back to source" onPress={backToSource} disabled={!src || !showingResult} />
-      </View>
-      <Text style={styles.state}>
-        {src
-          ? src.width + 'x' + src.height + '  ' + src.megapixels + 'MP  ' +
-            src.rgbaMiB + 'MiB RGBA  ' + (covered ? 'covered' : 'uncovered') +
-            (showingResult ? '  — showing RESULT, box hidden' : '  — showing source')
-          : 'no image'}
-        {staleLauncher ? '  — picker stale, will recover on use' : ''}
-      </Text>
+      {/* The way in to the measurement harness, and the only thing on this
+          screen that is not for a person using the app. A long press rather
+          than a control, because a visible button would be the twelfth thing
+          this screen used to have and the first thing to make it look like a
+          tool again. Documented in the README. */}
+      <Pressable onLongPress={() => setDevOpen(true)} delayLongPress={800} style={styles.captionWrap}>
+        <Text style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}>
+          {caption}
+        </Text>
+      </Pressable>
 
-      <ScrollView style={styles.logWrap}>
-        {log.map((entry, i) => (
-          <Text key={i} selectable style={styles.logLine}>
-            {entry.label + '  ' + JSON.stringify(entry.payload, null, 1)}
-          </Text>
-        ))}
-      </ScrollView>
+      <View style={styles.bar}>
+        {!src ? (
+          <Action label={COPY.choose} palette={palette} primary wide onPress={pick} />
+        ) : showingResult ? (
+          <>
+            <Action label={COPY.startOver} palette={palette} onPress={backToSource} />
+            <Action label={COPY.share} palette={palette} primary onPress={share} disabled={!cardPath} />
+          </>
+        ) : (
+          <>
+            <Action label={COPY.startOver} palette={palette} onPress={pick} />
+            <Action
+              label={COPY.cover}
+              palette={palette}
+              selected={useCover}
+              onPress={() => setUseCover((v) => !v)}
+            />
+            <Action
+              label={COPY.makeCard}
+              palette={palette}
+              primary
+              disabled={busy}
+              onPress={() => render(useCover)}
+            />
+          </>
+        )}
+      </View>
+
+      {devOpen ? (
+        <DevPanel
+          palette={palette}
+          log={log}
+          src={src}
+          covered={covered}
+          showingResult={showingResult}
+          onMeasureCheap={measureCheap}
+          onStress={stress}
+          onCompose={compose}
+          onRender={render}
+          onBackToSource={backToSource}
+          onClose={() => setDevOpen(false)}
+          title={COPY.devTitle}
+          hint={COPY.devHint}
+          closeLabel={COPY.close}
+        />
+      ) : null}
     </GestureHandlerRootView>
   );
 }
 
-function Btn({ label, onPress, disabled }) {
+/**
+ * One control. `primary` is the Signal-filled island; everything else is a
+ * surface pill with a hairline. `selected` is the Cover toggle's on state,
+ * which is shown by the border rather than by colour alone.
+ */
+function Action({ label, onPress, disabled, primary, selected, wide, palette }) {
+  const bg = primary ? palette.signal : palette.surface;
+  const fg = primary ? palette.onSignal : palette.text;
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      style={[styles.btn, disabled && styles.btnOff]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: Boolean(disabled), selected: Boolean(selected) }}
+      style={[
+        styles.action,
+        wide && styles.actionWide,
+        {
+          backgroundColor: bg,
+          borderColor: selected ? palette.signal : palette.hairline,
+          borderWidth: selected ? 2 : StyleSheet.hairlineWidth,
+        },
+        disabled && styles.actionOff,
+      ]}
     >
-      <Text style={styles.btnText}>{label}</Text>
+      <Text style={[styles.actionText, { color: fg }]}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: INK, paddingTop: 44 },
-  // Signal-dark, which clears 4.5:1 on Ink. The plain Signal token does not —
-  // 2.75:1 — and this is the one piece of chrome in the harness that a person
-  // other than the author is meant to read.
-  updateBar: { backgroundColor: '#1E2228', borderColor: '#7C9AE0', borderWidth: 1, borderRadius: 10, margin: 10, padding: 12 },
-  updateText: { color: '#F6F4EF', fontSize: 15, fontWeight: '600' },
-  updateNotes: { color: '#949BA2', fontSize: 13, marginTop: 4 },
-  updateRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  canvasWrap: { backgroundColor: '#000' },
-  hint: { color: '#949BA2', textAlign: 'center', marginTop: 180 },
+  root: { flex: 1, paddingTop: SPACE.xxl + SPACE.md },
+  update: {
+    borderWidth: 1,
+    borderRadius: RADIUS.md,
+    marginHorizontal: SPACE.md,
+    marginBottom: SPACE.sm,
+    padding: SPACE.md,
+  },
+  updateTitle: { ...TYPE.label },
+  updateNotes: { ...TYPE.caption, marginTop: SPACE.xs },
+  updateRow: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.md },
+
+  stage: { flex: 1, marginHorizontal: SPACE.md, borderRadius: RADIUS.md, overflow: 'hidden' },
+  empty: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl },
+  emptyText: { ...TYPE.body, textAlign: 'center' },
+
   // White core plus a dark outline, because a coloured handle over arbitrary
-  // screenshot pixels can be invisible — the same reason the real app uses
-  // brackets instead of a Signal-coloured rectangle.
+  // screenshot pixels can be invisible. No pair of theme tokens can express
+  // that requirement, which is why it is not one.
   box: {
     position: 'absolute',
     borderWidth: 2,
@@ -628,18 +767,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.6)',
   },
-  row: { flexDirection: 'row', gap: 8, padding: 8 },
-  btn: { flex: 1, backgroundColor: '#1E2228', paddingVertical: 12, borderRadius: 8 },
-  btnOff: { opacity: 0.4 },
-  btnText: { color: '#F6F4EF', textAlign: 'center', fontSize: 13 },
-  state: { color: '#949BA2', fontSize: 11, paddingHorizontal: 10 },
-  logWrap: { flex: 1, margin: 8, backgroundColor: '#0E1013', borderRadius: 8 },
-  logLine: {
-    color: '#949BA2',
-    fontFamily: 'monospace',
-    fontSize: 10,
-    padding: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.10)',
+
+  captionWrap: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.lg },
+  caption: { ...TYPE.caption, textAlign: 'center' },
+
+  bar: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.xl },
+  action: {
+    flex: 1,
+    minHeight: TOUCH + 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: RADIUS.pill,
+    paddingHorizontal: SPACE.lg,
   },
+  actionWide: { flex: 1 },
+  actionOff: { opacity: 0.4 },
+  actionText: { ...TYPE.label },
 });
