@@ -36,9 +36,9 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/pixels.js` | All the pixel math. Ring flatness, modal background, row ink profile, status-bar cut and shape test, four-edge card background, colour round-trip delta. No Skia — none of it needs Skia to be correct |
 | `src/sizing.js` | Output size: width-bounded, never upscaling, no long-edge cap, encode ceiling |
 | `src/read.js` | One clamped sub-rect read, shared by the pipeline and the measurement harness. Was two copies returning the same values under different field names — `{width, height}` in one, `{w, h}` in the other. Pure: the colour constants arrive as an argument, so it loads in node and has a test |
-| `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device three times**, most recently byte-identically — but that was before the `readRect` merge, so the byte-identical claim is owed a fourth run and does not currently hold; see `spike/results/phase1-pipeline.md` |
+| `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
-| `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, which the published Q1/Q2/Q4 figures predate |
+| `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, and Q1/Q2/Q3/Q4 were all re-measured after that merge and reproduce exactly |
 | `App.js` | The spike screen: one button per Phase 0 question, plus two that run the Phase 1 pipeline and draw the written card back off disk |
 | `tools/png.mjs` | PNG decoder built on node's `zlib`, no dependency |
 | `tools/probe.mjs` | Answers Q1, Q3 and the card background from a PNG on disk |
