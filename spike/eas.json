@@ -1,21 +1,7 @@
 {
+  "//": "Twitwa does not build on EAS. Release APKs are built locally with gradlew and signed by the key described in README, 'Signing the release'. A build profile here would be a SECOND signing source of truth: an EAS build generates and uses its own keystore, and an APK signed by a different key cannot be installed over one signed by ours - Android refuses it, and the recipient sees only 'App not installed'. So there are deliberately no build profiles. 'eas build' will fail with a missing-profile error, which is the intended outcome: read README instead of adding a profile here.",
   "cli": {
     "version": ">= 12.0.0",
-    "appVersionSource": "remote"
-  },
-  "build": {
-    "development": {
-      "developmentClient": true,
-      "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      }
-    },
-    "preview": {
-      "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      }
-    }
+    "appVersionSource": "local"
   }
 }

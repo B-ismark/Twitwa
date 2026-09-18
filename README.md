@@ -347,7 +347,7 @@ originals lived in a session-scoped temp directory — a gate whose fixtures are
 is not a gate:
 
 ```
-python -c "import tarfile;tarfile.open('fixtures/og-pages.tar.gz').extractall('fixtures/pages')"
+python -c "import tarfile;tarfile.open('fixtures/og-pages.tar.gz').extractall('fixtures/pages', filter='data')"   # filter= needs Python 3.12+
 python og.py fixtures/pages/*.html       # expect exit 0 across 8 pages
 ```
 
@@ -461,6 +461,15 @@ Set-but-wrong is handled differently from unset, on purpose: if the variable
 points at a file that is not there, Gradle raises a `GradleException` instead of
 falling back.
 
+**`spike/eas.json` deliberately has no build profiles.** It used to carry a
+`preview` profile, which was a second signing source of truth: `eas build`
+generates and uses its own keystore, so an APK built that way carries a
+different signature, and Android refuses to install it over one signed by the
+key above — the recipient sees only "App not installed", with no reason given.
+Nothing here builds on EAS. With the profiles gone, `eas build` fails on a
+missing profile, which is the intended outcome. The file is kept rather than
+deleted so the reason survives where someone would go looking for it.
+
 Two more things a review established about this path, both counter-intuitive:
 
 - **`expo prebuild` writes the native template BEFORE it runs plugins.** So if
@@ -470,8 +479,11 @@ Two more things a review established about this path, both counter-intuitive:
   also prepends a `throw new GradleException(...)` to the generated
   `build.gradle` on failure, so the leftover cannot be built. Failing closed
   beats failing loudly.
-- **The APK was 118.8 MB**, and 58.5 MB of that was `x86` / `x86_64` native
-  libraries that no phone can use. **Fixed 2026-09-18**: it is 31.3 MB. See
+- **The APK was 124,548,439 bytes**, and 61,374,008 of that was `x86` /
+  `x86_64` native libraries that no phone can use. **Fixed 2026-09-18**: it is
+  32,886,141 bytes. (Byte counts throughout, not MB — an earlier version of
+  this bullet quoted MiB while the section below quoted bytes, so the same file
+  appeared in this file as both 31.3 and 32.9.) See
   "Making the APK small enough to send" above for the measurements. Note that
   restricting the ABI list is the right lever and ABI *splits* are the wrong one
   — React Native disables the ABI filter when splits are enabled.
