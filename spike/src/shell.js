@@ -1,0 +1,261 @@
+// Phase 4.5: the editor's state machine, with no React in it.
+//
+// WHY THIS IS NOT IN App.js. The thing being deleted is `showingResult` — a
+// boolean that decided which of two previews was on the canvas and therefore
+// what the Cover box meant. It was one `useState` among fourteen, and the bug
+// it caused (a box drawn over one image, applied to another) was invisible in
+// every code review because the rule lived in a comment beside the flag rather
+// than in anything that could be run.
+//
+// So the rules are a module. A tool session, what it owns, what Cancel and
+// Reset each put back, and which image the canvas is showing are all pure
+// functions of a plain object, and `shell.test.mjs` breaks each of them on
+// purpose. The view reads the answers and draws them.
+//
+// THE THREE TOOLS, and the one property that separates them. Crop and Cover
+// take the bar over and return with Done, because both are direct manipulation
+// of the picture and the user needs the raw screenshot under their thumb, not
+// a padded card. Style does not, because every Style control is already its own
+// preview: the card is live, so moving the padding IS the apply step. That is
+// the whole reason `takeover` and `owns` are one table below rather than two
+// lists in two `if`s.
+
+import { PADDING } from './sizing.js';
+import { DEFAULT_RADIUS, MAX_RADIUS } from './compose.js';
+
+/**
+ * The tool table. `owns` is the set of state fields a tool session can change,
+ * and it is what a snapshot copies and what Cancel puts back.
+ *
+ * Deriving the snapshot from `owns` rather than naming fields at each call site
+ * is the fix for the defect this module was written after: a Cancel that
+ * restores three of the four things a tool changed is a Cancel that silently
+ * keeps an edit, and it reads as correct at every line.
+ *
+ * Style owns nothing, which is not an oversight — it is the statement that
+ * Style needs no apply, written where it can be checked. `shell.test.mjs`
+ * asserts `takeover === (owns.length > 0)` for every tool, so the two halves of
+ * that claim cannot drift apart.
+ */
+export const TOOL = {
+  crop: { takeover: true, owns: ['crop'] },
+  cover: { takeover: true, owns: ['masks'] },
+  style: { takeover: false, owns: [] },
+};
+
+export const TOOLS = Object.keys(TOOL);
+
+/**
+ * The background choices in the Style strip, in the order they are shown.
+ *
+ * Match is first and is the default because it is the product: the card's
+ * frame is sampled from the screenshot's own edges, and Paper and Ink are what
+ * you reach for when that sample disagrees with itself. Ordering them the
+ * other way round would present the fallback as the normal case.
+ */
+export const BACKGROUNDS = ['match', 'paper', 'ink'];
+
+/**
+ * How near a stop a dragged padding has to land before it snaps onto it
+ * exactly, as a fraction of the crop width.
+ *
+ * Not decoration. The three stops are chips that light up when the padding IS
+ * that stop, and a drag that lands on 0.0601 leaves Standard dark while looking
+ * identical — so the control reports "custom" for a value nobody could
+ * distinguish from the preset. 0.004 is about a third of the gap between
+ * adjacent stops at the narrow end, so it snaps without being able to reach
+ * past the neighbour.
+ */
+export const SNAP = 0.004;
+
+const STOPS = Object.entries(PADDING)
+  .map(([key, value]) => ({ key, value }))
+  .sort((a, b) => a.value - b.value);
+
+/** The padding drag runs between the outermost named stops, not beyond them. */
+export const PAD_MIN = STOPS[0].value;
+export const PAD_MAX = STOPS[STOPS.length - 1].value;
+
+/** The named stops, smallest first. Derived from `PADDING`, never retyped. */
+export function padStops() {
+  return STOPS.map((s) => ({ ...s }));
+}
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+// Plain data only — crop rects, mask boxes, numbers and strings. JSON rather
+// than structuredClone because this runs in Hermes, and rather than a spread
+// because `masks` is an array of objects: a shallow copy shares every box with
+// the live state, so Cancel would restore a list whose contents had already
+// been dragged. That is the exact shape of bug this module exists to prevent,
+// and `BREAK=snapshot_shallow` is it.
+const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+/**
+ * The editor's state for one screenshot.
+ *
+ * @param proposed  the auto-proposed crop in source pixels, which is both the
+ *                  starting crop and what Reset goes back to. The editor opens
+ *                  on a finished card, so there is no "no crop yet" state.
+ */
+export function editorState(proposed) {
+  return {
+    tool: null,
+    proposed: copy(proposed),
+    crop: copy(proposed),
+    masks: [],
+    padding: PADDING.standard,
+    radius: DEFAULT_RADIUS,
+    background: BACKGROUNDS[0],
+    // The open tool's owned fields as they were when it opened. Null whenever
+    // no takeover tool is open, which is what makes "Cancel with nothing to
+    // cancel" unrepresentable rather than merely unhandled.
+    session: null,
+  };
+}
+
+/** What Reset puts back, per tool. The base value, not the open-time value. */
+const RESET_TO = {
+  crop: (state) => ({ crop: copy(state.proposed) }),
+  cover: () => ({ masks: [] }),
+  style: () => ({}),
+};
+
+function snapshot(state, tool) {
+  const out = {};
+  for (const field of TOOL[tool].owns) out[field] = copy(state[field]);
+  return out;
+}
+
+/**
+ * Open a tool.
+ *
+ * Opening one takeover tool while another is open throws rather than closing it
+ * implicitly. It is unreachable through the UI — a takeover replaces the bar
+ * the other tools live on — so reaching it means the bar and this module
+ * disagree about what is on screen, and guessing which the user meant is how
+ * an edit gets silently dropped. Style is not a takeover, so switching away
+ * from it is ordinary and discards nothing.
+ */
+export function openTool(state, tool) {
+  if (!TOOL[tool]) throw new Error(`shell: no such tool: ${String(tool)}`);
+  if (state.tool && TOOL[state.tool].takeover) {
+    throw new Error(`shell: ${state.tool} is open; finish it before opening ${tool}`);
+  }
+  if (state.tool === tool) return state;
+  return {
+    ...state,
+    tool,
+    session: TOOL[tool].takeover ? snapshot(state, tool) : null,
+  };
+}
+
+/** Close the open tool, keeping its edits. The Done half of the triad. */
+export function doneTool(state) {
+  if (!state.tool) return state;
+  return { ...state, tool: null, session: null };
+}
+
+/**
+ * Close the open tool, putting back what it changed. The Cancel half.
+ *
+ * On Style this is Done, because Style has no session to undo. That is a
+ * consequence of the table rather than a special case written here.
+ */
+export function cancelTool(state) {
+  if (!state.tool) return state;
+  return { ...state, ...(state.session || {}), tool: null, session: null };
+}
+
+/**
+ * Put the open tool's values back to their base — the proposed crop, or no
+ * masks — and stay in the tool.
+ *
+ * Distinct from Cancel on purpose, and the distinction is the reason both are
+ * in the triad: Cancel undoes this session, Reset undoes every session. A crop
+ * nudged, applied, and reopened is returned to the whole proposed rect by Reset
+ * and to the nudged rect by Cancel.
+ */
+export function resetTool(state) {
+  if (!state.tool) return state;
+  return { ...state, ...RESET_TO[state.tool](state) };
+}
+
+/** Is there anything for Reset to do? Drives whether the control is live. */
+export function canReset(state) {
+  if (!state.tool) return false;
+  const base = RESET_TO[state.tool](state);
+  for (const [field, value] of Object.entries(base)) {
+    if (JSON.stringify(state[field]) !== JSON.stringify(value)) return true;
+  }
+  return false;
+}
+
+/**
+ * Which image the canvas is drawing: the composed card, or the raw screenshot.
+ *
+ * This replaces `showingResult`, and it is a function rather than a flag for
+ * one reason: a flag has to be set correctly at every transition, and there
+ * were six. Derived from the open tool, it cannot be stale.
+ */
+export function canvasShows(state) {
+  return state.tool && TOOL[state.tool].takeover ? 'screenshot' : 'card';
+}
+
+/** 'main' | 'takeover' | 'strip' — which bottom bar is on screen. */
+export function barMode(state) {
+  if (!state.tool) return 'main';
+  return TOOL[state.tool].takeover ? 'takeover' : 'strip';
+}
+
+/**
+ * Set the padding from a drag, snapping onto a named stop when it lands near
+ * one and clamping to the range the stops describe.
+ *
+ * @returns {{padding: number, stop: string|null}} `stop` is the key when the
+ * value IS a stop, so the chip row lights from the same call that moved the
+ * slider rather than from a second comparison somewhere else.
+ */
+export function setPadding(frac) {
+  if (!Number.isFinite(frac)) throw new Error(`shell: padding is not a number: ${String(frac)}`);
+  let v = clamp(frac, PAD_MIN, PAD_MAX);
+  for (const s of STOPS) {
+    if (Math.abs(v - s.value) <= SNAP) {
+      v = s.value;
+      break;
+    }
+  }
+  const hit = STOPS.find((s) => s.value === v);
+  return { padding: v, stop: hit ? hit.key : null };
+}
+
+/**
+ * Set the corner radius from a slider, clamped to what `compose.js` will
+ * accept.
+ *
+ * Clamped here as well as there, and that is not redundant: `composition()`
+ * clamps so a fast thumb cannot produce a card with a 40% radius, and this
+ * clamps so the slider's own thumb does not sit somewhere the card is not.
+ * Without this the control and the card disagree above MAX_RADIUS, which reads
+ * as the slider being broken at the top of its travel.
+ */
+export function setRadius(frac) {
+  if (!Number.isFinite(frac)) throw new Error(`shell: radius is not a number: ${String(frac)}`);
+  return clamp(frac, 0, MAX_RADIUS);
+}
+
+/**
+ * Set the background, refusing a name the renderer does not know.
+ *
+ * Checked rather than trusted because the failure is silent at both ends: an
+ * unknown name leaves no chip selected and reaches `renderCard`, which has no
+ * branch for it and falls through to whatever its default is. The card then
+ * has a background nobody chose and the strip shows nothing selected, which
+ * reads as the control being broken rather than as the value being wrong.
+ */
+export function setBackground(name) {
+  if (!BACKGROUNDS.includes(name)) {
+    throw new Error(`shell: no such background: ${String(name)}. Known: ${BACKGROUNDS.join(', ')}`);
+  }
+  return name;
+}
