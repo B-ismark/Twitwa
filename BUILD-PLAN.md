@@ -254,6 +254,14 @@ and the exact steps that would close it.
 - Status bar pre-trimmed, shown as an excluded band that can be dragged back in
 - Corner brackets per the aesthetic notes
 
+**Started 2026-09-18: the arithmetic exists, the surface does not.**
+`spike/src/crop.js` holds the geometry -- contain-fit projection, viewport-to-image
+conversion, the nine handles, the minimum clamp and hit testing -- as a pure module
+with 78 checks and 9 mutations. Everything in it is in image pixels, per the
+constraint below. What is left is the part that needs the phone: the
+gesture-handler/reanimated surface, the corner brackets, the excluded status-bar
+band, and the frame rate.
+
 **Verification.** 60fps on the slowest device available, not on the fastest. A crop
 surface that stutters is the one performance failure a user cannot ignore.
 

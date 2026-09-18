@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **674 of the 686 checks run in a clone**, and the 12 that cannot say so
+true: **752 of the 764 checks run in a clone**, and the 12 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -126,14 +126,14 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
-those carry 422 checks and 71 mutations between them while the renderer carries
-none (**686 checks and 123 mutations** counting the two PNG tools, both config
-plugins, the update module and the four rule-checking gates). Three of them are
+those carry 379 checks and 65 mutations between them while the renderer carries
+none (**764 checks and 131 mutations** counting the two PNG tools, both config
+plugins, the update module and the four rule-checking gates). Four of them are
 not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, and `update.js`
-decides whether a newer APK exists.
+decides whether a newer APK exists, and `crop.js` is Phase 2 gesture arithmetic.
 
-**A clone runs 674 of those 686 and reports 12 skipped**, which is the number to
+**A clone runs 752 of those 764 and reports 12 skipped**, which is the number to
 trust, because it is the artifact anyone else gets. The skips are in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
 published, and in the two plugin suites, which compare against the generated
@@ -270,9 +270,10 @@ cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
+cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 52 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 83 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 53 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 94 exports + 7 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
@@ -315,13 +316,14 @@ for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
   done
 done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
-         src/plan.test.mjs src/sizing.test.mjs tools/chunks.test.mjs \
+         src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
+         tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 123 mutations
+done                                     # silence is the pass; 131 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
