@@ -1,6 +1,7 @@
 {
-  "versionCode": 1,
-  "versionName": "1.0.0",
-  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.0/twitwa-1.0.0.apk",
-  "notes": "First build handed out by hand. One APK for arm64-v8a and armeabi-v7a."
+  "versionCode": 2,
+  "versionName": "1.0.1",
+  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.1/twitwa-1.0.1.apk",
+  "sha256": "13c696146b1e6101f88cdcf37df96988d6e49f2dfdf5192c3033c9919595d122",
+  "notes": "Two fixes that only ever went wrong in a release build: the daily update check was running on every single launch instead of once a day, and the photo picker's repair said it was restarting the app and then did not. Installs over 1.0.0."
 }
