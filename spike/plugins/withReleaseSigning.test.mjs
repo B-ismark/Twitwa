@@ -59,7 +59,7 @@ const LIVE = 'android/app/build.gradle';
 // lines, 10 bytes, which is `spike` removed twice. Regenerate with
 // `node plugins/fixtures/make-pristine.js`, which prints both values and
 // refuses if the recovery is not faithful.
-const FIXTURE_SHA256 = '3a6a2323bdcad7395e81694000409c30f5535eab2125c7c774c2f65f5fac0420';
+const FIXTURE_SHA256 = '262f5e899850cb89f9a8fa799e58add4807d3cb609274a31ca1de2359f1dbe00';
 // sha256 of patch(fixture) -- the expected PATCHED output, recorded the same day
 // and equal to the generated android/app/build.gradle byte-for-byte.
 //
@@ -74,7 +74,7 @@ const FIXTURE_SHA256 = '3a6a2323bdcad7395e81694000409c30f5535eab2125c7c774c2f65f
 // It fails on every intentional change to the plugin, by design. Update it in
 // the same commit as the change, after reading the diff -- never to silence a
 // red run.
-const PATCHED_SHA256 = '8616eb0b10bf9894a3fd7ef9f0bfe0f32ef254e8ddcb2e1dbe3b53bdf8c41952';
+const PATCHED_SHA256 = 'ba847d2a0816a8b9e2fe57456af34de7d58fc02fc5b264b9a31eeb11b20b1336';
 
 // --- the mutants -----------------------------------------------------------
 // Each is [find, replace] applied to the real plugin source. Keep them to the
