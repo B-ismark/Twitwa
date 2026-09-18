@@ -20,7 +20,7 @@
 // the whole reason `takeover` and `owns` are one table below rather than two
 // lists in two `if`s.
 
-import { PADDING } from './sizing.js';
+import { PADDING, padPixels } from './sizing.js';
 import { DEFAULT_RADIUS, MAX_RADIUS } from './compose.js';
 
 /**
@@ -56,17 +56,31 @@ export const TOOLS = Object.keys(TOOL);
 export const BACKGROUNDS = ['match', 'paper', 'ink'];
 
 /**
- * How near a stop a dragged padding has to land before it snaps onto it
- * exactly, as a fraction of the crop width.
+ * The stops a dragged padding snaps onto, and WHY THE BAND IS NOT A CONSTANT.
  *
- * Not decoration. The three stops are chips that light up when the padding IS
- * that stop, and a drag that lands on 0.0601 leaves Standard dark while looking
- * identical — so the control reports "custom" for a value nobody could
- * distinguish from the preset. 0.004 is about a third of the gap between
- * adjacent stops at the narrow end, so it snaps without being able to reach
- * past the neighbour.
+ * The chips light when the padding IS a stop, and a drag that lands on 0.0601
+ * would otherwise leave Standard dark while drawing a card nobody could tell
+ * from Standard. So a drag near a stop has to be pulled onto it.
+ *
+ * This used to be `SNAP = 0.004`, a hand-picked third of the gap between
+ * adjacent stops. On the 0.03–0.10 range that band is 11% of the whole
+ * track, and on 2026-09-18 it was measured on the device: tapping the slider
+ * at x = 590, 640 and 690 left the thumb at exactly the same place, so a
+ * hundred pixels of finger travel moved nothing and the next fifty jumped it
+ * 111px. That is the "the transition between the three stops is a bit janky"
+ * the owner reported, and it was a dead zone rather than a dropped frame.
+ *
+ * The band is now DERIVED: a dragged value snaps onto a stop when it rounds to
+ * the same padding in source pixels, which is to say when it draws the same
+ * card. `padPixels` in src/sizing.js is that rounding and is shared with
+ * `cardSize`, so the two cannot disagree. The consequence is the property that
+ * matters to a thumb: the pause at a stop is exactly as long as the pause
+ * between any two adjacent whole pixels of padding — about 17px of track on
+ * a 1080-wide crop, under the touch slop — rather than eight times longer.
+ *
+ * This is why `setPadding` needs the crop width. Passing it is not optional:
+ * a default would silently restore a hand-picked band.
  */
-export const SNAP = 0.004;
 
 const STOPS = Object.entries(PADDING)
   .map(([key, value]) => ({ key, value }))
@@ -216,14 +230,18 @@ export function barMode(state) {
  * value IS a stop, so the chip row lights from the same call that moved the
  * slider rather than from a second comparison somewhere else.
  */
-export function setPadding(frac) {
+export function setPadding(frac, cropW) {
   if (!Number.isFinite(frac)) throw new Error(`shell: padding is not a number: ${String(frac)}`);
+  if (!(cropW > 0)) throw new Error(`shell: setPadding needs the crop width, got ${String(cropW)}`);
   let v = clamp(frac, PAD_MIN, PAD_MAX);
-  for (const s of STOPS) {
-    if (Math.abs(v - s.value) <= SNAP) {
-      v = s.value;
-      break;
-    }
+  // The NEAREST stop that draws the same card, not the first one found. On a
+  // crop narrow enough for MIN_PAD to swallow two stops they are genuinely one
+  // card, and "whichever is earlier in the table" would then be an arbitrary
+  // answer to a question that has a right one.
+  const px = padPixels(cropW, v);
+  const same = STOPS.filter((s) => padPixels(cropW, s.value) === px);
+  if (same.length) {
+    v = same.reduce((a, b) => (Math.abs(b.value - v) < Math.abs(a.value - v) ? b : a)).value;
   }
   const hit = STOPS.find((s) => s.value === v);
   return { padding: v, stop: hit ? hit.key : null };

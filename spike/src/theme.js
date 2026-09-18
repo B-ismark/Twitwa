@@ -89,8 +89,22 @@ export const TYPE = {
   mono: { fontSize: 10, fontFamily: 'monospace' },
 };
 
-/** Minimum touch target, in points. Below this a control is decoration. */
-export const TOUCH = 44;
+/**
+ * Minimum touch target, in points. Below this a control is decoration.
+ *
+ * 48, not 44. 44 is Apple's floor and it is what this file shipped with;
+ * Material's is 48dp and this is an Android-first app whose only tested device
+ * is an Android phone. Raised 2026-09-18 with the rest of Phase 2.
+ *
+ * `src/crop.js` reads this rather than keeping its own copy. It had one --
+ * also called TOUCH, also 44, with a comment saying the same thing -- and two
+ * constants that mean "the platform minimum" is the drift this table exists to
+ * prevent: raising one would have grown every control in the chrome and left
+ * the crop handles at the old size, which nothing would have reported. crop.js
+ * can still import it because this file has no react-native import, which is
+ * the same property contrast.py depends on.
+ */
+export const TOUCH = 48;
 
 /**
  * The palette for a scheme name, defaulting to dark.

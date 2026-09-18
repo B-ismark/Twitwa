@@ -58,6 +58,8 @@
 // fine, the population was empty. Defaults are resolved in the body instead,
 // and `BREAK=default_captures` is the guard.
 
+import { TOUCH } from './theme.js';
+
 /** The nine things a finger can grab. Eight edges and corners, plus the body. */
 export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w', 'move'];
 
@@ -73,8 +75,12 @@ export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w', 'move'];
  */
 export const MIN_CROP = 120;
 
-/** Handle hit target, in screen points. 44 is the platform floor for a touch. */
-export const TOUCH = 44;
+/**
+ * Handle hit target, in screen points, re-exported from the theme so this
+ * module's public surface is unchanged and there is still exactly one number.
+ * See src/theme.js for why it is 48 and why it does not live here.
+ */
+export { TOUCH };
 
 const clamp = (v, lo, hi) => {
   'worklet';

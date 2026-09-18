@@ -39,8 +39,28 @@ import { cardSize } from './sizing.js';
  */
 export const MAX_RADIUS = 0.04;
 
-/** Enough to read as a card, little enough to not read as a decision. */
-export const DEFAULT_RADIUS = 0.015;
+/**
+ * Enough to read as a card, little enough to not read as a decision.
+ *
+ * That criterion is the original one and it is right; 0.015 did not meet it.
+ * On 2026-09-18 the same corner was captured off the device at 0, 0.010,
+ * 0.015, 0.020, 0.030 and 0.040 with a Paper frame behind a black screenshot,
+ * which is the contrast that shows an arc at all. Read across:
+ *
+ *   0       square, and honest about it
+ *   0.010   indistinguishable from anti-aliasing
+ *   0.015   almost-square; visibly rounded only once pointed out
+ *   0.020   the first that reads as a deliberate corner
+ *   0.030   comfortably rounded
+ *   0.040   a tile -- which is why MAX_RADIUS is there and not higher
+ *
+ * 0.015 sat in the band that costs the square corner's honesty and buys none
+ * of the card, so the default is the smallest value that clears the bar rather
+ * than the middle of the range. The strip itself is not in the repo: it is a
+ * crop of a fixture screenshot, and those carry real posts by identifiable
+ * people.
+ */
+export const DEFAULT_RADIUS = 0.02;
 
 /**
  * Below this width a projection is refused rather than rounded.

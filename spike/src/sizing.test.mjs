@@ -1,6 +1,6 @@
 // Tests for src/sizing.js.
 //
-//   for b in longedge no_upscale_guard no_ceiling asym maxpx_binds \
+//   for b in longedge no_upscale_guard no_ceiling asym maxpx_binds pad_divorced \
 //            no_dest_repair repair_always repair_asym; do
 //     BREAK=$b node src/sizing.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
@@ -13,7 +13,13 @@ import * as real from './sizing.js';
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
 
-if (BREAK === 'longedge') {
+if (BREAK === 'pad_divorced') {
+  // cardSize rounds the padding its own way again -- one `floor` instead of
+  // one `round`. At most one pixel out, invisible on a card, and it silently
+  // breaks the padding slider's snap, which is defined as "the values that
+  // draw the same card".
+  F.padPixels = (cropW, pct) => Math.max(real.MIN_PAD, Math.floor(cropW * pct));
+} else if (BREAK === 'longedge') {
   // The removed rule, restored.
   F.cardSize = (crop, stop) => {
     const r = real.cardSize(crop, stop);
@@ -148,8 +154,39 @@ console.log('never upscale');
 }
 {
   const tiny = F.cardSize({ w: 140, h: 90 }, 'snug');
-  check('tiny crop gets the minimum padding, not 3%', tiny.pad === 12, tiny.pad);
+  check('tiny crop gets the minimum padding, not 3%', tiny.pad === real.MIN_PAD, tiny.pad);
   check('tiny crop is not upscaled', tiny.scale === 1, tiny.scale);
+}
+
+// `padPixels` is the shared rounding. src/shell.js reads it to decide when a
+// dragged padding is the same card as a named stop, so a `cardSize` that
+// stopped calling it would move the card out from under the slider's snap with
+// nothing failing. `pad_divorced` is that.
+console.log('padPixels is the rounding cardSize actually uses');
+{
+  check('it is the max of the floor and the rounded fraction',
+    F.padPixels(1080, 0.06) === 65 && F.padPixels(140, 0.03) === real.MIN_PAD,
+    `${F.padPixels(1080, 0.06)} ${F.padPixels(140, 0.03)}`);
+
+  // Walked, not spot-checked: the two must agree at every width and stop, and
+  // the failure this guards is a rounding that agrees on the day it is written.
+  let disagree = 0;
+  let first = null;
+  for (const w of [140, 720, 1080, 1170, 1440, 2048]) {
+    for (let pct = 0.01; pct <= 0.2000001; pct += 0.001) {
+      const r = F.cardSize({ w, h: 900 }, pct);
+      // cardSize reports `pad` in OUTPUT pixels; undo its scale to get back to
+      // the source-pixel padding padPixels returns.
+      const want = F.padPixels(w, pct);
+      const got = Math.round(r.pad / r.scale);
+      if (Math.abs(want - got) > 1) {
+        disagree++;
+        if (!first) first = `w=${w} pct=${pct.toFixed(3)} want ${want} got ${got}`;
+      }
+    }
+  }
+  check('and cardSize lays the card out with exactly that padding',
+    disagree === 0, `${disagree} disagreements, first ${first}`);
 }
 
 console.log('the encode ceiling');

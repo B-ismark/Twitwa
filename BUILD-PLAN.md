@@ -371,7 +371,7 @@ a later reader should find the decision rather than the idea.
 | No `aspect` parameter on `dragCrop` or `normalizeCrop` | Blocks the aspect row entirely |
 | No user zoom: `fitView` derives scale from the viewport alone | Six image pixels per screen pixel, so precise trimming is not possible |
 | No reset-to-original | Every surveyed app has one |
-| `TOUCH = 44` | That is the **iOS** floor. Material's minimum touch target is **48dp**, and this is an Android-first app |
+| ~~`TOUCH = 44`~~ | That is the **iOS** floor; Material's is **48dp** and this is an Android-first app. **DONE 2026-09-18**, and the constant moved: `crop.js` and `theme.js` each had one, both 44, both commented as the platform minimum. It lives in `theme.js` now and `crop.js` re-exports it |
 
 ### What this survey did not establish
 
@@ -422,7 +422,7 @@ NEW came out of that survey and were not in the original plan.
 - **NEW: a loupe at the dragged corner.** Six image pixels per screen pixel
   means the alternative is guessing, and the finger covers the target
 - **NEW: a reset-to-original control**, distinct from Start over
-- **NEW: `TOUCH` raised from 44 to 48.** 44 is the iOS floor; Material's is 48dp
+- ~~**NEW: `TOUCH` raised from 44 to 48.** 44 is the iOS floor; Material's is 48dp~~ **DONE 2026-09-18**
 - Status bar pre-trimmed, shown as an excluded band that can be dragged back in,
   and **NEW:** as the visible case of a general auto-propose, which is the one
   place this app can beat a general photo cropper
@@ -439,9 +439,16 @@ constraint below.
 
 **Shipping as of 2026-09-18:** the scrim, the corner brackets, the drag itself
 on the UI thread, Reset distinct from Start over, and the auto-proposed crop
-the editor opens on. **Still to do in this phase:** `TOUCH` 44 -> 48, the
-rule-of-thirds grid on touch, the loupe at the dragged corner, and the
-status-bar band as something that can be dragged back in.
+the editor opens on, and **as of 2026-09-18 `TOUCH` at 48** -- one constant in
+`theme.js`, re-exported by `crop.js`, rather than the two copies of 44 that
+were there. Verified on the phone rather than only in node, because the
+constant now crosses a module boundary into a worklet closure and that is the
+exact shape of the bug recorded below: the crop opened, a corner drag moved the
+card from 2178 to 2237 high, and nothing threw.
+
+**Still to do in this phase:** the rule-of-thirds grid on touch, the loupe at
+the dragged corner, and the status-bar band as something that can be dragged
+back in.
 
 **The owner has now used it, 2026-09-18: "moving the crop is not as smooth as
 I'd expect."** That is the verdict this phase exists to answer, and the cause
@@ -704,9 +711,10 @@ What landed, beyond the list below:
   An earlier draft drew a neutral frame under Match and let the export decide,
   which would have put a preview/export divergence on the DEFAULT setting
 
-**Still Phase 2 and Phase 3.** Crop ships with a scrim and corner brackets and
-real drag handling through `crop.js`; the grid on touch, the loupe and the
-`TOUCH` 44 to 48 change are not done. Cover is still one box per drag with no
+**Still Phase 2 and Phase 3.** Crop ships with a scrim, corner brackets, real
+drag handling through `crop.js` and, as of 2026-09-18, a 48pt touch target.
+The grid on touch and the loupe are not done.
+Cover is still one box per drag with no
 selection and no delete, which the survey says plainly is the wrong shape.
 **Still Phase 5.** Save to Photos and Copy image. The overflow ships with Start
 over and the developer panel rather than with two disabled rows.
@@ -732,6 +740,73 @@ over and the developer panel rather than with two disabled rows.
   permanent in the output, which is the expensive kind
 - Auto-propose the crop from the pure-background bands, which is what makes step
   2 of the user flow true: the editor opens on a finished card
+
+### The Style strip, after the owner used it — 2026-09-18
+
+Two verdicts and two different causes, which is why they are recorded apart.
+
+**"The stop drag isn't very smooth, the transition between the three stops is a
+bit janky."** Measured before anything was changed, by tapping the padding
+slider at five points and reading the thumb's position out of a screenshot:
+
+| tap x | thumb's right edge |
+| ---: | ---: |
+| 540 | 565 |
+| 590 | 654 |
+| 640 | 654 |
+| 690 | 654 |
+| 740 | 765 |
+
+A hundred pixels of finger travel through Standard moved the thumb by nothing,
+and the next fifty jumped it 111. The cause was `SNAP = 0.004` in
+`src/shell.js`: a hand-picked third of the gap between adjacent stops, which on
+the 0.03–0.10 range is **11.4% of the whole track** pinned at each stop.
+
+It is now derived instead. A drag snaps onto a stop when it rounds to the same
+padding in *source pixels* — when it draws the same card — using `padPixels` in
+`src/sizing.js`, which `cardSize` calls for the same rounding, so the control
+and the layout cannot disagree. The still point at a stop is now 1.32% of the
+track, the same as between any two adjacent whole pixels of padding, and under
+the touch slop. Re-measured after: the thumb tracks the finger 1:1 through
+Standard in 25px steps, and the chip still lights (`selected=true` at x=628 and
+632, dark at 400 and 700).
+
+`shell.test.mjs` walks the whole track at 20,000 samples, groups it into runs
+where the thumb does not move, and fails if any stop holds it longer than one
+pixel of padding does. `BREAK=snap_constant` restores the old band and it
+reports "worst stop 0.06 holds 11.43% of the track; one pixel of padding is
+1.32%" — the desktop suite and the device agree to two decimal places.
+`BREAK=pad_divorced` in `sizing.test.mjs` makes `cardSize` round its own way
+again, which is the drift the shared function exists to prevent.
+
+**What this was NOT.** The frame counters barely moved: 2.30% janky before,
+2.18% after, over ~800 frames each. The dead zone was never a dropped frame.
+The Corners slider, which has no snap at all and was not complained about,
+measures *worse* (3.25% and 2.65% over two runs) — so the residual jank is the
+per-frame `setEd` that both sliders share, it is common to both, and it sits
+below what the owner noticed. Getting rid of it means putting `padding` and
+`radius` on the UI thread as shared values and driving the Skia card from
+`useDerivedValue`, which requires worklet-ising `compose.js` and `sizing.js`
+the way `crop.js` was. That is a real piece of work and it is not yet
+justified by a complaint.
+
+**"Not sure about the corner radius."** Delegated by the owner, so it was
+measured rather than argued. The same card corner was captured at six radii
+with a Paper frame behind a black screenshot — the only combination that shows
+an arc at all — and read across: 0 is square and honest, 0.010 is
+indistinguishable from anti-aliasing, 0.015 is visibly rounded only once you
+are told, 0.020 is the first that reads as a deliberate corner, 0.030 is
+comfortable, 0.040 is a tile. `DEFAULT_RADIUS` was **0.015, which sits in the
+band that gives up the square corner's honesty and buys none of the card**, and
+is now **0.02** — the smallest value that meets the criterion its own comment
+already stated. `MAX_RADIUS` stays 0.04; the strip is what says why. The strip
+itself is not in the repo: it is a crop of a fixture screenshot, and those
+carry real posts by identifiable people.
+
+Not re-decided: tying the radius to the padding. It is a tempting single rule
+(`r = pad/2` lands almost exactly on 0.03) and `compose.js` already rejected it
+in writing — widening the padding would fatten the corners, "a thing nobody
+asks for and everybody notices".
 
 **Verification.** The composed card and the exported PNG must be the same
 composition at two scales, because the canvas runs at screen resolution and the

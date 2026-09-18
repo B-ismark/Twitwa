@@ -2,7 +2,8 @@
 //
 //   for b in snapshot_shallow cancel_keeps done_restores reset_to_session \
 //            style_takeover canvas_flag no_snap pad_unclamped bg_unvalidated \
-//            radius_unclamped reopen_allowed canreset_blind stops_typed; do
+//            radius_unclamped reopen_allowed canreset_blind stops_typed \
+//            snap_constant; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -18,8 +19,15 @@
 // padding used by `cardSize` have to be one table, and a hand-typed copy of
 // three numbers is exactly the kind of drift nothing notices until a stop is
 // changed and only the label moves.
+//
+// `snap_constant` is the shipped defect this file did not catch: a snap band
+// picked as a fraction of the GAP BETWEEN STOPS rather than derived from the
+// card. Every assertion here used to be written in units of that constant, so
+// the constant could have been anything at all and they stayed green. It took
+// a device measurement to find. The band is now expressed in track travel and
+// in whole pixels of padding -- units a thumb can feel.
 import * as real from './shell.js';
-import { PADDING } from './sizing.js';
+import { PADDING, padPixels } from './sizing.js';
 import { MAX_RADIUS } from './compose.js';
 
 const BREAK = process.env.BREAK || '';
@@ -76,8 +84,20 @@ if (BREAK === 'snapshot_shallow') {
   };
 } else if (BREAK === 'pad_unclamped') {
   F.setPadding = (frac) => {
-    const hit = real.padStops().find((s) => Math.abs(frac - s.value) <= real.SNAP);
+    const hit = real.padStops().find((s) => Math.abs(frac - s.value) <= 0.004);
     return hit ? { padding: hit.value, stop: hit.key } : { padding: frac, stop: null };
+  };
+} else if (BREAK === 'snap_constant') {
+  // The band as it shipped: a hand-picked 0.004, a third of the gap between
+  // adjacent stops and eight whole pixels of padding on a 1080-wide crop.
+  // Nothing about it is wrong except that the thumb stops dead inside it.
+  F.setPadding = (frac) => {
+    let v = Math.min(real.PAD_MAX, Math.max(real.PAD_MIN, frac));
+    for (const s of real.padStops()) {
+      if (Math.abs(v - s.value) <= 0.004) { v = s.value; break; }
+    }
+    const hit = real.padStops().find((s) => s.value === v);
+    return { padding: v, stop: hit ? hit.key : null };
   };
 } else if (BREAK === 'radius_unclamped') {
   F.setRadius = (frac) => frac;
@@ -274,31 +294,94 @@ console.log('\nthe padding chips and the padding cardSize uses are one table');
 
 console.log('\nthe padding drag snaps, clamps, and says which chip lights');
 {
-  const near = F.setPadding(PADDING.standard + F.SNAP * 0.5);
-  check('a drag landing near Standard lands exactly on it', near.padding === PADDING.standard, String(near.padding));
+  // A real screenshot width, because the snap band is derived from it. 1080 is
+  // the fixture the device runs use.
+  const W = 1080;
+  // One whole pixel of padding, as a fraction. Everything below is stated in
+  // these rather than in a snap constant, and that is the point: a pixel is a
+  // unit the card and the thumb both have, and a snap constant is a unit
+  // neither has. `SNAP` used to be the unit here, which is exactly why a band
+  // eight of these wide passed every assertion in this block.
+  const PX = 1 / W;
+
+  const near = F.setPadding(PADDING.standard + PX * 0.4, W);
+  check('a drag landing under half a pixel off Standard lands exactly on it',
+    near.padding === PADDING.standard, String(near.padding));
   check('and lights the chip', near.stop === 'standard', String(near.stop));
 
-  const between = F.setPadding(0.045);
+  const between = F.setPadding(0.045, W);
   check('a drag between two stops keeps its own value', between.padding === 0.045, String(between.padding));
   check('and lights no chip', between.stop === null, String(between.stop));
 
-  const far = F.setPadding(PADDING.standard + F.SNAP * 3);
-  check('a drag well clear of a stop is not pulled onto it',
+  const far = F.setPadding(PADDING.standard + PX * 1.6, W);
+  check('a drag a pixel and a half clear of a stop is not pulled onto it',
     far.padding !== PADDING.standard, String(far.padding));
 
-  check('below the range clamps up', F.setPadding(-1).padding === F.PAD_MIN, String(F.setPadding(-1).padding));
-  check('above it clamps down', F.setPadding(9).padding === F.PAD_MAX, String(F.setPadding(9).padding));
-  check('a clamped value still lights its chip', F.setPadding(9).stop === 'roomy', String(F.setPadding(9).stop));
+  check('below the range clamps up', F.setPadding(-1, W).padding === F.PAD_MIN, String(F.setPadding(-1, W).padding));
+  check('above it clamps down', F.setPadding(9, W).padding === F.PAD_MAX, String(F.setPadding(9, W).padding));
+  check('a clamped value still lights its chip', F.setPadding(9, W).stop === 'roomy', String(F.setPadding(9, W).stop));
 
-  // The snap must not be able to reach past a neighbour, or the middle chip
-  // would swallow part of the outer one's travel.
-  const gaps = F.padStops().slice(1).map((s, i) => s.value - F.padStops()[i].value);
-  check('the snap is smaller than half the narrowest gap between stops',
-    F.SNAP < Math.min(...gaps) / 2, `${F.SNAP} vs ${Math.min(...gaps) / 2}`);
+  // THE ASSERTION THIS FILE WAS MISSING, and the only one here that would have
+  // caught what the owner felt. Walk the whole track and measure, in track
+  // travel, how far the thumb sits still. A snapped stop is a place the thumb
+  // does not move; the rule is that it may not be a place the thumb sits still
+  // for LONGER than anywhere else -- and since the card's padding is a whole
+  // number of source pixels, everywhere else is one pixel's worth of track.
+  const SAMPLES = 20000;
+  const span = F.PAD_MAX - F.PAD_MIN;
+  const at = (i) => F.setPadding(F.PAD_MIN + (span * i) / SAMPLES, W).padding;
+  const runs = [];
+  let runStart = 0;
+  let prev = at(0);
+  for (let i = 1; i <= SAMPLES; i++) {
+    const v = at(i);
+    if (v !== prev) {
+      runs.push({ value: prev, from: runStart, to: i - 1 });
+      runStart = i;
+      prev = v;
+    }
+  }
+  runs.push({ value: prev, from: runStart, to: SAMPLES });
+  // As a percentage of the track, so the number can be held against a thumb
+  // rather than being one only this file understands.
+  const pct = (r) => ((r.to - r.from + 1) / (SAMPLES + 1)) * 100;
+  const stopValues = new Set(F.padStops().map((st) => st.value));
+  const atStops = runs.filter((r) => stopValues.has(r.value));
+  const onePixel = (PX / span) * 100;
+
+  check('the walk found a still point at every stop', atStops.length === F.padStops().length,
+    `${atStops.length} of ${F.padStops().length}`);
+  const worst = atStops.reduce((a, b) => (pct(b) > pct(a) ? b : a), { from: 0, to: -1, value: null });
+  check('and no stop holds the thumb longer than one pixel of padding does',
+    pct(worst) <= onePixel * 1.5,
+    `worst stop ${worst.value} holds ${pct(worst).toFixed(2)}% of the track; one pixel of padding is ${onePixel.toFixed(2)}%`);
+
+  // And the band is not merely small, it is the RIGHT set: exactly the values
+  // that draw the same card. Any smaller and there is a sliver where the chip
+  // is dark beside a card identical to the preset, which is the fault the snap
+  // exists to prevent.
+  let wrong = 0;
+  let firstWrong = null;
+  for (let i = 0; i <= SAMPLES; i++) {
+    const frac = F.PAD_MIN + (span * i) / SAMPLES;
+    const snapped = F.setPadding(frac, W).padding;
+    for (const st of F.padStops()) {
+      if (padPixels(W, frac) === padPixels(W, st.value) && snapped !== st.value) {
+        wrong++;
+        if (firstWrong === null) firstWrong = frac;
+      }
+    }
+  }
+  check('every value that draws the same card as a stop snaps onto that stop',
+    wrong === 0, `${wrong} values, first ${firstWrong}`);
 
   let threw = false;
-  try { F.setPadding(NaN); } catch (e) { threw = true; }
+  try { F.setPadding(NaN, W); } catch (e) { threw = true; }
   check('a non-number throws rather than producing a NaN card', threw);
+
+  let threwW = false;
+  try { F.setPadding(PADDING.standard); } catch (e) { threwW = true; }
+  check('and a missing crop width throws rather than picking a band for itself', threwW);
 }
 
 console.log('\nthe corner slider cannot leave the card behind');

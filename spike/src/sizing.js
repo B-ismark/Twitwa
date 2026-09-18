@@ -59,7 +59,34 @@ export const PADDING = {
   roomy: 0.10,
 };
 
-const MIN_PAD = 12;
+/**
+ * The smallest padding in SOURCE pixels, whatever fraction was asked for. A
+ * 2% frame on a 300px-wide crop is six pixels, which is a hairline rather than
+ * a frame.
+ */
+export const MIN_PAD = 12;
+
+/**
+ * The padding a fraction comes to, in SOURCE pixels.
+ *
+ * ONE definition, because there are now two readers and they must agree
+ * exactly. `cardSize` uses it to lay the card out; `setPadding` in src/shell.js
+ * uses it to decide whether a dragged value is the same card as a named stop.
+ *
+ * That second reader is why this is a function and not a line inside
+ * `cardSize`. The padding slider used to snap inside a hand-picked band of
+ * 0.004, which on the 0.03-0.10 range is 11% of the track: measured on the
+ * device on 2026-09-18, the thumb sat still through 100px of finger travel at
+ * Standard and then jumped 89px. The band is now exactly the set of fractions
+ * that round to the SAME padding in source pixels -- i.e. that draw the same
+ * card -- so the thumb pauses at a stop for precisely as long as it pauses
+ * anywhere else on the track, and not a pixel longer. Derived from this
+ * rounding it cannot drift away from it; typed as a constant beside it, it
+ * would.
+ */
+export function padPixels(cropW, pct) {
+  return Math.max(MIN_PAD, Math.round(cropW * pct));
+}
 
 /**
  * @param crop   {w, h} in source pixels
@@ -84,7 +111,7 @@ export function cardSize(crop, stop = 'standard') {
   if (!pct) throw new Error(`unknown padding stop: ${String(stop)}`);
   if (!(crop.w > 0) || !(crop.h > 0)) throw new Error(`bad crop: ${crop.w}x${crop.h}`);
 
-  const padSrc = Math.max(MIN_PAD, Math.round(crop.w * pct));
+  const padSrc = padPixels(crop.w, pct);
   const paddedW = crop.w + padSrc * 2;
   const paddedH = crop.h + padSrc * 2;
 

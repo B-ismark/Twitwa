@@ -1243,7 +1243,7 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel }) {
             label={stopLabel[s.key]}
             palette={palette}
             on={ed.padding === s.value}
-            onPress={() => setEd((v) => ({ ...v, padding: setPadding(s.value).padding }))}
+            onPress={() => setEd((v) => ({ ...v, padding: setPadding(s.value, v.crop.w).padding }))}
           />
         ))}
       </View>
@@ -1252,7 +1252,7 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel }) {
         min={PAD_MIN}
         max={PAD_MAX}
         palette={palette}
-        onChange={(v) => setEd((s) => ({ ...s, padding: setPadding(v).padding }))}
+        onChange={(v) => setEd((s) => ({ ...s, padding: setPadding(v, s.crop.w).padding }))}
       />
 
       <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.corners}</Text>

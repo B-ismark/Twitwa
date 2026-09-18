@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1385 of the 1401 checks run in a clone**, and the 16 that cannot say so
+true: **1395 of the 1411 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -145,7 +145,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1401 checks and 200 mutations** counting the two PNG tools, all three
+none (**1411 checks and 203 mutations** counting the two PNG tools, all three
 config plugins, the update module and the six rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -162,19 +162,27 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1385 of those 1401 and reports 16 skipped**, and it runs all 200
+**A clone runs 1395 of those 1411 and reports 16 skipped**, and it runs all 203
 mutations with none surviving. Measured 2026-09-18 from `git write-tree` over
 the staged tree of this commit, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1401 − 1385 = 16, which is the skip count, so the
+That pairing is the check: 1411 − 1395 = 16, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
 right, which is not a reason to have published it. It is the same arithmetic
 that was wrong three times before.
+
+The 203 was itself re-derived rather than incremented, and that caught
+something. The enumerator written for it read only `if (BREAK === 'x')` chains
+and reported **149**, printing a confident `0 mutants` for four suites that
+declare theirs as a `MUTANTS` table and for the two gates that publish a
+`--list-mutants` list. A zero printed for something never counted is the
+failure this file's own rules are about; it now reads all three shapes, and the
+two gates that publish a list are believed over a scan of their source.
 
 One thing the clone cannot see, and it is worth naming here because it went
 wrong: **no gate in this list loads App.js**. `check-imports` reads it, but it
@@ -370,7 +378,7 @@ cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
-cd spike && node src/crop.test.mjs       # 89 checks on the crop-gesture arithmetic
+cd spike && node src/crop.test.mjs       # 91 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
 cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
@@ -431,7 +439,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 200 mutations
+done                                     # silence is the pass; 203 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -752,6 +760,52 @@ Two traps here, and both fail by doing nothing rather than by erroring:
   *only when `splits.abi` is disabled*, and says so in a comment
   (`NdkConfiguratorUtils.kt:58-63`). Enabling splits would have put all four
   ABIs back into the split that got built.
+
+#### What is left, measured 2026-09-18 on a rebuilt release APK
+
+The owner asked whether anything could be stripped -- code or a feature -- to
+make the APK smaller. It was answered by rebuilding and reading the archive
+rather than by reasoning about it, and the answer is **no, not by that route**.
+`app-release.apk` is **32,940,585 bytes**:
+
+| | in the APK | uncompressed | share |
+| --- | ---: | ---: | ---: |
+| `lib/arm64-v8a` | 10,722,649 | 29,149,672 | 32.6% |
+| `lib/armeabi-v7a` | 9,255,669 | 19,929,648 | 28.1% |
+| `classes*.dex` | 7,810,455 | 21,406,228 | 23.7% |
+| `assets/` (the JS bundle is 2,762,388 of it) | 2,765,847 | 2,766,268 | 8.4% |
+| everything else | 1,395,692 | 1,589,572 | 4.2% |
+| `res/` | 829,390 | 1,146,702 | 2.5% |
+
+**Deleting a feature is not a size lever here, and the arithmetic says so.**
+Every line of this app's own JavaScript -- `App.js`, `index.js` and all of
+`src/`, comments included, unminified -- is **239,506 bytes**. The whole
+minified bundle is 2,762,388, so the app's own code is a fraction of a bundle
+that is itself 8.4% of the APK. Deleting *all of it* would not reach half a
+percent of the download. `src/measure.js` and the Q1-Q5 probe blocks in
+`App.js` are a Phase 0 measurement rig that does ship, and Cover is a
+placeholder the owner has already questioned; those are reasons to remove them,
+but size is not one.
+
+The three levers that are real, in order, and none of them is code:
+
+1. **Drop `armeabi-v7a`: 9,255,669 bytes, 28.1%.** Already a written decision --
+   sideloading has no Play filter, so a 32-bit device that cannot install says
+   only "App not installed". It is the owner's call whether anyone being handed
+   this has a 32-bit phone.
+2. **R8, on the 7,810,455-byte dex.** Still off for the reason below.
+3. **Neither of these:** `libzstd-kmp.so` is 276,362 per ABI and nothing here
+   was traced to it, and Fresco's four libraries (`imagepipeline`,
+   `static-webp`, `native-imagetranscoder`, `native-filters`) are ~450,000 per
+   ABI for React Native's `<Image>`, which this app never renders -- it draws
+   through Skia. Both are transitive native dependencies and neither is
+   removable without a Gradle exclusion and a device test. Recorded as
+   unclaimed, not as savings.
+
+One thing that is **not** a problem, checked because it would have been a large
+one: the dev client does not leak into release. `libbarhopper_v3.so`, the ML
+Kit barcode scanner behind expo-dev-launcher's QR reader, is 4,946,720 bytes
+per ABI in the debug APK and **absent from the release APK**.
 
 **R8 is deliberately still off.** Every lever above is packaging: the bytes move,
 the program does not. R8 rewrites and strips bytecode, and the classic React

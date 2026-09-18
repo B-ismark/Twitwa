@@ -22,6 +22,8 @@
 // which one broke and by how much. Neither alone is enough — a sweep that fails
 // tells you nothing about where.
 import { readFileSync } from 'node:fs';
+
+import { TOUCH as THEME_TOUCH } from './theme.js';
 import * as real from './crop.js';
 
 const BREAK = process.env.BREAK || '';
@@ -112,6 +114,7 @@ if (BREAK === 'fit_cover') {
   BREAK === 'not_worklet'
   || BREAK === 'default_captures'
   || BREAK === 'crlf_checkout'
+  || BREAK === 'touch_recopied'
 ) {
   // Handled where it is used, at the foot of the file: it edits the SOURCE
   // text rather than a function, so there is nothing to swap in here.
@@ -399,6 +402,21 @@ console.log("every function on the drag path carries 'worklet'");
   // nothing on a desktop can tell. Lower-case defaults are unaffected —
   // `dx = 0` is a literal, not a reference — so the pattern is deliberately
   // narrow: a SCREAMING_CASE name after an `=` inside a parameter list.
+  // TOUCH lives in src/theme.js and is re-exported here. It used to be
+  // declared in both files, both times as 44, both times with a comment
+  // calling it the platform minimum -- so raising one would have grown every
+  // control in the chrome and left the crop handles where they were, and
+  // nothing would have said so. The import is the fix; this is what stops the
+  // local copy coming back.
+  {
+    let decl = text;
+    if (BREAK === 'touch_recopied') decl += '\nexport const TOUCH = 44;\n';
+    const own = [...decl.matchAll(/^(?:export )?const TOUCH\b/gm)];
+    check('crop.js declares no TOUCH of its own', own.length === 0, `${own.length} declaration(s)`);
+    check('and the TOUCH it re-exports is the theme one',
+      real.TOUCH === THEME_TOUCH, `${real.TOUCH} vs ${THEME_TOUCH}`);
+  }
+
   let params = all.map((f) => f.params).join(' | ');
   if (BREAK === 'default_captures') params = '{ touch = TOUCH } = {}';
   const captured = [...params.matchAll(/=\s*([A-Z][A-Z0-9_]{2,})/g)].map((m) => m[1]);
