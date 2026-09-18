@@ -17,6 +17,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "dev.bismark.twitwaspike",
+      "versionCode": 1,
       "intentFilters": [
         {
           "action": "SEND",
@@ -46,7 +47,8 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-sharing"
+      "expo-sharing",
+      "./plugins/withReleaseSigning"
     ]
   }
 }

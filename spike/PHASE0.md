@@ -60,6 +60,16 @@ during the native build, unprompted.
 | Android | 17, **API 37** | `ro.build.version.release` / `.sdk` |
 | Screen | 1440x3120, density 560 (override 476) | `adb shell wm size` / `wm density` |
 | Serial | not recorded here — this repo is public | `adb devices -l` |
+
+**`keystore.properties` is a second Java properties file with the same
+backslash trap as `android/local.properties`, and it is read by
+`Properties.load()` in the signing plugin.** `storeFile=D:\CODES\...` has its
+single backslashes consumed as escapes, `file()` then gets a garbage path, and
+the failure surfaces at `assembleRelease` rather than at the plugin's own
+existence check — which validates the path to the properties file, not the
+`storeFile` inside it. Use forward slashes. This trap has now been paid for
+once in this repo and found by review in a second place before it was paid for
+again.
 | ABI built | `arm64-v8a` only | `expo run:android` builds the attached device's ABI |
 
 **The device runs one API level above what the app targets** (37 vs targetSdk

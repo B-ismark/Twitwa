@@ -15,10 +15,12 @@
 # to do. They stay on the machine that took them.
 #
 # Consequence, stated because it is a real cost: a stranger cannot re-derive
-# the measured device numbers in spike/results/. `node tools/make-fixture.mjs`
-# builds synthetic screenshots with known band positions, which is enough to
-# run every gate, and not enough to reproduce the numbers taken from real
-# captures.
+# the measured device numbers in spike/results/, and cannot run quite every
+# check either. tools/chunks.test.mjs reads one of these captures by name and
+# skips seven checks without it (it says so, and counts them); make-fixture.mjs
+# writes IHDR/IDAT/IEND only, so it is not a substitute for a capture carrying
+# an ICC profile. 516 of 526 checks run in a clone. An earlier version of this
+# comment claimed all of them did.
 spike/fixtures/screenshots/
 spike/results/cards/
 
@@ -34,11 +36,27 @@ fixtures/og-pages.tar.gz
 *.jks
 *.keystore
 *.p12
+*.pfx
 *.p8
 *.key
 *.pem
 *.mobileprovision
+
+# Every filename this project could plausibly put a signing password in. The
+# list is long on purpose: React Native's own signing guide -- the link quoted
+# in plugins/withReleaseSigning.js -- tells you to put
+# MYAPP_UPLOAD_STORE_PASSWORD into gradle.properties, and a path-scoped
+# `git add spike/` would have committed that in cleartext to a public repo.
+# A review found every one of these unignored.
 keystore.properties
+keystore.properties.*
+signing.properties
+gradle.properties
+local.properties
+passwords.txt
+twitwa-release
+.env
+.env.*
 
 # --- Build output and dependencies ----------------------------------------
 node_modules/

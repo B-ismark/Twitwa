@@ -31,10 +31,19 @@ whose design deliberately removes attribution.
 
 The cost is real and worth naming rather than hiding: **a stranger cannot
 reproduce the measured device numbers** in `spike/results/`. Those rest on inputs
-that are not here. What a stranger *can* do is run every gate, because
-`node tools/make-fixture.mjs` builds synthetic screenshots with known band
-positions, and the pure modules do not care where their pixels came from. Treat
-the device figures as recorded measurements, not as reproducible ones.
+that are not here.
+
+An earlier version of this paragraph went on to claim a stranger "can run every
+gate, because `node tools/make-fixture.mjs` builds synthetic screenshots". That
+was **false**, and a review caught it. `tools/chunks.test.mjs` reads
+`fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
+writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
+test inspects, and it takes an output path rather than that filename. What is
+true: **516 of the 526 checks run in a clone**, and the 10 that cannot say so
+and say why. The seven skipped there include the only test of the Q4 Display-P3
+answer.
+
+Treat the device figures as recorded measurements, not as reproducible ones.
 
 ## State
 
@@ -59,7 +68,15 @@ What the extra recipients *do* change, none of it about policy:
   refuses an update signed by a different key, so a v1 shipped under a throwaway
   debug key forces every recipient to uninstall — which deletes their Library.
   This is the one decision here that is expensive to take late and free to take
-  first.
+  first. **Done 2026-09-18**; `tools/verify-apk.sh` proves which key signed a
+  given APK.
+- **The package name is the other half of the same argument, and it is not
+  settled.** Android identifies an app by package name *plus* signing key, so
+  `dev.bismark.twitwaspike` — a name `spike/PHASE0.md` records as a build fix,
+  not a product decision — carries exactly the same uninstall-everyone cost if
+  it changes after v1 ships. A review pointed out that the keystore bullet above
+  had been written as though the key were the whole of app identity. Settle the
+  package name before the first APK leaves this machine.
 - **`adb logcat` is no longer the observability story.** Every measured number in
   this repo came off a cable attached to one phone. A friend's failure arrives as
   "it didn't work", so the app needs to be able to hand its own diagnostic text to
@@ -85,6 +102,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
 | `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, and Q1/Q2/Q3/Q4 were all re-measured after that merge and reproduce exactly |
 | `App.js` | The spike screen: one button per Phase 0 question, plus two that run the Phase 1 pipeline and draw the written card back off disk |
+| `plugins/withReleaseSigning.js` | Signs release builds with the project's own key instead of the debug key the RN template ships. A config plugin because `android/` is generated and gitignored, so a direct edit does not survive `prebuild`. Reads the keystore path from `TWITWA_KEYSTORE_PROPERTIES`, so no path and no secret is committed |
 | `tools/png.mjs` | PNG decoder built on node's `zlib`, no dependency |
 | `tools/probe.mjs` | Answers Q1, Q3 and the card background from a PNG on disk |
 | `tools/make-fixture.mjs` | Synthetic screenshot with known band positions |
@@ -99,9 +117,19 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 422 checks and 71 mutations between them while the renderer carries
-none (489 checks and 84 mutations counting the two PNG tools, and 90 mutations
-counting the two gates that check their own rules). The newest of them is
-`recover.js`, which is the picker's self-repair policy rather than pixel work.
+none (**526 checks and 96 mutations** counting the two PNG tools and the signing
+plugin, and **102 mutations** counting the two gates that check their own rules).
+Two of them are not pixel work at all: `recover.js` is the picker's self-repair
+policy, and `plugins/withReleaseSigning.js` is the release-signing patch.
+
+**A clone runs 516 of those 526 and reports 10 skipped**, which is the number to
+trust, because it is the artifact anyone else gets. Seven skips are in
+`tools/chunks.test.mjs`, which needs a real capture that is deliberately not
+published; three are in the signing suite, which compares against the generated
+`android/` tree that `prebuild` creates. Both print the skips and the reason
+rather than a full green total — a review found the signing suite printing
+`18/18 checks passed` in a clone while silently dropping its strongest check,
+and six mutants surviving in exactly that state.
 
 `renderCard()` was run four times on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
@@ -216,9 +244,11 @@ cd spike && node src/recover.test.mjs    # 43 checks on the picker-recovery poli
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
 cd spike && node tools/check-imports.mjs # 46 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 62 exports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 66 exports + 7 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
+cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (37 after a prebuild)
+cd spike && bash tools/verify-apk.sh     # which key actually signed the APK
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
 ```
 
@@ -234,13 +264,23 @@ behind, which is the same failure as a mutation that cannot go red:
 
 ```
 cd spike
+# withReleaseSigning.test.mjs is listed separately: its mutants are edits to
+# the real plugin source rather than BREAK branches, so it publishes its own
+# list with --list-mutants. Two hand-written copies of a grep had already
+# drifted apart ([a-z_]* here, [a-z_0-9]* there), which is the same defect as a
+# mutation that cannot fire.
+for b in $(node plugins/withReleaseSigning.test.mjs --list-mutants); do
+  BREAK=$b node plugins/withReleaseSigning.test.mjs >/dev/null 2>&1 \
+    || true; [ $? -eq 1 ] || echo "NOT RED: $b"
+done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs tools/chunks.test.mjs \
-         tools/png.test.mjs tools/check-imports.mjs tools/check-dead.mjs; do
+         tools/png.test.mjs \
+         tools/check-imports.mjs tools/check-dead.mjs; do
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 90 mutations
+done                                     # silence is the pass; 102 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -369,3 +409,49 @@ the phone needs from its owner and no flag can supply: it must be **unlocked**
 (a secure fingerprint lock sends every tap to the keyguard) and its screen must be
 **on** — `dumpsys power` reporting `mWakefulness=Dozing` looks exactly like a
 hung app from the shell.
+
+### Building a release APK
+
+The signing key is **not** in this repository and never will be. Gradle finds it
+through one environment variable naming a properties file that lives outside the
+tree:
+
+```
+cd spike/android
+TWITWA_KEYSTORE_PROPERTIES=/path/to/keystore.properties ./gradlew assembleRelease
+cd .. && bash tools/verify-apk.sh
+```
+
+**The second command is not optional.** With the variable unset, Gradle prints
+one `logger.lifecycle` line and then produces a **debug-signed**
+`app-release.apk` under the identical filename, and exits 0. A review made the
+point that killed any argument for leaving this to a log line: that message is
+emitted at configuration time, so it fires on every ordinary
+`expo run:android` too — it is trained noise long before a release is built.
+`tools/verify-apk.sh` reads the signature off the artifact and exits 2 if it
+carries the shared Android debug key. It is the only check here that looks at
+the artifact rather than the source.
+
+Set-but-wrong is handled differently from unset, on purpose: if the variable
+points at a file that is not there, Gradle raises a `GradleException` instead of
+falling back.
+
+Two more things a review established about this path, both counter-intuitive:
+
+- **`expo prebuild` writes the native template BEFORE it runs plugins.** So if
+  `plugins/withReleaseSigning.js` cannot find its anchors, prebuild exits 1 and
+  still leaves a complete, buildable, pristine `android/` tree whose release
+  buildType reads `signingConfig signingConfigs.debug`. The plugin therefore
+  also prepends a `throw new GradleException(...)` to the generated
+  `build.gradle` on failure, so the leftover cannot be built. Failing closed
+  beats failing loudly.
+- **The APK is 118.8 MB**, and 58.5 MB of that is `x86` / `x86_64` native
+  libraries that no phone can use. Splitting per-ABI, or restricting to
+  `arm64-v8a` and `armeabi-v7a`, is the obvious next change and has not been
+  made yet.
+
+`versionCode` is `1` and is set explicitly in `app.json`. Expo's own default is
+`config.android?.versionCode ?? 1`, rewritten on every prebuild, so leaving it
+implicit meant it could never move: two materially different APKs would have
+been indistinguishable to Android and to whoever was holding one. **Bump it for
+every build handed to anyone.**

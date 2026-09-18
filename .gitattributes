@@ -1,0 +1,29 @@
+# Line endings, and why this file exists at all.
+#
+# This machine has core.autocrlf=true and there was no .gitattributes. A review
+# proved the consequence rather than reasoning about it: commit
+# spike/plugins/fixtures/build.gradle.pristine, clone the repo back, and the
+# fixture arrives with CRLF terminators. withReleaseSigning.js matches that
+# template with exact multi-line string equality built from \n literals, so both
+# of its anchors miss, and the error it raises says "The Expo template changed.
+# Re-read the file and update the anchors" -- pointing the reader at Expo when
+# the real cause is their own checkout. A misdiagnosis is worse than a failure.
+#
+# The APK's signature was never at risk (spike/android/ is gitignored, so git
+# never writes that file and prebuild emits LF), but the gate died in any fresh
+# clone, which includes the author's own next one.
+
+* text=auto
+
+# Byte-exact fixtures. These are compared with whole-string equality, so a
+# line-ending rewrite is a content change. Never normalise them.
+*.pristine -text
+
+# Shell scripts must be LF even on Windows: the device harness in spike/tools/
+# runs under Git Bash, and CRLF gives `bad interpreter: /usr/bin/env bash^M`.
+*.sh text eol=lf
+
+# Gradle and properties files are read by the JVM on Windows, but the plugin
+# does exact matching against build.gradle, so keep them LF for consistency
+# with what Expo's prebuild writes.
+*.gradle text eol=lf

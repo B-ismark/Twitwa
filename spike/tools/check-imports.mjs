@@ -300,6 +300,19 @@ const modeLine = Object.entries(modes)
 console.log(`  modes  ${modeLine}`);
 for (const line of loadErrors) console.log(line);
 const failed = problems + loadErrors.length;
+
+// The same floor as check-dead. With an empty src/ this printed "0 named
+// imports across 1 files all resolve" and exited 0.
+if (files.length === 0 || OURS.length === 0 || checked === 0) {
+  console.log(
+    `
+REFUSING: ${files.length} file(s), ${OURS.length} of our module(s),`
+    + ` ${checked} named import(s) checked. Nothing was verified, so this is not a pass.`
+    + ' Run it from the spike/ directory.',
+  );
+  process.exit(1);
+}
+
 console.log(
   failed
     ? `\n${problems} import problem(s), ${loadErrors.length} load failure(s), across ${files.length} files`

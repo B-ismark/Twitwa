@@ -53,6 +53,18 @@ function exportedNames(source) {
   for (const m of source.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/gm)) {
     names.push(m[1]);
   }
+  // CommonJS, because plugins/withReleaseSigning.js is a config plugin and
+  // Expo loads those with require(). Without this branch the file entered the
+  // denominator and contributed zero names, so the gate printed "all 62
+  // exported names ... are used" while being structurally unable to see four of
+  // them -- one of which was genuinely dead. A review found it.
+  //
+  // `module.exports = ...` (the default) is deliberately NOT collected: for a
+  // config plugin the consumer is app.json, not another module, so it would
+  // read as dead for ever.
+  for (const m of source.matchAll(/^module\.exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=/gm)) {
+    names.push(m[1]);
+  }
   for (const m of source.matchAll(/^export\s*\{([^}]+)\}/gm)) {
     for (const part of m[1].split(',')) {
       const t = part.trim();
@@ -177,6 +189,21 @@ for (const [file, s] of source) {
 for (const line of report) console.log(line);
 
 const total = live + dead;
+
+// A floor, because "all 0 exported names across 0 files are used" is a sentence
+// this gate used to print, in green, with exit 0 -- pointed at an empty
+// directory or the wrong working directory. Never print a zero for something
+// you did not count.
+if (code.length === 0 || total === 0) {
+  console.log(
+    `
+REFUSING: found ${code.length} source file(s) and ${total} export(s).`
+    + ' This gate has nothing to check, which is a failure and not a pass.'
+    + ' Run it from the spike/ directory.',
+  );
+  process.exit(1);
+}
+
 console.log(
   dead
     ? `\n${dead} dead export(s) of ${total}, across ${code.length} files`

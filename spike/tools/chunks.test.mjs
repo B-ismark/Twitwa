@@ -15,7 +15,7 @@
 // over-reports is worse than no verdict — it would have been used to close a
 // question it cannot answer.
 import { deflateSync } from 'node:zlib';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
 import * as real from './chunks.mjs';
 
@@ -160,9 +160,30 @@ console.log('an sRGB chunk is a colour tag');
   check('by sRGB', v.sound.includes('sRGB'));
 }
 
+// fixtures/screenshots/ is gitignored: the captures are screenshots of real
+// posts by identifiable people and are deliberately not published. So these two
+// blocks CANNOT run in a clone, and until a review pointed it out this file
+// died there on an unhandled ENOENT -- taking down 44 checks that need no
+// fixture at all, including the only test of the Q4 Display-P3 answer.
+//
+// Skipped and counted now, never silently. tools/make-fixture.mjs is NOT a
+// substitute: it writes IHDR/IDAT/IEND only, so it cannot produce the embedded
+// ICC profile these blocks inspect.
+const REAL_CAPTURE = 'fixtures/screenshots/ig-handwriting-dark.png';
+const HAVE_CAPTURE = existsSync(REAL_CAPTURE);
+let skipped = 0;
+function skipBlock(names, why) {
+  for (const nm of names) { skipped++; console.log(`  SKIP  ${nm}  -> ${why}`); }
+}
+
 console.log('a real capture: the profile is identified by its primaries, not its name');
-{
-  const chunks = F.listChunks(readFileSync('fixtures/screenshots/ig-handwriting-dark.png'));
+if (!HAVE_CAPTURE) {
+  skipBlock([
+    'the profile inflates', 'its name is "Skia"', 'the colorants were read',
+    'and it is Display P3', 'the name does not carry the answer',
+  ], `${REAL_CAPTURE} is not published`);
+} else {
+  const chunks = F.listChunks(readFileSync(REAL_CAPTURE));
   const icc = chunks.find((c) => c.type === 'iCCP');
   check('the profile inflates', !!icc.profile && icc.profile.length > 128, icc.profile && icc.profile.length);
   check('its name is "Skia"', icc.profileName === 'Skia', icc.profileName);
@@ -281,12 +302,17 @@ console.log('a conforming hand-built profile IS accepted, so the above is not bl
 }
 
 console.log('the real capture still passes the stricter checks');
-{
-  const icc = F.listChunks(readFileSync('fixtures/screenshots/ig-handwriting-dark.png'))
+if (!HAVE_CAPTURE) {
+  skipBlock([
+    'Skia writes a conforming signature', 'and no problem is found with it',
+  ], `${REAL_CAPTURE} is not published`);
+} else {
+  const icc = F.listChunks(readFileSync(REAL_CAPTURE))
     .find((c) => c.type === 'iCCP');
   check('Skia writes a conforming signature', icc.iccSignature === 'acsp', icc.iccSignature);
   check('and no problem is found with it', real.colourProblem(icc) === null, real.colourProblem(icc));
 }
 
-console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);
+const tail = skipped ? `, ${skipped} SKIPPED (the real captures are not published)` : '';
+console.log(`\n${ran - fails}/${ran} checks passed${tail}${BREAK ? `  (BREAK=${BREAK})` : ''}`);
 process.exit(fails ? 1 : 0);
