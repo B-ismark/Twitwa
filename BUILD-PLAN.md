@@ -117,7 +117,10 @@ because it is meant to fail and the number wanted is where. Do not start Phase 1
 until these are known.
 
 **The dev client builds and is installed** — `dev.bismark.twitwaspike` on a Pixel
-6 Pro, after five attempts and four distinct causes (see `README.md`). Q2, Q4 and
+6 Pro, after five attempts and four distinct causes (see `README.md`). The
+package was renamed to `dev.bismark.twitwa` on 2026-09-18, once it was clear that
+a name recorded as a build fix was about to become permanent; this line records
+what was installed at the time. Q2, Q4 and
 Q5 are now blocked only on driving the app, not on tooling.
 
 1. ~~**Does the sampled fill look seamless?**~~ **Measured and passing** over 58

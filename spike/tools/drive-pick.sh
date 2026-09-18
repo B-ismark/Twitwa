@@ -60,7 +60,7 @@
 set -u
 A="${ADB:-/d/AndroidDev/sdk/platform-tools/adb.exe}"
 S="$(dirname "$0")"
-P="${PKG:-dev.bismark.twitwaspike}"
+P="${PKG:-dev.bismark.twitwa}"
 COLLECTIONS_XY="${COLLECTIONS_XY:-1070 1231}"   # density 476 on a 1440x3120 panel
 export MSYS_NO_PATHCONV=1
 

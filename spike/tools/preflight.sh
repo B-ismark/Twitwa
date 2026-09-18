@@ -31,7 +31,7 @@
 # Hard failures exit non-zero. Warnings print and continue.
 set -u
 A="${ADB:-/d/AndroidDev/sdk/platform-tools/adb.exe}"
-PKG="${PKG:-dev.bismark.twitwaspike}"
+PKG="${PKG:-dev.bismark.twitwa}"
 PORT="${PORT:-8081}"
 cd "$(dirname "$0")/.." || exit 1
 

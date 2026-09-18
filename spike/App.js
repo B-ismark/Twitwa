@@ -35,6 +35,7 @@ import {
   recoveryPlan,
   resumeDecision,
 } from './src/recover';
+import { check as checkForUpdate, openDownload, installedVersionCode } from './src/update-io';
 
 const PAPER = '#F6F4EF';
 const INK = '#15181D';
@@ -107,6 +108,12 @@ export default function App() {
   const [showingResult, setShowingResult] = useState(false);
   const [log, setLog] = useState([]);
 
+  // A newer APK, if there is one. Twitwa is handed out as a file, so nothing
+  // tells a person that a new version exists unless the app does. See
+  // src/update.js for the whole design, including why this is the app's only
+  // network call and what that costs in privacy.
+  const [update, setUpdate] = useState(null);
+
   // The picker launcher is dead until this runtime is replaced. See
   // src/recover.js for the measurement behind that claim.
   const [staleLauncher, setStaleLauncher] = useState(false);
@@ -116,6 +123,7 @@ export default function App() {
   // runtime IS the recovery.
   const recoveryUsed = useRef(false);
   const lastConfig = useRef(null);
+  const updateAsked = useRef(false);
 
   // Mask box in VIEW coordinates. Shared values so the drag stays on the UI thread.
   const bx = useSharedValue(40);
@@ -135,6 +143,23 @@ export default function App() {
     console.log(LOG, line);
     setLog((prev) => [{ label, payload }, ...prev].slice(0, 12));
   }, []);
+
+  // Ask once per mount whether a newer APK exists. Deliberately fire-and-forget:
+  // nothing waits on it, nothing is blocked by it, and a failure is a log line.
+  // The once-a-day throttle lives in src/update.js, so a person who restarts
+  // the app ten times does not produce ten requests.
+  useEffect(() => {
+    if (updateAsked.current) return;
+    updateAsked.current = true;
+    let live = true;
+    (async () => {
+      const r = await checkForUpdate();
+      if (!live) return;
+      emit('P0.updateCheck', { action: r.action, installed: installedVersionCode(), latest: r.latestVersionCode ?? null, reason: r.reason ?? null });
+      if (r.action === 'update') setUpdate(r);
+    })();
+    return () => { live = false; };
+  }, [emit]);
 
   // Replace the runtime, because nothing short of that re-registers the
   // launcher: backgrounding does not, and a second activity recreation does not
@@ -465,6 +490,24 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
+      {update ? (
+        <View style={styles.updateBar}>
+          <Text style={styles.updateText}>
+            {`Twitwa ${update.versionName} is out (you have build ${update.installedVersionCode}).`}
+          </Text>
+          {update.notes ? <Text style={styles.updateNotes}>{update.notes}</Text> : null}
+          <View style={styles.updateRow}>
+            <Btn
+              label="Get it"
+              onPress={async () => {
+                const ok = await openDownload(update.url);
+                emit('P0.update', { opened: ok, url: ok ? update.url : 'refused' });
+              }}
+            />
+            <Btn label="Later" onPress={() => setUpdate(null)} />
+          </View>
+        </View>
+      ) : null}
       <View style={[styles.canvasWrap, { width: canvasW, height: canvasH }]}>
         {shown && map ? (
           <Canvas style={{ width: canvasW, height: canvasH }}>
@@ -553,6 +596,13 @@ function Btn({ label, onPress, disabled }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: INK, paddingTop: 44 },
+  // Signal-dark, which clears 4.5:1 on Ink. The plain Signal token does not —
+  // 2.75:1 — and this is the one piece of chrome in the harness that a person
+  // other than the author is meant to read.
+  updateBar: { backgroundColor: '#1E2228', borderColor: '#7C9AE0', borderWidth: 1, borderRadius: 10, margin: 10, padding: 12 },
+  updateText: { color: '#F6F4EF', fontSize: 15, fontWeight: '600' },
+  updateNotes: { color: '#949BA2', fontSize: 13, marginTop: 4 },
+  updateRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   canvasWrap: { backgroundColor: '#000' },
   hint: { color: '#949BA2', textAlign: 'center', marginTop: 180 },
   // White core plus a dark outline, because a coloured handle over arbitrary

@@ -87,9 +87,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'dev.bismark.twitwaspike'
+    namespace 'dev.bismark.twitwa'
     defaultConfig {
-        applicationId 'dev.bismark.twitwaspike'
+        applicationId 'dev.bismark.twitwa'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

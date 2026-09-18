@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **516 of the 526 checks run in a clone**, and the 10 that cannot say so
+true: **657 of the 669 checks run in a clone**, and the 12 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -70,13 +70,22 @@ What the extra recipients *do* change, none of it about policy:
   This is the one decision here that is expensive to take late and free to take
   first. **Done 2026-09-18**; `tools/verify-apk.sh` proves which key signed a
   given APK.
-- **The package name is the other half of the same argument, and it is not
-  settled.** Android identifies an app by package name *plus* signing key, so
-  `dev.bismark.twitwaspike` — a name `spike/PHASE0.md` records as a build fix,
-  not a product decision — carries exactly the same uninstall-everyone cost if
-  it changes after v1 ships. A review pointed out that the keystore bullet above
-  had been written as though the key were the whole of app identity. Settle the
-  package name before the first APK leaves this machine.
+- **The package name is the other half of the same argument.** Android
+  identifies an app by package name *plus* signing key, so a rename after v1
+  carries exactly the same uninstall-everyone cost as a lost key. A review
+  pointed out that the keystore bullet above had been written as though the key
+  were the whole of app identity. **Settled 2026-09-18**: the app is called
+  Twitwa and the package is `dev.bismark.twitwa`, renamed from
+  `dev.bismark.twitwaspike` while nothing had shipped and the rename was still
+  free.
+- **The APK has to be small enough to send.** The first signed build was
+  **124,548,439 bytes**, which is not a thing anyone sends over a chat app. It
+  is now **32,886,141 bytes**. See "Making the APK small enough to send" below —
+  the whole of the problem was in `lib/`, and the whole of the fix was two
+  Gradle properties.
+- **Nothing tells a recipient that a new version exists.** There is no store, so
+  there is no update notification unless the app makes one. See "Telling people
+  there is an update" below.
 - **`adb logcat` is no longer the observability story.** Every measured number in
   this repo came off a cable attached to one phone. A friend's failure arrives as
   "it didn't work", so the app needs to be able to hand its own diagnostic text to
@@ -117,15 +126,16 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 422 checks and 71 mutations between them while the renderer carries
-none (**526 checks and 96 mutations** counting the two PNG tools and the signing
-plugin, and **102 mutations** counting the two gates that check their own rules).
-Two of them are not pixel work at all: `recover.js` is the picker's self-repair
-policy, and `plugins/withReleaseSigning.js` is the release-signing patch.
+none (**669 checks and 120 mutations** counting the two PNG tools, both config
+plugins, the update module and the three rule-checking gates). Three of them are
+not pixel work at all: `recover.js` is the picker's self-repair policy,
+`plugins/withReleaseSigning.js` is the release-signing patch, and `update.js`
+decides whether a newer APK exists.
 
-**A clone runs 516 of those 526 and reports 10 skipped**, which is the number to
-trust, because it is the artifact anyone else gets. Seven skips are in
+**A clone runs 657 of those 669 and reports 12 skipped**, which is the number to
+trust, because it is the artifact anyone else gets. The skips are in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
-published; three are in the signing suite, which compares against the generated
+published, and in the two plugin suites, which compare against the generated
 `android/` tree that `prebuild` creates. Both print the skips and the reason
 rather than a full green total — a review found the signing suite printing
 `18/18 checks passed` in a clone while silently dropping its strongest check,
@@ -243,11 +253,14 @@ cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 43 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
-cd spike && node tools/check-imports.mjs # 46 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 66 exports + 7 self-checks on its own rule
+cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
+cd spike && node tools/check-imports.mjs # 52 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 83 exports + 7 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
+cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (37 after a prebuild)
+cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
 cd spike && bash tools/verify-apk.sh     # which key actually signed the APK
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
 ```
@@ -264,14 +277,24 @@ behind, which is the same failure as a mutation that cannot go red:
 
 ```
 cd spike
-# withReleaseSigning.test.mjs is listed separately: its mutants are edits to
-# the real plugin source rather than BREAK branches, so it publishes its own
-# list with --list-mutants. Two hand-written copies of a grep had already
-# drifted apart ([a-z_]* here, [a-z_0-9]* there), which is the same defect as a
-# mutation that cannot fire.
-for b in $(node plugins/withReleaseSigning.test.mjs --list-mutants); do
-  BREAK=$b node plugins/withReleaseSigning.test.mjs >/dev/null 2>&1 \
-    || true; [ $? -eq 1 ] || echo "NOT RED: $b"
+# Three suites are listed separately: their mutants are edits to the REAL
+# source of the module under test, loaded from a temp copy, rather than BREAK
+# branches written in the suite. So each publishes its own list with
+# --list-mutants. Two hand-written copies of a grep had already drifted apart
+# ([a-z_]* here, [a-z_0-9]* there), which is the same defect as a mutation
+# that cannot fire.
+#
+# The `|| true` that used to be on the line below was a defect in this very
+# loop. `cmd || true` sets $? to 0 whether cmd failed or not, so the test
+# after it read 0 every time and the loop printed NOT RED for mutants that
+# were red and for mutants that were not, indiscriminately. Do not put it
+# back.
+for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
+         src/update.test.mjs; do
+  for b in $(node "$p" --list-mutants); do
+    BREAK=$b node "$p" >/dev/null 2>&1
+    [ $? -eq 1 ] || echo "NOT RED: $p $b"
+  done
 done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs tools/chunks.test.mjs \
@@ -280,7 +303,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 102 mutations
+done                                     # silence is the pass; 120 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -350,7 +373,9 @@ real display, and no number in `spike/results/` can settle it.
 four distinct causes: a `local.properties` backslash bug (Java properties files eat single
 backslashes), a space in `rootProject.name`, a missing NDK r27b, and a full C:
 drive. The fifth succeeded — 419 tasks, `BUILD SUCCESSFUL`, a 96MB debug APK
-installed on the Pixel 6 Pro as `dev.bismark.twitwaspike`. Gradle also pulled in
+installed on the Pixel 6 Pro as `dev.bismark.twitwaspike` (the package was
+renamed to `dev.bismark.twitwa` on 2026-09-18; this paragraph records what was
+installed at the time). Gradle also pulled in
 `cmake;3.22.1` on its own during the native build.
 
 **The Skia calls now run.** Every signature in `spike/src/measure.js` was read
@@ -445,10 +470,105 @@ Two more things a review established about this path, both counter-intuitive:
   also prepends a `throw new GradleException(...)` to the generated
   `build.gradle` on failure, so the leftover cannot be built. Failing closed
   beats failing loudly.
-- **The APK is 118.8 MB**, and 58.5 MB of that is `x86` / `x86_64` native
-  libraries that no phone can use. Splitting per-ABI, or restricting to
-  `arm64-v8a` and `armeabi-v7a`, is the obvious next change and has not been
-  made yet.
+- **The APK was 118.8 MB**, and 58.5 MB of that was `x86` / `x86_64` native
+  libraries that no phone can use. **Fixed 2026-09-18**: it is 31.3 MB. See
+  "Making the APK small enough to send" above for the measurements. Note that
+  restricting the ABI list is the right lever and ABI *splits* are the wrong one
+  — React Native disables the ABI filter when splits are enabled.
+
+### Making the APK small enough to send
+
+The first signed build was **124,548,439 bytes**. There is no store here, so that
+number is not an abstraction: it is the size of a file a person has to receive
+over a chat app before they can use this at all. It is now **32,886,141 bytes**,
+a 73.6% cut, with no change to what the app does.
+
+The whole of the problem was in `lib/`, and `unzip -v` said so before anything
+was changed:
+
+| | uncompressed | in the APK |
+| --- | ---: | ---: |
+| `lib/x86` | 31,051,496 | 31,051,496 |
+| `lib/x86_64` | 30,322,512 | 30,322,512 |
+| `lib/arm64-v8a` | 29,468,664 | 29,468,664 |
+| `lib/armeabi-v7a` | 20,114,028 | 20,114,028 |
+| everything else | 165,100,694 | 12,820,537 |
+
+Two readings, both of which point at a fix:
+
+- **All 72 `.so` entries were `Stored`**, not deflated — the only part of the
+  archive receiving no compression was the part that was 80% of it. React Native
+  0.73 made that the default so libraries can be mapped straight out of the APK
+  at runtime, which is a real gain and the wrong trade when the APK is the
+  delivery mechanism.
+- **Two of the four ABIs cannot run on a phone.** `x86` and `x86_64` are there
+  for emulators. That is 61,374,008 bytes, at full size, in every copy sent to
+  everyone.
+
+So: `reactNativeArchitectures=arm64-v8a,armeabi-v7a` and
+`expo.useLegacyPackaging=true`, both written by `spike/plugins/withAndroidSize.js`,
+which re-reads what it wrote and throws if any value is not what it intended.
+`armeabi-v7a` is kept deliberately: sideloading has no Play filter, so a 32-bit
+device that cannot install says only "App not installed", with no reason. It
+costs 9,255,669 bytes of the 32.9 MB and buys a failure mode that never happens.
+
+Two traps here, and both fail by doing nothing rather than by erroring:
+
+- **The minify property is `android.enableMinifyInReleaseBuilds`.** Expo SDK 57's
+  template reads that name (`android/app/build.gradle:69`). Nearly every guide
+  names `android.enableProguardInReleaseBuilds`, which comes from the bare React
+  Native template and is not read here at all. Setting the guide's key leaves R8
+  off and looks like it was turned on.
+- **ABI splits would have silently undone the ABI fix.** React Native's Gradle
+  plugin applies `reactNativeArchitectures` as `defaultConfig.ndk.abiFilters`
+  *only when `splits.abi` is disabled*, and says so in a comment
+  (`NdkConfiguratorUtils.kt:58-63`). Enabling splits would have put all four
+  ABIs back into the split that got built.
+
+**R8 is deliberately still off.** Every lever above is packaging: the bytes move,
+the program does not. R8 rewrites and strips bytecode, and the classic React
+Native failure is a module resolved by reflection at startup that is no longer
+there. The dex is 21,380,964 bytes uncompressed and 7,800,880 in the APK, so the
+upside is real — but it is a separate change with a device test attached, and it
+has not been made.
+
+### Telling people there is an update
+
+No store means nothing tells a recipient that a new version exists. So the app
+asks.
+
+`release/latest.json` in this repository is the manifest. `spike/src/update.js`
+reads it, compares its `versionCode` against `expo-application`'s
+`nativeBuildVersion` — the number Android itself compares, not a copy of
+`app.json` baked into the bundle — and if the manifest is newer, offers the
+download. `release/README.md` is the publishing procedure and the order in it
+matters: publish the release asset first, edit the manifest second, or every
+installed copy points at a 404.
+
+Three decisions worth stating, because each one is a thing deliberately *not*
+done:
+
+- **The app does not download or install anything.** It hands the URL to the
+  system browser. That means no `REQUEST_INSTALL_PACKAGES` permission — which is
+  a meaningfully scarier thing to be handed by a friend, and the permission
+  prompt says so — and it means Android's own package manager performs the
+  signature check. An APK signed by another key is refused by the OS, not by code
+  written here.
+- **The download URL is confined to one literal prefix.**
+  `https://github.com/B-ismark/Twitwa/releases/download/`. A full URL's authority
+  ends at the first `/` after `//`, and that slash is inside the prefix, so one
+  string comparison pins scheme, host and the first three path segments. The
+  manifest arrives over the network; without this it would be a way to get
+  someone to install an arbitrary APK under Twitwa's own prompt. Fourteen hostile
+  URLs are enumerated individually in `src/update.test.mjs`, because a single
+  "rejects a bad URL" check would pass while thirteen still got through.
+- **This is the app's first and only network call, and that has a cost.** One
+  HTTPS GET to `raw.githubusercontent.com`, no identifier, no query string. But
+  GitHub sees the IP and the time, and a check happens when the app is used, so
+  anyone watching that traffic learns roughly when this person opens Twitwa.
+  Hence once a day, never before the app is opened. A switch to turn it off
+  belongs in Settings and does not exist yet, because Settings does not exist
+  yet.
 
 `versionCode` is `1` and is set explicitly in `app.json`. Expo's own default is
 `config.android?.versionCode ?? 1`, rewritten on every prebuild, so leaving it

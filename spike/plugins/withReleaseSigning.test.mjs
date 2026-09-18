@@ -51,7 +51,15 @@ const FIXTURE = 'plugins/fixtures/build.gradle.pristine';
 const LIVE = 'android/app/build.gradle';
 // sha256 of the fixture, recorded 2026-09-18 from the generated file the
 // anchors were derived from. See the check that reads it for when to change it.
-const FIXTURE_SHA256 = '4d4828dccd80205277168e9816419cef172bcfd952089c932ed2dd968c3eaf86';
+//
+// Both digests moved once already, on 2026-09-18, when the package was renamed
+// dev.bismark.twitwaspike -> dev.bismark.twitwa. `namespace` and `applicationId`
+// are written into app/build.gradle by prebuild, so a rename changes the
+// template. The diff was read before the digests were touched: exactly two
+// lines, 10 bytes, which is `spike` removed twice. Regenerate with
+// `node plugins/fixtures/make-pristine.js`, which prints both values and
+// refuses if the recovery is not faithful.
+const FIXTURE_SHA256 = '3a6a2323bdcad7395e81694000409c30f5535eab2125c7c774c2f65f5fac0420';
 // sha256 of patch(fixture) -- the expected PATCHED output, recorded the same day
 // and equal to the generated android/app/build.gradle byte-for-byte.
 //
@@ -66,7 +74,7 @@ const FIXTURE_SHA256 = '4d4828dccd80205277168e9816419cef172bcfd952089c932ed2dd96
 // It fails on every intentional change to the plugin, by design. Update it in
 // the same commit as the change, after reading the diff -- never to silence a
 // red run.
-const PATCHED_SHA256 = '100cb0a21c8cfd2bafdbc870874675d3153a58e9adb1d5874796a069eed4abc7';
+const PATCHED_SHA256 = '8616eb0b10bf9894a3fd7ef9f0bfe0f32ef254e8ddcb2e1dbe3b53bdf8c41952';
 
 // --- the mutants -----------------------------------------------------------
 // Each is [find, replace] applied to the real plugin source. Keep them to the

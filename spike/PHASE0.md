@@ -105,7 +105,25 @@ it costs the whole ~700MB again.
 - **No space in `rootProject.name`.** `expo prebuild` takes it from `app.json`'s
   `name`, so "Twitwa spike" became the Gradle project name and the build died the
   same opaque way. Renamed to `TwitwaSpike` in both places, so a re-prebuild does
-  not reintroduce it.
+  not reintroduce it. **Renamed again on 2026-09-18 to `Twitwa`**, which is also
+  the launcher label, at the same time as the package name below.
+
+- **The package name is `dev.bismark.twitwa`, decided 2026-09-18.** It was
+  `dev.bismark.twitwaspike`, a name this file recorded as a build fix rather
+  than a product decision. Android identifies an app by package name *plus*
+  signing key, so changing either after v1 ships forces every recipient to
+  uninstall, which deletes their Library. Nothing had shipped, so the rename was
+  free; after the first APK leaves this machine it costs exactly what losing the
+  key costs. `namespace` and `applicationId` are written into
+  `android/app/build.gradle` by prebuild, so the rename also invalidated
+  `plugins/fixtures/build.gradle.pristine` and both pinned digests in the
+  signing suite -- regenerate with `node plugins/fixtures/make-pristine.js`,
+  which prints the new digests and refuses if the recovery is not faithful.
+
+  The old package appears in `results/phase0-device.md` and
+  `results/phase1-pipeline.md`, deliberately: those are dated records of runs
+  that really did install `dev.bismark.twitwaspike`, and rewriting them would
+  falsify the record rather than update it.
 
 ```
 # ANDROID_HOME, ANDROID_SDK_ROOT and GRADLE_USER_HOME are persisted at User

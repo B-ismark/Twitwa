@@ -84,3 +84,7 @@ yarn-error.*
 .DS_Store
 __pycache__/
 *.pyc
+
+# Links to real posts by identifiable people. Same rule as
+# spike/fixtures/screenshots/: the findings are published, the inputs are not.
+test-links.local.md

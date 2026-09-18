@@ -48,12 +48,34 @@ const OURS = BREAK === 'ours_missing_module'
   ? ['pixels', 'plan', 'sizing', 'measure', 'pipeline']
   : readdirSync(SRC).filter((f) => f.endsWith('.js')).map((f) => f.replace(/\.js$/, ''));
 
-// The modules that CANNOT load in node, because they import Skia or expo. Only
-// these may fall back to source parsing. Anything else failing to load is a real
-// error: a syntax error or a broken import in a pure module would otherwise be
-// silently downgraded to the weaker check and reported as green, which is the
-// exact failure mode this file exists to prevent.
-const NATIVE = new Set(['measure', 'pipeline']);
+// The modules that CANNOT load in node, because they import Skia, expo or
+// react-native. Only these may fall back to source parsing. Anything else
+// failing to load is a real error: a syntax error or a broken import in a pure
+// module would otherwise be silently downgraded to the weaker check and
+// reported as green, which is the exact failure mode this file exists to
+// prevent.
+//
+// DERIVED, not listed. This was `new Set(['measure', 'pipeline'])` until
+// src/update-io.js was added, at which point the gate correctly said the new
+// module would not load and incorrectly said it "does not import anything
+// native" -- it imports react-native on its first line. A hand-kept list beside
+// the thing it describes is the fifth hole in this one file and the same root
+// cause as the other four. Now a module is native if it says so in its own
+// import statements.
+const NATIVE_SPECIFIERS = /^(react-native|@shopify\/react-native-skia|react-native-.*|expo|expo-.*|@expo\/.*)$/;
+function importsSomethingNative(source) {
+  const specs = [
+    ...source.matchAll(/^\s*import\s+(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]/gm),
+    ...source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g),
+  ].map((m) => m[1]);
+  return specs.some((sp) => NATIVE_SPECIFIERS.test(sp));
+}
+const NATIVE = new Set(
+  readdirSync(SRC)
+    .filter((f) => f.endsWith('.js'))
+    .filter((f) => importsSomethingNative(readFileSync(join(SRC, f), 'utf8')))
+    .map((f) => f.replace(/\.js$/, '')),
+);
 
 // App.js is included because it is a consumer of every module here and lives
 // outside src/: the first import added to it after this file was written was
