@@ -1,11 +1,14 @@
 // Tests for src/crop.js — Phase 2's gesture arithmetic.
 //
-//   for b in fit_cover delta_offset no_scale min_ignored move_shrinks \
-//            resize_translates clamp_fields edge_steals_corner no_round; do
+//   for b in $(grep -o "BREAK === '[a-z_0-9]*'" src/crop.test.mjs \
+//               | cut -d"'" -f2 | sort -u); do
 //     BREAK=$b node src/crop.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
-// Every one must print 1.
+// Every one must print 1. DERIVED, not typed: the list that used to sit here
+// named nine mutants and would have gone stale the moment `not_worklet` was
+// added. Three hand-written BREAK lists in this repo had already fallen behind
+// the suites they described.
 //
 // `clamp_fields` is the one that matters, because it is the same defect
 // `clampCrop` in plan.js already carries a header about: clamping x while
@@ -18,6 +21,7 @@
 // invariant holds across 441 constructed gestures, and the named case says
 // which one broke and by how much. Neither alone is enough — a sweep that fails
 // tells you nothing about where.
+import { readFileSync } from 'node:fs';
 import * as real from './crop.js';
 
 const BREAK = process.env.BREAK || '';
@@ -104,6 +108,13 @@ if (BREAK === 'fit_cover') {
       h: s.h,
     };
   };
+} else if (
+  BREAK === 'not_worklet'
+  || BREAK === 'default_captures'
+  || BREAK === 'crlf_checkout'
+) {
+  // Handled where it is used, at the foot of the file: it edits the SOURCE
+  // text rather than a function, so there is nothing to swap in here.
 } else if (BREAK) {
   console.log(`unknown BREAK: ${BREAK}`);
   process.exit(2);
@@ -334,6 +345,68 @@ console.log('every gesture, from every handle, lands somewhere legal');
   check(`none of the ${cases} left the image`, outside === 0, String(outside));
   check(`none of the ${cases} went under the minimum`, tooSmall === 0, String(tooSmall));
   check(`none of the ${cases} landed on a fractional pixel`, fractional === 0, String(fractional));
+}
+
+// Every function the drag calls from the UI thread must be a worklet.
+//
+// This is the only check in the file that reads the SOURCE instead of calling
+// the function, and that is not laziness. `'worklet';` is a directive for a
+// babel plugin: in node it is an inert string-literal statement with no
+// run-time effect whatsoever, so there is nothing to call and nothing to
+// observe. The failure it guards is invisible on a desktop and fatal on the
+// phone — Reanimated throws the first time a finger moves, because a worklet
+// may only call other worklets — and `src/crop.js` is imported by App.js,
+// which no gate loads. A source check is the only instrument that exists.
+//
+// The list is DERIVED, not typed: add a helper to crop.js and forget the
+// directive, and the count check fails as well as the per-function one.
+console.log("every function on the drag path carries 'worklet'");
+{
+  // Normalised to LF FIRST, and that is not tidiness. The patterns below
+  // anchor on `{\n`, and this machine has `core.autocrlf=true`: crop.js is LF
+  // in the object store and CRLF in this working copy, so a regex written
+  // against one checkout silently matches nothing in the other. It found nine
+  // functions warm and zero in a clone, which reads as "the module is empty"
+  // rather than as "the pattern is wrong". `.gitattributes` exists in this
+  // repo because the same class of fault already broke the signing gate.
+  let text = readFileSync(new URL('./crop.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // Undo that, to prove the normalisation is load-bearing rather than decorative.
+  if (BREAK === 'crlf_checkout') text = text.replace(/\n/g, '\r\n');
+  if (BREAK === 'not_worklet') text = text.replace(/^ *'worklet';\n/gm, '');
+
+  const decls = [...text.matchAll(/^(?:export )?function (\w+)\s*\(([\s\S]*?)\)\s*\{\n([^\n]*)/gm)];
+  const arrows = [...text.matchAll(/^const (\w+) = \(([^)]*)\) => \{\n([^\n]*)/gm)];
+  const all = [...decls, ...arrows].map((m) => ({
+    name: m[1],
+    params: m[2],
+    first: m[3].trim(),
+  }));
+
+  check(
+    'the scan found every function in the module',
+    all.length === 9,
+    `${all.length}: ${all.map((f) => f.name).join(' ')}`,
+  );
+  for (const f of all) {
+    check(`${f.name} opens with the directive`, f.first === "'worklet';", f.first || '(blank)');
+  }
+
+  // The second half of the same rule, and the one that actually shipped a
+  // crash: `min = MIN_CROP` in a parameter list. The plugin builds a worklet's
+  // closure from the identifiers it finds in the BODY, so a constant named
+  // only in a default is absent on the UI thread and the first touch throws
+  // `Property 'TOUCH' doesn't exist`. Node fills it from module scope, so
+  // nothing on a desktop can tell. Lower-case defaults are unaffected —
+  // `dx = 0` is a literal, not a reference — so the pattern is deliberately
+  // narrow: a SCREAMING_CASE name after an `=` inside a parameter list.
+  let params = all.map((f) => f.params).join(' | ');
+  if (BREAK === 'default_captures') params = '{ touch = TOUCH } = {}';
+  const captured = [...params.matchAll(/=\s*([A-Z][A-Z0-9_]{2,})/g)].map((m) => m[1]);
+  check(
+    'no default parameter names a module constant',
+    captured.length === 0,
+    captured.join(' '),
+  );
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

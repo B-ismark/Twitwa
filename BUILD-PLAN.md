@@ -434,10 +434,14 @@ and user pinch-zoom (the loupe answers the same need for less).
 **Started 2026-09-18: the arithmetic exists, the surface does not.**
 `spike/src/crop.js` holds the geometry -- contain-fit projection, viewport-to-image
 conversion, the nine handles, the minimum clamp and hit testing -- as a pure module
-with 78 checks and 9 mutations. Everything in it is in image pixels, per the
-constraint below. What is left is the part that needs the phone: the
-gesture-handler/reanimated surface, the corner brackets, the excluded status-bar
-band, and the frame rate.
+with 89 checks and 11 mutations. Everything in it is in image pixels, per the
+constraint below.
+
+**Shipping as of 2026-09-18:** the scrim, the corner brackets, the drag itself
+on the UI thread, Reset distinct from Start over, and the auto-proposed crop
+the editor opens on. **Still to do in this phase:** `TOUCH` 44 -> 48, the
+rule-of-thirds grid on touch, the loupe at the dragged corner, and the
+status-bar band as something that can be dragged back in.
 
 **The owner has now used it, 2026-09-18: "moving the crop is not as smooth as
 I'd expect."** That is the verdict this phase exists to answer, and the cause
@@ -448,18 +452,57 @@ the Skia card. The projection arithmetic is off the JS thread in name only:
 result is being routed through React state. Worklets are not a refinement
 here, they are the fix.
 
-Two things to do in the same pass, because both are "get the work off the main
-thread" and doing them separately means measuring twice:
+Two things to do, both "get the work off the main thread":
 
-- The drag itself, as a worklet driving shared values, with React state
-  written once on gesture end rather than once per frame
+- ~~The drag itself, as a worklet driving shared values, with React state
+  written once on gesture end rather than once per frame~~ **DONE
+  2026-09-18**, measured below.
 - The auto-crop's whole-image read, **measured at 200–234ms on the JS thread
-  at import** on 2026-09-18. It is the largest single cost in the import
+  at import** on 2026-09-18. It is the largest single cost in the import, and
+  it is the next thing in this phase.
 
-**Verification.** 60fps on the slowest device available, not on the fastest. A crop
-surface that stutters is the one performance failure a user cannot ignore.
-There is now a first-hand report that it does; a frame-rate number that
-disagrees with that report is measuring the wrong thing.
+### The drag, measured on the phone
+
+`dumpsys gfxinfo` over eight `input swipe` drags of the SE corner, twice per
+build, on the Pixel 6 Pro. Two runs rather than one because a single run
+establishes a direction and not a magnitude.
+
+| build | frames | janky | missed vsync | slow UI thread | 99th |
+| --- | --- | --- | --- | --- | --- |
+| `setEd` per frame, run 1 | 699 | 24 (3.4%) | 24 | 23 | 20ms |
+| `setEd` per frame, run 2 | 657 | 50 (7.6%) | 50 | 46 | 22ms |
+| worklet, run 1 | 830 | 1 (0.1%) | 0 | 1 | 13ms |
+| worklet, run 2 | 982 | 1 (0.1%) | 0 | 1 | 13ms |
+
+The two counters that name a thread — Missed Vsync and Slow UI thread — go to
+zero and one. Frames PRODUCED go up, which is the same finding from the other
+side: the old build was dropping frames of the gesture, not drawing them
+cheaply.
+
+**One counter moved the wrong way and is not explained.** "Number High input
+latency" rose from 106/213 to 824/964. It is reported here rather than left
+out, because a table that shows only the columns that agree with the change is
+not a measurement. The plausible reading is that it is an artifact of
+`input swipe`: synthetic events are injected on a schedule that has nothing to
+do with the display, and the counter is a gap between an input timestamp and a
+frame. That is a guess. A real thumb would settle it and has not been asked
+for one.
+
+**Two defects were found by putting this on the phone, neither visible to any
+desktop check.** The first is the one that shipped: `pickHandle`'s
+`{ touch = TOUCH }` default is not captured into a worklet's closure, so the
+first finger-down threw `Property 'TOUCH' doesn't exist`. The second is that a
+`gfxinfo` run over that broken build reported **0.52% jank** — a clean number
+for a gesture that was throwing on every touch. Both are now guarded:
+`BREAK=not_worklet` and `BREAK=default_captures` in `src/crop.test.mjs`, and
+the bench takes a screenshot as a positive control before its number is
+believed.
+
+**Still verification, not done.** 60fps under a real thumb, on the slowest
+device available rather than the fastest. `input swipe` is not a finger: it
+cannot vary its pressure, it cannot pause, and it moves in a straight line.
+The owner's own report is the only instrument that has said "not smooth" so
+far, and it is the one that has to say otherwise.
 
 ## Phase 3 — Cover
 

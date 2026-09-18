@@ -48,6 +48,7 @@ import { File, Paths } from 'expo-file-system';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   interpolateColor,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -588,45 +589,105 @@ export default function App() {
 
   // --- gestures on the raw layer ------------------------------------------
   //
-  // Both tools work in IMAGE pixels and both commit through setState, so the
-  // rect in `ed` is always the rect the renderer will use. A shared value
-  // holding the rect would be faster and would be a second copy of the crop.
-  const grabbed = useRef(null);
-  const startRect = useRef(null);
+  // Both tools work in IMAGE pixels, so the rect that reaches `ed` is the rect
+  // the renderer will use.
+  //
+  // THE CROP DRAG RUNS ON THE UI THREAD AND `ed` IS WRITTEN ONCE, ON RELEASE.
+  // It used to run with `.runOnJS(true)` and call `setEd` on every frame. The
+  // comment that stood here said a shared value "would be faster and would be
+  // a second copy of the crop", and chose the copy-free version. The owner
+  // then used the build and said the drag was not as smooth as expected, which
+  // settles it: every finger movement was a thread hop, a re-render of the
+  // whole app, a fresh `shot` plan, and a Skia recompose of the card canvas —
+  // a canvas sitting at opacity 0, because a takeover tool is showing the raw
+  // layer. The invisible layer was the expensive one.
+  //
+  // `liveCrop` is the second copy, and the rule that keeps it from drifting is
+  // that it is a DRAG BUFFER, not a parallel source of truth:
+  //
+  //   - `ed.crop` is authoritative, and is the only thing the card, the export
+  //     and every module downstream ever read.
+  //   - `liveCrop` is what the overlay draws while a finger is down, and it is
+  //     written from `ed.crop` whenever `ed.crop` changes for any other
+  //     reason — a new image, Reset, Start over, an auto-proposal.
+  //   - Exactly one write flows the other way, in `onFinalize`, and after it
+  //     the effect below writes the same value straight back.
+  //
+  // So the two can only disagree during a gesture, which is the interval in
+  // which nothing reads `ed.crop`.
+  const liveCrop = useSharedValue(null);
+  const grabbed = useSharedValue(null);
+  const dragFrom = useSharedValue(null);
 
-  const cropGesture = useMemo(
-    () =>
+  useEffect(() => {
+    liveCrop.value = ed ? ed.crop : null;
+  }, [ed, liveCrop]);
+
+  const commitCrop = useCallback((next) => {
+    setEd((s) => (s ? { ...s, crop: next } : s));
+  }, []);
+
+  const cropGesture = useMemo(() => {
+    // Read off `src` here, in the render, rather than inside the worklet: a
+    // worklet captures what it closes over by value at creation, and a Skia
+    // image is not serialisable across the boundary. Plain numbers are.
+    const bounds = src ? { x: 0, y: 0, w: src.width, h: src.height } : null;
+    return (
       Gesture.Pan()
         .onBegin((e) => {
-          if (!view || !ed) return;
-          grabbed.current = pickHandle({ x: e.x, y: e.y }, ed.crop, view);
-          startRect.current = ed.crop;
+          'worklet';
+          const start = liveCrop.value;
+          if (!view || !bounds || !start) return;
+          const h = pickHandle({ x: e.x, y: e.y }, start, view);
+          grabbed.value = h;
+          dragFrom.value = h ? start : null;
         })
+        // translationX, not changeX. crop.js's header says deltas are measured
+        // from the gesture start and applied to the rect as it was then; the
+        // old code passed per-frame changes and advanced its own start on each
+        // one, which is the accumulating-rounding version that header warns
+        // about. Total-from-start is idempotent, so a dropped frame costs
+        // nothing — and it is the reason `dragFrom` is never reassigned here.
         .onChange((e) => {
-          if (!view || !grabbed.current || !startRect.current) return;
-          const d = toImageDelta(view, { dx: e.changeX, dy: e.changeY });
-          const next = dragCrop({
-            start: startRect.current,
-            handle: grabbed.current,
+          'worklet';
+          if (!grabbed.value || !dragFrom.value || !bounds || !view) return;
+          const d = toImageDelta(view, { dx: e.translationX, dy: e.translationY });
+          liveCrop.value = dragCrop({
+            start: dragFrom.value,
+            handle: grabbed.value,
             dx: d.dx,
             dy: d.dy,
-            bounds: { x: 0, y: 0, w: src.width, h: src.height },
+            bounds,
             min: MIN_CROP,
           });
-          startRect.current = next;
-          setEd((s) => (s ? { ...s, crop: next } : s));
         })
+        // onFinalize, not onEnd: a gesture cancelled by a system takeover — a
+        // notification shade, a call — still has to put the rect it left on
+        // screen into `ed`, or the overlay and the card disagree until the
+        // next drag.
         .onFinalize(() => {
-          grabbed.current = null;
-          startRect.current = null;
+          'worklet';
+          if (grabbed.value && liveCrop.value) runOnJS(commitCrop)(liveCrop.value);
+          grabbed.value = null;
+          dragFrom.value = null;
         })
-        .runOnJS(true),
-    [view, ed, src],
-  );
+    );
+    // `ed` is deliberately NOT a dependency. It used to be, so every frame of
+    // the old drag rebuilt the Gesture object it was in the middle of.
+  }, [view, src, commitCrop, liveCrop, grabbed, dragFrom]);
 
   // Cover, still one box. Phase 3 makes it several objects with a selection and
   // a delete; this is the shipped behaviour moved onto the new state, not a new
   // design, and the survey says plainly that one box is the wrong shape.
+  //
+  // Left on the JS thread on purpose. Cover draws nothing while the finger is
+  // down — it only appends the box on release — so there is no per-frame
+  // render to move off, and Phase 3's OPEN QUESTION may delete the whole tool.
+  // Its own ref rather than the crop's shared value: the two are different
+  // quantities that happened to share a variable, and that sharing only ever
+  // worked because a tool takes the whole screen.
+  const startRect = useRef(null);
+
   const coverGesture = useMemo(
     () =>
       Gesture.Pan()
@@ -949,8 +1010,11 @@ export default function App() {
             {ed && ed.tool === 'crop' ? (
               <GestureDetector gesture={cropGesture}>
                 <View style={StyleSheet.absoluteFill}>
-                  <Scrim rect={toViewportRect(view, ed.crop)} stage={stage} />
-                  <CropFrame rect={toViewportRect(view, ed.crop)} />
+                  {/* The shared value, not `ed.crop`. Passing the rect would
+                      put the projection back in the render and undo the whole
+                      change: React would have to re-render to move the frame. */}
+                  <Scrim crop={liveCrop} view={view} stage={stage} />
+                  <CropFrame crop={liveCrop} view={view} />
                 </View>
               </GestureDetector>
             ) : null}
@@ -1048,6 +1112,20 @@ export default function App() {
   );
 }
 
+/**
+ * What the crop overlay draws before a crop exists.
+ *
+ * Never seen — the overlay only mounts under `ed.tool === 'crop'`, and there
+ * is no editor without a crop — but the two overlay components read a shared
+ * value that is null between images, and a worklet that throws takes the UI
+ * thread with it.
+ */
+const ZERO_RECT = { x: 0, y: 0, w: 0, h: 0 };
+
+/** Corner bracket: the arm's length, and the thickness of the two sides drawn. */
+const BRACKET = 22;
+const BRACKET_W = 3;
+
 /** A viewport rect as absolute-position style. */
 function boxStyle(r) {
   return { left: r.x, top: r.y, width: r.w, height: r.h };
@@ -1062,15 +1140,38 @@ function boxStyle(r) {
  * bright frame on undimmed pixels — leaves the user reading the whole
  * screenshot rather than the part they chose.
  */
-function Scrim({ rect, stage }) {
-  const right = rect.x + rect.w;
-  const bottom = rect.y + rect.h;
+function Scrim({ crop, view, stage }) {
+  // Four hooks, unconditionally, one per band. Reanimated updates these on the
+  // UI thread from `crop`, so a drag never reaches React at all — which is the
+  // whole point of the change and the reason the bands cannot be a `.map`.
+  const top = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: 0, top: 0, width: stage.w, height: Math.max(0, r.y) };
+  });
+  const bottom = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    const b = r.y + r.h;
+    return { left: 0, top: b, width: stage.w, height: Math.max(0, stage.h - b) };
+  });
+  const left = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: 0, top: r.y, width: Math.max(0, r.x), height: Math.max(0, r.h) };
+  });
+  const right = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    const x = r.x + r.w;
+    return { left: x, top: r.y, width: Math.max(0, stage.w - x), height: Math.max(0, r.h) };
+  });
   return (
     <>
-      <View style={[styles.scrim, { left: 0, top: 0, width: stage.w, height: Math.max(0, rect.y) }]} />
-      <View style={[styles.scrim, { left: 0, top: bottom, width: stage.w, height: Math.max(0, stage.h - bottom) }]} />
-      <View style={[styles.scrim, { left: 0, top: rect.y, width: Math.max(0, rect.x), height: Math.max(0, rect.h) }]} />
-      <View style={[styles.scrim, { left: right, top: rect.y, width: Math.max(0, stage.w - right), height: Math.max(0, rect.h) }]} />
+      <Animated.View style={[styles.scrim, top]} />
+      <Animated.View style={[styles.scrim, bottom]} />
+      <Animated.View style={[styles.scrim, left]} />
+      <Animated.View style={[styles.scrim, right]} />
     </>
   );
 }
@@ -1084,21 +1185,45 @@ function Scrim({ rect, stage }) {
  * the rest of the list, including the rule-of-thirds grid on touch and the
  * loupe at the dragged corner.
  */
-function CropFrame({ rect }) {
-  const b = 3;
-  const len = 22;
-  const corners = [
-    { left: rect.x, top: rect.y, borderLeftWidth: b, borderTopWidth: b },
-    { left: rect.x + rect.w - len, top: rect.y, borderRightWidth: b, borderTopWidth: b },
-    { left: rect.x, top: rect.y + rect.h - len, borderLeftWidth: b, borderBottomWidth: b },
-    { left: rect.x + rect.w - len, top: rect.y + rect.h - len, borderRightWidth: b, borderBottomWidth: b },
-  ];
+function CropFrame({ crop, view }) {
+  const len = BRACKET;
+  // One hook per element, for the same reason as Scrim: these five must follow
+  // the finger on the UI thread. Only position is animated — the border widths
+  // that make a corner an L are static, and live in the style objects below,
+  // so each worklet returns two numbers rather than a whole style.
+  const edge = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x, top: r.y, width: r.w, height: r.h };
+  });
+  const nw = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x, top: r.y };
+  });
+  const ne = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x + r.w - len, top: r.y };
+  });
+  const sw = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x, top: r.y + r.h - len };
+  });
+  const se = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x + r.w - len, top: r.y + r.h - len };
+  });
+  const box = { width: len, height: len };
   return (
     <>
-      <View style={[styles.cropEdge, boxStyle(rect)]} />
-      {corners.map((c, i) => (
-        <View key={i} style={[styles.cropCorner, { width: len, height: len }, c]} />
-      ))}
+      <Animated.View style={[styles.cropEdge, edge]} />
+      <Animated.View style={[styles.cropCorner, box, styles.cornerNW, nw]} />
+      <Animated.View style={[styles.cropCorner, box, styles.cornerNE, ne]} />
+      <Animated.View style={[styles.cropCorner, box, styles.cornerSW, sw]} />
+      <Animated.View style={[styles.cropCorner, box, styles.cornerSE, se]} />
     </>
   );
 }
@@ -1294,6 +1419,13 @@ const styles = StyleSheet.create({
     outlineWidth: 1,
     outlineColor: 'rgba(0,0,0,0.6)',
   },
+  // Which two sides of each bracket are drawn. Static, so they stay out of the
+  // animated styles that follow the finger — a worklet returning `left` and
+  // `top` is two numbers a frame, one returning the whole style is nine.
+  cornerNW: { borderLeftWidth: BRACKET_W, borderTopWidth: BRACKET_W },
+  cornerNE: { borderRightWidth: BRACKET_W, borderTopWidth: BRACKET_W },
+  cornerSW: { borderLeftWidth: BRACKET_W, borderBottomWidth: BRACKET_W },
+  cornerSE: { borderRightWidth: BRACKET_W, borderBottomWidth: BRACKET_W },
   maskBox: {
     position: 'absolute',
     borderWidth: 2,

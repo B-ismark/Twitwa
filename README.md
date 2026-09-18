@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1374 of the 1390 checks run in a clone**, and the 16 that cannot say so
+true: **1385 of the 1401 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -123,7 +123,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `App.js` | The screen. Three states and at most three controls: choose a screenshot, cover something, make the card, share it. The eleven-button Phase 0 harness it used to be still exists, behind a long press on the caption |
 | `src/theme.js` | The token table, and the only place a colour is written down. Plain data with no react-native import, so `contrast.py` reads the shipped values out of this file rather than a second copy of them |
 | `src/copy.js` | Every user-facing word, as plain strings. A view that writes its own text is a gate failure, not a style preference |
-| `src/crop.js` | Phase 2's gesture arithmetic, separated from the gesture: fit, drag, resize, clamp, handle hit-testing, all in image-pixel space. Pure, so the arithmetic is testable without a finger. **Wired to nothing yet** |
+| `src/crop.js` | Phase 2's gesture arithmetic, separated from the gesture: fit, drag, resize, clamp, handle hit-testing, all in image-pixel space. Pure, so the arithmetic is testable without a finger — and every function carries `'worklet'`, an inert string in node, so the drag calls it on the UI thread |
 | `src/DevPanel.js` | The Phase 0/1 measurement harness, kept reachable because every measured number in this repository came out of its buttons. Deliberately outside `check-copy.mjs`'s view list: "Q1+Q3" is the right label for a cable, and the wrong one for a person |
 | `plugins/withReleaseSigning.js` | Signs release builds with the project's own key instead of the debug key the RN template ships. A config plugin because `android/` is generated and gitignored, so a direct edit does not survive `prebuild`. Reads the keystore path from `TWITWA_KEYSTORE_PROPERTIES`, so no path and no secret is committed |
 | `plugins/withAndroidSize.js` | The gradle properties that took the release APK from 124.5 MB down. Re-reads what it wrote, because both of the settings involved fail by silently doing nothing |
@@ -145,7 +145,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1390 checks and 197 mutations** counting the two PNG tools, all three
+none (**1401 checks and 200 mutations** counting the two PNG tools, all three
 config plugins, the update module and the six rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -162,14 +162,14 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1374 of those 1390 and reports 16 skipped**, and it runs all 197
+**A clone runs 1385 of those 1401 and reports 16 skipped**, and it runs all 200
 mutations with none surviving. Measured 2026-09-18 from `git write-tree` over
 the staged tree of this commit, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1390 − 1374 = 16, which is the skip count, so the
+That pairing is the check: 1401 − 1385 = 16, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -183,6 +183,18 @@ App.js passed two arguments to a three-argument function and crashed on every
 single import, with all of the numbers above green. The fix was to move the
 logic out of the view rather than to correct the call — see `src/autocrop.js`
 and `src/skia.js`, and the Phase 4.5 section of `BUILD-PLAN.md`.
+
+**There is a second kind of blindness, found the same way on the same day.**
+Moving the crop drag onto the UI thread made `src/crop.js` a set of Reanimated
+worklets, and a worklet's closure is built by a babel plugin from the
+identifiers in the function BODY. `pickHandle`'s `{ touch = TOUCH }` default is
+in the parameter list, so `TOUCH` never crossed the thread boundary and the
+first finger-down threw `Property 'TOUCH' doesn't exist` — while node, which
+resolves the same default from module scope, ran all 89 of that file's checks
+green. Neither failure is about a missing test; both are about a gate that
+cannot see the thread or the view the code actually runs in. `BREAK=not_worklet`
+and `BREAK=default_captures` now read the source text of `crop.js`, which is
+the only instrument a desktop has for either.
 
 One qualification on the method, because it is the part that could rot: the
 clone's `node_modules` is a **junction to the warm tree's**, which the recipe
@@ -358,7 +370,7 @@ cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
-cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
+cd spike && node src/crop.test.mjs       # 89 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
 cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
@@ -419,7 +431,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 197 mutations
+done                                     # silence is the pass; 200 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

@@ -23,6 +23,40 @@
 // that arrives out of order or is dropped under load moves the rect by the
 // wrong amount permanently. Total-from-start is idempotent — replaying the same
 // gesture gives the same rect — and a dropped frame costs nothing.
+//
+// WHY EVERY FUNCTION HERE OPENS WITH `'worklet';`.
+// The owner used the build on 2026-09-18 and said the drag was not as smooth as
+// expected. It was not: the gesture ran with `.runOnJS(true)` and committed the
+// rect through `setState` on every frame, so each finger movement crossed to the
+// JS thread, re-rendered the whole app and recomposed a Skia canvas that was at
+// opacity 0 at the time. This module is where that is paid for, because the
+// arithmetic the drag needs lives here, and a UI-thread caller can only call a
+// UI-thread function.
+//
+// The directive costs this file NOTHING. It is a string-literal statement, so
+// node ignores it and every check below still runs unchanged on the desktop;
+// Reanimated's babel plugin reads it and makes the function callable from the
+// UI thread. That is the entire reason the geometry was separated from the
+// gesture in the first place — it just took a device to show why it mattered.
+//
+// The consequence to remember: a worklet may only call other worklets. `clamp`
+// and `minFor` are private and still carry the directive, because `dragCrop`
+// calls them and a missing one fails at run time on the phone with a message
+// about a function not being a worklet, which no desktop check can see. The
+// guard for that is in crop.test.mjs — `BREAK=not_worklet`.
+//
+// AND NO DEFAULT PARAMETER MAY NAME A MODULE CONSTANT. `min = MIN_CROP` and
+// `{ touch = TOUCH }` read perfectly and both were here; on the phone the
+// first finger-down threw `Property 'TOUCH' doesn't exist` from inside
+// `pickHandle`. The babel plugin builds a worklet's closure from the free
+// identifiers it finds in the BODY, and a default sits in the parameter list,
+// so the constant is never copied across the thread boundary. Node fills the
+// same default from module scope without complaint, so every desktop check
+// stayed green — and so did a `dumpsys gfxinfo` run over eight drags, which
+// reported 0.52% jank for a gesture that was throwing on every touch. That is
+// the constructed-measurement failure in its purest form: the instrument was
+// fine, the population was empty. Defaults are resolved in the body instead,
+// and `BREAK=default_captures` is the guard.
 
 /** The nine things a finger can grab. Eight edges and corners, plus the body. */
 export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w', 'move'];
@@ -42,7 +76,10 @@ export const MIN_CROP = 120;
 /** Handle hit target, in screen points. 44 is the platform floor for a touch. */
 export const TOUCH = 44;
 
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const clamp = (v, lo, hi) => {
+  'worklet';
+  return v < lo ? lo : v > hi ? hi : v;
+};
 
 /**
  * The contain-fit projection from image pixels to the viewport.
@@ -50,6 +87,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
  * @returns {{scale: number, offsetX: number, offsetY: number}}
  */
 export function fitView({ imageW, imageH, viewW, viewH }) {
+  'worklet';
   if (!(imageW > 0 && imageH > 0 && viewW > 0 && viewH > 0)) {
     throw new Error(`bad fit: ${imageW}x${imageH} into ${viewW}x${viewH}`);
   }
@@ -65,6 +103,7 @@ export function fitView({ imageW, imageH, viewW, viewH }) {
 
 /** A touch position in the viewport, as a position in the image. */
 export function toImagePoint(view, point) {
+  'worklet';
   return { x: (point.x - view.offsetX) / view.scale, y: (point.y - view.offsetY) / view.scale };
 }
 
@@ -80,11 +119,13 @@ export function toImagePoint(view, point) {
  * error.
  */
 export function toImageDelta(view, delta) {
+  'worklet';
   return { dx: delta.dx / view.scale, dy: delta.dy / view.scale };
 }
 
 /** An image-space rect, as a viewport rect. For drawing and for hit testing. */
 export function toViewportRect(view, rect) {
+  'worklet';
   return {
     x: view.offsetX + rect.x * view.scale,
     y: view.offsetY + rect.y * view.scale,
@@ -99,6 +140,7 @@ export function toViewportRect(view, rect) {
 // naive clamp, silently returns the low end and puts the rect outside the
 // image.
 function minFor(bounds, min) {
+  'worklet';
   return { w: Math.min(min, bounds.w), h: Math.min(min, bounds.h) };
 }
 
@@ -114,8 +156,9 @@ function minFor(bounds, min) {
  * minimum on every frame — so it is not worth centring and pretending the
  * choice is meaningful.
  */
-export function normalizeCrop(bounds, box, min = MIN_CROP) {
-  const m = minFor(bounds, min);
+export function normalizeCrop(bounds, box, min) {
+  'worklet';
+  const m = minFor(bounds, min === undefined ? MIN_CROP : min);
   const w = clamp(Math.round(box.w), m.w, bounds.w);
   const h = clamp(Math.round(box.h), m.h, bounds.h);
   return {
@@ -152,10 +195,12 @@ export function normalizeCrop(bounds, box, min = MIN_CROP) {
  * Hence edges, not x/y/w/h. At most one vertical and one horizontal edge moves
  * for any handle, so each clamp can safely read its opposite.
  */
-export function dragCrop({ start, handle, dx = 0, dy = 0, bounds, min = MIN_CROP }) {
+export function dragCrop({ start, handle, dx = 0, dy = 0, bounds, min }) {
+  'worklet';
   if (!HANDLES.includes(handle)) throw new Error(`unknown handle: ${handle}`);
-  const s = normalizeCrop(bounds, start, min);
-  const m = minFor(bounds, min);
+  const floor = min === undefined ? MIN_CROP : min;
+  const s = normalizeCrop(bounds, start, floor);
+  const m = minFor(bounds, floor);
   // Rounded once, here, rather than at the end. Integer deltas on an integer
   // rect keep every edge integral, so no later rounding can shave a pixel off
   // the minimum or off the bounds.
@@ -203,9 +248,10 @@ export function dragCrop({ start, handle, dx = 0, dy = 0, bounds, min = MIN_CROP
  * user cannot resize two axes at once anywhere. `BREAK=edge_steals_corner`
  * is that version.
  */
-export function pickHandle(point, crop, view, { touch = TOUCH } = {}) {
+export function pickHandle(point, crop, view, { touch } = {}) {
+  'worklet';
   const v = toViewportRect(view, crop);
-  const half = touch / 2;
+  const half = (touch === undefined ? TOUCH : touch) / 2;
   const near = (a, bv) => Math.abs(a - bv) <= half;
   const left = v.x;
   const right = v.x + v.w;
