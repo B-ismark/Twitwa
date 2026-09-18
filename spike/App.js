@@ -7,15 +7,33 @@
 // holds every one of those buttons, because the numbers in this repository
 // came out of them.
 //
-// What replaced it is three states and never more than three controls:
-// nothing picked, a screenshot to work on, a finished card. Words come from
-// src/copy.js and colours from src/theme.js; neither is written here, and
-// tools/check-copy.mjs fails the build if a view starts writing its own.
+// PHASE 4.5 DELETED THE RENDER STEP. There used to be a "Make card" button and
+// a `showingResult` flag: the canvas showed the screenshot, you pressed the
+// button, and the canvas showed a card. Nothing surveyed works that way, the
+// spec never described it, and it caused a real bug — the Cover box was drawn
+// over one image and applied to another, because the same on-screen rectangle
+// points at different content in the two.
 //
-// NOT DONE HERE, deliberately: saving to Photos. That needs MediaStore and
-// scoped-storage handling per API level, which is Phase 5. Share hands the
-// file to the system sheet, which is the path the product exists for, and it
-// uses expo-sharing, which was already a dependency and previously unused.
+// So the canvas IS the card, composed at screen resolution and recomposed on
+// every change. The rules live in three modules and none of them are here:
+//
+//   src/compose.js   one composition, projected to the stage and to 1080. The
+//                    preview and the export cannot be two layouts because
+//                    there is only one `project()`.
+//   src/shell.js     which tool is open, which image the canvas draws, and
+//                    what Cancel, Reset and Done each put back.
+//   src/autocrop.js  the crop the editor opens on, so there is a card to see
+//                    before anything is touched.
+//
+// This file measures the stage, reads pixels, draws, and routes gestures. When
+// a question here has a right answer that does not depend on React, it belongs
+// in one of those three; that is what keeps them testable on a desktop.
+//
+// NOT DONE HERE, deliberately: Save to Photos and Copy image, which the IA
+// puts in the overflow. The first is MediaStore and scoped storage per API
+// level and the second needs a clipboard dependency this app does not have;
+// both are Phase 5. The overflow ships with what exists rather than with
+// disabled rows explaining themselves.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DevSettings,
@@ -28,8 +46,19 @@ import {
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import { Canvas, Image as SkiaImage } from '@shopify/react-native-skia';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
+import {
+  Canvas,
+  Group,
+  Image as SkiaImage,
+  Rect,
+  rect as skRect,
+  rrect as skRRect,
+} from '@shopify/react-native-skia';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 
@@ -41,7 +70,32 @@ import {
   measureRoundTrip,
   stressFullRead,
 } from './src/measure';
-import { renderCard, decodeUri } from './src/pipeline';
+import { renderCard, decodeUri, sampleCropBackground } from './src/pipeline';
+import { composition, project, MIN_PROJECT, MAX_RADIUS } from './src/compose';
+import {
+  TOOL,
+  TOOLS,
+  barMode,
+  canReset,
+  cancelTool,
+  canvasShows,
+  doneTool,
+  editorState,
+  openTool,
+  padStops,
+  resetTool,
+  setBackground,
+  setPadding,
+  setRadius,
+  BACKGROUNDS,
+  PAD_MAX,
+  PAD_MIN,
+} from './src/shell';
+import { proposeCrop, canProfileColumns } from './src/autocrop';
+import { rowInkProfile, colInkProfile, detectStatusBar } from './src/pixels';
+import { readSubRect } from './src/read';
+import { maskToDestPixels, planOutput } from './src/plan';
+import { dragCrop, fitView, pickHandle, toImageDelta, toViewportRect, MIN_CROP } from './src/crop';
 import {
   canReloadRuntime,
   isStaleLauncherError,
@@ -56,6 +110,19 @@ import DevPanel from './src/DevPanel';
 
 const PAPER = '#F6F4EF';
 const LOG = 'PHASE0';
+
+/** The cross-fade between the composed card and the raw screenshot. */
+const FADE_MS = 160;
+
+/**
+ * Column subsampling for the auto-crop's profiles.
+ *
+ * The profile is a coverage ratio, so its denominator moves with the step and
+ * the numbers stay comparable. 8 rather than 2 because this runs once per
+ * import on the whole image, not on a 400-row band: a 1440x3120 capture is
+ * 3120 rows of 180 samples instead of 3120 of 720.
+ */
+const PROFILE_STEP = 8;
 
 // A dead picker launcher is repaired by replacing the JS runtime, which throws
 // away everything in memory, including the fact that the owner had just asked
@@ -94,12 +161,33 @@ function takeResumeFlag() {
   }
 }
 
-/** contain-fit an image into a box; returns the mapping both ways. */
-function fit(imgW, imgH, boxW, boxH) {
-  const scale = Math.min(boxW / imgW, boxH / imgH);
-  const w = imgW * scale;
-  const h = imgH * scale;
-  return { scale, w, h, offX: (boxW - w) / 2, offY: (boxH - h) / 2 };
+/**
+ * Profile the whole image and propose a crop.
+ *
+ * Both profiles cover every row and every column, which `proposeCrop` insists
+ * on and throws about: `rowInkProfile` takes a row cap, so a capped profile is
+ * one forgotten argument away at every call site and reports the flat run at
+ * the CAP as the flat run at the bottom of the picture.
+ *
+ * The status-bar cut comes from the same detector the renderer uses, on the
+ * same 400-row band, so the proposal and a later `trim: 'auto'` cannot
+ * disagree about where the status bar ended.
+ */
+function proposeFor(img) {
+  const width = img.width();
+  const height = img.height();
+  const full = readSubRect(img, { x: 0, y: 0, w: width, h: height });
+  const rows = rowInkProfile(full.buf, full.rowBytes, width, height, height, PROFILE_STEP);
+  // Asked before the read is used, not after. Past the ceiling the proposal
+  // trims vertically only and says so; see MAX_PROFILE_PX in src/autocrop.js
+  // for why this is the one whole-image read in the app and why it is bounded.
+  const cols = canProfileColumns(width, height)
+    ? colInkProfile(full.buf, full.rowBytes, width, height, width, PROFILE_STEP)
+    : null;
+  const band = Math.min(400, height);
+  const bandRows = rowInkProfile(full.buf, full.rowBytes, width, band, band, 2);
+  const statusBar = detectStatusBar(bandRows);
+  return proposeCrop({ width, height, rows, cols, statusBar });
 }
 
 export default function App() {
@@ -113,27 +201,29 @@ export default function App() {
   // against a zero-sized box puts a one-frame black rectangle on screen.
   const [stage, setStage] = useState(null);
 
-  const [src, setSrc] = useState(null);      // { img, width, height, ... }
-  const [shown, setShown] = useState(null);  // SkImage currently drawn
-  const [covered, setCovered] = useState(false);
-  // Which image is on the canvas: the source, or a result. The Cover box is only
-  // meaningful over the source. `map` converts view coordinates to SOURCE
-  // pixels, and a result is trimmed, padded and rescaled, so the same on-screen
-  // rectangle points at different content. Showing a result with the box still
-  // live meant the next render covered a region other than the one selected.
-  // Two previews, one box, and the box belongs to exactly one of them.
-  const [showingResult, setShowingResult] = useState(false);
+  const [src, setSrc] = useState(null);      // { img, width, height, uri, ... }
+  // The crop's own edge colour, from the renderer's own sampler.
+  //
+  // Sampled when the crop is COMMITTED rather than on every frame of a drag:
+  // it reads four edge strips, which is cheap but not free, and during a crop
+  // the canvas is showing the raw screenshot, so the card's frame is not on
+  // screen to be wrong. Committed means at import and on Done.
+  const [sampled, setSampled] = useState(null);
+  // The whole editor, in one object, from src/shell.js. Null with no
+  // screenshot: "no editor" and "an editor with nothing in it" are different
+  // states and only one of them can be drawn.
+  const [ed, setEd] = useState(null);
   const [log, setLog] = useState([]);
 
-  // Whether the Cover box is in use. The box is hidden until it is, because a
-  // rectangle sitting on someone's screenshot with no explanation is the single
-  // most confusing thing the old screen did.
-  const [useCover, setUseCover] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
-  const [cardPath, setCardPath] = useState(null);
-  const [cardSize, setCardSize] = useState(null);
+  const [menu, setMenu] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
+  // Dev only, and not part of the editor. The Q2 and P1 buttons put a measured
+  // image on the canvas in place of the card; this holds it. It is a separate
+  // piece of state rather than a mode of `ed` precisely so it cannot leak into
+  // the product's state machine the way `showingResult` did.
+  const [override, setOverride] = useState(null);
 
   // A newer APK, if there is one. Twitwa is handed out as a file, so nothing
   // tells a person that a new version exists unless the app does. See
@@ -151,18 +241,6 @@ export default function App() {
   const recoveryUsed = useRef(false);
   const lastConfig = useRef(null);
   const updateAsked = useRef(false);
-  const lastStage = useRef(null);
-
-  // Mask box in VIEW coordinates. Shared values so the drag stays on the UI thread.
-  const bx = useSharedValue(40);
-  const by = useSharedValue(120);
-  const bw = useSharedValue(240);
-  const bh = useSharedValue(52);
-
-  const map = useMemo(
-    () => (src && stage ? fit(src.width, src.height, stage.w, stage.h) : null),
-    [src, stage],
-  );
 
   const emit = useCallback((label, payload) => {
     const line = label + ' ' + JSON.stringify(payload);
@@ -172,45 +250,86 @@ export default function App() {
     setLog((prev) => [{ label, payload }, ...prev].slice(0, 12));
   }, []);
 
-  // A box drawn in one viewport means something different in another, which is
-  // the same rule the crop rect follows. The stage changes size on rotation and
-  // on a display-zoom change, so rather than let the box quietly point at
-  // different pixels, it goes back to a default inside the new stage and says
-  // so. Skipped on the first layout, where there is no previous viewport.
   const onStageLayout = useCallback((e) => {
     const { width, height } = e.nativeEvent.layout;
-    const next = { w: Math.round(width), h: Math.round(height) };
-    const prev = lastStage.current;
-    lastStage.current = next;
-    setStage(next);
-    if (!prev || (prev.w === next.w && prev.h === next.h)) return;
-    bx.value = Math.round(next.w * 0.1);
-    by.value = Math.round(next.h * 0.2);
-    bw.value = Math.round(next.w * 0.6);
-    bh.value = Math.round(next.h * 0.08);
-    emit('cover.reset', { from: prev, to: next, note: 'the box was drawn in a viewport that no longer exists' });
-  }, [bx, by, bw, bh, emit]);
+    setStage({ w: Math.round(width), h: Math.round(height) });
+  }, []);
 
-  // Ask once per mount whether a newer APK exists. Deliberately fire-and-forget:
-  // nothing waits on it, nothing is blocked by it, and a failure is a log line.
-  // The once-a-day throttle lives in src/update.js, so a person who restarts
-  // the app ten times does not produce ten requests.
+  // --- the card, as ratios and then as pixels ------------------------------
+  //
+  // One composition. `comp` is what the card IS; `shot` is that card at the
+  // size the stage can show. The export calls `project` again at up to 1080.
+  // Neither computes a layout, which is the whole point of src/compose.js.
+  const comp = useMemo(() => {
+    if (!ed) return null;
+    try {
+      return composition({ w: ed.crop.w, h: ed.crop.h }, ed.padding, ed.radius);
+    } catch (e) {
+      return null;
+    }
+  }, [ed]);
+
+  // The frame colour, taken from the renderer's own decision function rather
+  // than from a rule written again here. planOutput is pure arithmetic over a
+  // sample this component already has, so calling it costs nothing and buys
+  // the only thing that matters: the preview's frame and the PNG's frame are
+  // one answer, including the near-white and near-black fallbacks.
+  const fillColour = useMemo(() => {
+    if (!ed) return null;
+    try {
+      return planOutput({
+        crop: ed.crop,
+        padding: ed.padding,
+        background: sampled,
+        frame: ed.background,
+      }).fill;
+    } catch (e) {
+      return null;
+    }
+  }, [ed, sampled]);
+
+  const shot = useMemo(() => {
+    if (!comp || !stage) return null;
+    // Contain-fit the CARD in the stage, not the image: the padding is part of
+    // what is being previewed, so fitting the image would show a card whose
+    // margins are cropped by the viewport.
+    const w = Math.min(stage.w, stage.h / comp.aspect);
+    if (!(w >= MIN_PROJECT)) return null;
+    try {
+      const p = project(comp, w);
+      return { ...p, offX: (stage.w - p.width) / 2, offY: (stage.h - p.height) / 2 };
+    } catch (e) {
+      // `project` refuses rather than rounding when the padding would close
+      // over the image. A stage too small for the composition is a real
+      // condition on a short landscape window, not an impossible one.
+      return null;
+    }
+  }, [comp, stage]);
+
+  /** The contain-fit projection used by the raw-screenshot layer and its tools. */
+  const view = useMemo(() => {
+    if (!src || !stage) return null;
+    try {
+      return fitView({ imageW: src.width, imageH: src.height, viewW: stage.w, viewH: stage.h });
+    } catch (e) {
+      return null;
+    }
+  }, [src, stage]);
+
+  // --- the cross-fade ------------------------------------------------------
+  //
+  // The one piece of motion in the app. It exists because the two layers show
+  // the same screenshot at different sizes and in different positions, and a
+  // hard cut between them reads as the picture jumping.
+  const raw = useSharedValue(0);
+  const wants = ed ? canvasShows(ed) : 'card';
   useEffect(() => {
-    if (updateAsked.current) return;
-    updateAsked.current = true;
-    let live = true;
-    (async () => {
-      const r = await checkForUpdate();
-      if (!live) return;
-      emit('P0.updateCheck', { action: r.action, installed: installedVersionCode(), latest: r.latestVersionCode ?? null, reason: r.reason ?? null });
-      if (r.action === 'update') setUpdate(r);
-    })();
-    return () => { live = false; };
-  }, [emit]);
+    raw.value = withTiming(wants === 'screenshot' ? 1 : 0, { duration: FADE_MS });
+  }, [wants, raw]);
+  const cardLayer = useAnimatedStyle(() => ({ opacity: 1 - raw.value }));
+  const rawLayer = useAnimatedStyle(() => ({ opacity: raw.value }));
 
-  // Replace the runtime, because nothing short of that re-registers the
-  // launcher: backgrounding does not, and a second activity recreation does not
-  // either. Both were measured on 2026-09-18. See src/recover.js.
+  // --- the picker ----------------------------------------------------------
   const recoverPicker = useCallback(
     (why) => {
       // __DEV__ is load-bearing, not decoration: DevSettings.reload exists in a
@@ -233,6 +352,7 @@ export default function App() {
 
   const pick = useCallback(async () => {
     setProblem(null);
+    setMenu(false);
     // The launch is INSIDE the boundary, and reports under its own label.
     //
     // It used to sit above the try, so its rejection escaped as an unhandled
@@ -241,12 +361,6 @@ export default function App() {
     // (a font-scale or density change does it, and rotation cannot, because
     // `configChanges` absorbs rotation) `launchImageLibraryAsync` rejects with
     // "Attempting to launch an unregistered ActivityResultLauncher".
-    //
-    // The app now repairs itself instead of reporting and stopping: see
-    // `src/recover.js` for what was measured, and `recoverPicker` above for the
-    // repair. Two ways in, on purpose. The detector below knows the launcher is
-    // dead before it is used; the catch here covers every route to the same
-    // fault that the detector does not watch for.
     //
     // Known dead: do not launch. The rejection is certain, and calling anyway
     // puts a scary stack trace in front of the owner on the way to the same
@@ -282,11 +396,19 @@ export default function App() {
       // The URI is kept because renderCard takes one: a share arrives as a
       // content:// URI, so that is the real input, not the already-decoded image.
       setSrc({ ...decoded, uri: asset.uri });
-      setShown(decoded.img);
-      setCovered(false);
-      setShowingResult(false);
-      setCardPath(null);
-      setCardSize(null);
+      setOverride(null);
+      // The editor opens on a proposal, not on the whole screenshot. This is
+      // the line that makes step 2 of the user flow true.
+      const t0 = Date.now();
+      const p = proposeFor(decoded.img);
+      setEd(editorState(p.crop));
+      setSampled(sampleCropBackground(decoded.img, p.crop));
+      emit('crop.propose', {
+        crop: p.crop,
+        trimmed: p.trimmed,
+        reasons: p.reasons,
+        ms: Date.now() - t0,
+      });
       emit('decode', {
         w: decoded.width,
         h: decoded.height,
@@ -301,27 +423,27 @@ export default function App() {
     // staleLauncher and recoverPicker belong here. With `[emit]` alone this
     // callback kept the first render's `staleLauncher: false` for the life of
     // the component, so the proactive branch above could never fire and every
-    // recreation went the long way round: launch, reject, report, recover. The
-    // reactive path caught it, which is exactly why the omission was invisible
-    // on the device: the repair still worked, one scary stack trace later.
+    // recreation went the long way round: launch, reject, report, recover.
   }, [emit, staleLauncher, recoverPicker]);
 
-  /** Mask box in image pixels, from the on-screen box. */
-  const boxInImageSpace = useCallback(() => {
-    if (!map) return null;
-    return {
-      x: Math.round((bx.value - map.offX) / map.scale),
-      y: Math.round((by.value - map.offY) / map.scale),
-      w: Math.round(bw.value / map.scale),
-      h: Math.round(bh.value / map.scale),
-    };
-  }, [map, bx, by, bw, bh]);
+  // Ask once per mount whether a newer APK exists. Deliberately fire-and-forget:
+  // nothing waits on it, nothing is blocked by it, and a failure is a log line.
+  useEffect(() => {
+    if (updateAsked.current) return;
+    updateAsked.current = true;
+    let live = true;
+    (async () => {
+      const r = await checkForUpdate();
+      if (!live) return;
+      emit('P0.updateCheck', { action: r.action, installed: installedVersionCode(), latest: r.latestVersionCode ?? null, reason: r.reason ?? null });
+      if (r.action === 'update') setUpdate(r);
+    })();
+    return () => { live = false; };
+  }, [emit]);
 
-  // --- Q1 + Q3: the cheap answers -----------------------------------------
   // fontScale and density are the two configuration values MainActivity's
   // configChanges does not absorb, so a change to either recreates the activity
-  // and kills the launcher while this runtime carries on running. There is no
-  // other signal: the runtime is not restarted and is not told.
+  // and kills the launcher while this runtime carries on running.
   //
   // Width and height are deliberately not watched. Rotation changes both and IS
   // absorbed, so watching them would report a dead launcher for the one
@@ -332,9 +454,6 @@ export default function App() {
     lastConfig.current = next;
     if (!launcherWentStale(prev, next)) return;
     setStaleLauncher(true);
-    // Not repaired here. The repair destroys this runtime, and doing that the
-    // instant someone changes their system font size would throw away a card
-    // they were looking at. It waits until the picker is actually wanted.
     emit('pick.stale', { from: prev, to: next, note: 'activity recreated; the picker will recover on use' });
   }, [fontScale, pixelScale, emit]);
 
@@ -345,14 +464,207 @@ export default function App() {
     if (!flag) return;
     emit('pick.resume', { resume: decision.resume, reason: decision.reason });
     if (!decision.resume) return;
-    // THIS runtime is the recovery. Marking it spent is what bounds the loop: if
-    // the picker fails again now, recoveryPlan answers give-up instead of
-    // reloading, and a self-reloading app that never comes back is worse than a
-    // button that does not work.
+    // THIS runtime is the recovery. Marking it spent is what bounds the loop.
     recoveryUsed.current = true;
     pick();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // --- the editor's own actions -------------------------------------------
+  const open = useCallback((tool) => {
+    setMenu(false);
+    setProblem(null);
+    setEd((s) => (s ? openTool(s, tool) : s));
+  }, []);
+  const toggle = useCallback((tool) => {
+    setMenu(false);
+    setEd((s) => (s ? (s.tool === tool ? doneTool(s) : openTool(s, tool)) : s));
+  }, []);
+  const done = useCallback(() => {
+    setEd((s) => {
+      if (!s) return s;
+      // Resampled here rather than in an effect on `ed.crop`, which would fire
+      // on every frame of the drag and read four strips sixty times a second.
+      // Done is the moment the crop becomes the one the card is made from.
+      if (s.tool === 'crop' && src) setSampled(sampleCropBackground(src.img, s.crop));
+      return doneTool(s);
+    });
+  }, [src]);
+  const cancel = useCallback(() => {
+    setEd((s) => {
+      if (!s) return s;
+      const next = cancelTool(s);
+      // Cancel restores a DIFFERENT crop from the one on screen a moment ago,
+      // so the sample has to follow it. Forgetting this is a card framed in
+      // the colour of a crop the user just threw away.
+      if (s.tool === 'crop' && src) setSampled(sampleCropBackground(src.img, next.crop));
+      return next;
+    });
+  }, [src]);
+  const resetT = useCallback(() => setEd((s) => (s ? resetTool(s) : s)), []);
+
+  /**
+   * Build the card as a PNG at export resolution, and hand back the path.
+   *
+   * `trim: 'never'` on purpose. The status-bar trim now happens once, in the
+   * proposal, where the user can see it and put it back with Reset. Leaving it
+   * on here would let the export trim again under a crop the user chose, which
+   * is the preview-disagrees-with-export failure this phase exists to remove.
+   */
+  const build = useCallback(async () => {
+    if (!src || !ed) return null;
+    const out = await renderCard({
+      uri: src.uri,
+      crop: ed.crop,
+      padding: ed.padding,
+      radius: ed.radius,
+      frame: ed.background,
+      trim: 'never',
+      masks: ed.masks,
+      outputName: 'card.png',
+    });
+    return out;
+  }, [src, ed]);
+
+  // Hand the PNG to the system sheet. Not "Save to Photos": that is MediaStore
+  // and scoped storage per API level, which is Phase 5. This is the path the
+  // product exists for, and expo-sharing was already a dependency.
+  const share = useCallback(async () => {
+    if (!src || !ed) return;
+    setProblem(null);
+    setMenu(false);
+    setBusy(true);
+    try {
+      // Asked, not assumed. A device with no sharing target throws from
+      // shareAsync, and "nothing happened" is the worst possible answer.
+      const can = await Sharing.isAvailableAsync();
+      if (!can) {
+        emit('P1.share', { ok: false, reason: 'no sharing target' });
+        setProblem(COPY.shareFailed);
+        return;
+      }
+      const out = await build();
+      if (!out || out.error) {
+        emit('P1.render.error', { error: out && out.error });
+        setProblem(COPY.renderFailed);
+        return;
+      }
+      emit('P1.render', {
+        out: out.width + 'x' + out.height,
+        kiB: +(out.bytes / 1024).toFixed(1),
+        frame: out.frame,
+        fill: out.fill,
+        fillSource: out.fillSource,
+        radius: out.radius,
+        radiusPx: out.radiusPx,
+        crop: out.crop,
+        dest: out.dest,
+        pad: out.pad,
+        warnings: out.warnings,
+        timings: out.timings,
+      });
+      // The claim Phase 4.5 rests on, checked on the device rather than only
+      // in src/compose.test.mjs: the card that was on screen and the card in
+      // the file are one composition. Compared as ratios, because the two are
+      // at different scales by design.
+      if (shot) {
+        emit('P4.sameComposition', {
+          preview: { w: shot.width, h: shot.height, pad: shot.pad, radius: shot.radius },
+          exported: { w: out.width, h: out.height, pad: out.pad, radius: out.radiusPx },
+          aspectOff: +Math.abs(out.height / out.width - shot.height / shot.width).toFixed(5),
+          padFracOff: +Math.abs(out.pad / out.width - shot.pad / shot.width).toFixed(5),
+        });
+      }
+      await Sharing.shareAsync(out.path, { mimeType: 'image/png', UTI: 'public.png' });
+      emit('P1.share', { ok: true, path: out.path });
+    } catch (e) {
+      emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
+      setProblem(COPY.shareFailed);
+    } finally {
+      setBusy(false);
+    }
+  }, [src, ed, shot, build, emit]);
+
+  // --- gestures on the raw layer ------------------------------------------
+  //
+  // Both tools work in IMAGE pixels and both commit through setState, so the
+  // rect in `ed` is always the rect the renderer will use. A shared value
+  // holding the rect would be faster and would be a second copy of the crop.
+  const grabbed = useRef(null);
+  const startRect = useRef(null);
+
+  const cropGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .onBegin((e) => {
+          if (!view || !ed) return;
+          grabbed.current = pickHandle({ x: e.x, y: e.y }, ed.crop, view);
+          startRect.current = ed.crop;
+        })
+        .onChange((e) => {
+          if (!view || !grabbed.current || !startRect.current) return;
+          const d = toImageDelta(view, { dx: e.changeX, dy: e.changeY });
+          const next = dragCrop({
+            start: startRect.current,
+            handle: grabbed.current,
+            dx: d.dx,
+            dy: d.dy,
+            bounds: { x: 0, y: 0, w: src.width, h: src.height },
+            min: MIN_CROP,
+          });
+          startRect.current = next;
+          setEd((s) => (s ? { ...s, crop: next } : s));
+        })
+        .onFinalize(() => {
+          grabbed.current = null;
+          startRect.current = null;
+        })
+        .runOnJS(true),
+    [view, ed, src],
+  );
+
+  // Cover, still one box. Phase 3 makes it several objects with a selection and
+  // a delete; this is the shipped behaviour moved onto the new state, not a new
+  // design, and the survey says plainly that one box is the wrong shape.
+  const coverGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .onBegin((e) => {
+          if (!view || !ed) return;
+          const p = { x: (e.x - view.offsetX) / view.scale, y: (e.y - view.offsetY) / view.scale };
+          startRect.current = { x: Math.round(p.x), y: Math.round(p.y), w: 0, h: 0 };
+        })
+        .onChange((e) => {
+          if (!view || !startRect.current) return;
+          const d = toImageDelta(view, { dx: e.changeX, dy: e.changeY });
+          const r = startRect.current;
+          startRect.current = { ...r, w: Math.round(r.w + d.dx), h: Math.round(r.h + d.dy) };
+        })
+        .onEnd(() => {
+          const r = startRect.current;
+          startRect.current = null;
+          if (!r) return;
+          // Normalised here rather than during the drag: a box dragged up and
+          // to the left has a negative size, and every consumer downstream
+          // expects a positive one.
+          const box = {
+            x: Math.min(r.x, r.x + r.w),
+            y: Math.min(r.y, r.y + r.h),
+            w: Math.abs(r.w),
+            h: Math.abs(r.h),
+          };
+          if (box.w < 8 || box.h < 8) return;
+          setEd((s) => (s ? { ...s, masks: [...s.masks, box] } : s));
+        })
+        .runOnJS(true),
+    [view, ed],
+  );
+
+  // --- the dev harness, unchanged in what it measures ----------------------
+  const boxInImageSpace = useCallback(() => {
+    if (!ed || !ed.masks.length) return null;
+    return ed.masks[ed.masks.length - 1];
+  }, [ed]);
 
   const measureCheap = useCallback(() => {
     if (!src) return;
@@ -385,7 +697,6 @@ export default function App() {
     });
   }, [src, boxInImageSpace, emit]);
 
-  // --- Q2 + Q4: compose, encode, round-trip -------------------------------
   const compose = useCallback(
     (colorSpace, withMask) => {
       if (!src) return;
@@ -412,9 +723,7 @@ export default function App() {
         emit('Q2.error', out);
         return;
       }
-      setShown(out.snapshot);
-      setCovered(withMask);
-      setShowingResult(true);
+      setOverride(out.snapshot);
       emit('Q2.compose', {
         space: colorSpace ? 'DisplayP3' : 'sRGB',
         withMask,
@@ -440,26 +749,21 @@ export default function App() {
     [src, boxInImageSpace, emit],
   );
 
-  // --- Phase 1: the real pipeline, end to end -----------------------------
-  //
-  // Unlike the Q2 buttons, nothing here composes anything itself: the crop, the
-  // trim, the padding, the frame colour and every Cover fill come from
-  // renderCard. The card is then decoded back off disk and shown, which is both
-  // the cheapest possible check that the written file is a real PNG and the only
-  // way to answer Q1 by eye, the question no measurement can settle.
   const render = useCallback(
     async (withMask, space) => {
-      if (!src) return;
+      if (!src || !ed) return;
       setProblem(null);
       setBusy(true);
-      const masks = withMask ? [boxInImageSpace()] : [];
       try {
         const t0 = Date.now();
         const out = await renderCard({
           uri: src.uri,
-          padding: 'standard',
-          trim: 'auto',
-          masks,
+          crop: ed.crop,
+          padding: ed.padding,
+          radius: ed.radius,
+          frame: ed.background,
+          trim: 'never',
+          masks: withMask ? ed.masks : [],
           colorSpace: space,
           // Distinct names so the two cards coexist on disk: Q4 is a comparison
           // of their iCCP chunks, and one overwriting the other leaves nothing
@@ -476,11 +780,7 @@ export default function App() {
         // width here means the encode and the plan disagree; a throw means the
         // bytes on disk are not a PNG.
         const back = await decodeUri(out.path);
-        setShown(back);
-        setCovered(withMask);
-        setShowingResult(true);
-        setCardPath(out.path);
-        setCardSize({ width: out.width, height: out.height });
+        setOverride(back);
         emit('P1.render', {
           path: out.path,
           space: space ? 'DisplayP3' : 'sRGB',
@@ -489,18 +789,12 @@ export default function App() {
           kiB: +(out.bytes / 1024).toFixed(1),
           fill: out.fill,
           fillSource: out.fillSource,
-          fillLuma: out.fillLuma,
-          bg: out.background && {
-            hex: out.background.hex,
-            source: out.background.source,
-            reason: out.background.reason,
-            coverage: out.background.coverage,
-          },
+          frame: out.frame,
+          radiusPx: out.radiusPx,
           crop: out.crop,
           dest: out.dest,
           pad: out.pad,
           trimmed: out.trimmed,
-          trimmedRows: out.trimmedRows,
           masks: out.masks.map((m) => ({ fill: m.fill, coverage: m.coverage, clipped: m.clipped })),
           warnings: out.warnings,
           timings: out.timings,
@@ -513,83 +807,41 @@ export default function App() {
         setBusy(false);
       }
     },
-    [src, boxInImageSpace, emit],
+    [src, ed, emit],
   );
 
-  // Hand the PNG to the system sheet. Not "Save to Photos": that is MediaStore
-  // and scoped storage per API level, which is Phase 5. This is the path the
-  // product exists for, and expo-sharing was already a dependency.
-  const share = useCallback(async () => {
-    if (!cardPath) return;
-    setProblem(null);
-    try {
-      // Asked, not assumed. A device with no sharing target throws from
-      // shareAsync, and "nothing happened" is the worst possible answer.
-      const can = await Sharing.isAvailableAsync();
-      if (!can) {
-        emit('P1.share', { ok: false, reason: 'no sharing target' });
-        setProblem(COPY.shareFailed);
-        return;
-      }
-      await Sharing.shareAsync(cardPath, {
-        mimeType: 'image/png',
-        UTI: 'public.png',
-      });
-      emit('P1.share', { ok: true, path: cardPath });
-    } catch (e) {
-      emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
-      setProblem(COPY.shareFailed);
-    }
-  }, [cardPath, emit]);
-
-  // --- Q5: the probe that is allowed to die -------------------------------
   const stress = useCallback(() => {
     if (!src) return;
     emit('Q5.fullread', stressFullRead(src.img));
   }, [src, emit]);
 
-  /** Put the source back on the canvas, which is the only state the box means anything in. */
-  const backToSource = useCallback(() => {
-    if (!src) return;
-    setShown(src.img);
-    setShowingResult(false);
-    setCovered(false);
-    setCardPath(null);
-    setCardSize(null);
+  const startOver = useCallback(() => {
+    setSrc(null);
+    setEd(null);
+    setSampled(null);
+    setOverride(null);
     setProblem(null);
-  }, [src]);
+    setMenu(false);
+  }, []);
 
-  // --- gestures -----------------------------------------------------------
-  const move = Gesture.Pan()
-    .onChange((e) => {
-      bx.value += e.changeX;
-      by.value += e.changeY;
-    })
-    .runOnJS(false);
-
-  const resize = Gesture.Pan()
-    .onChange((e) => {
-      bw.value = Math.max(24, bw.value + e.changeX);
-      bh.value = Math.max(16, bh.value + e.changeY);
-    })
-    .runOnJS(false);
-
-  const boxStyle = useAnimatedStyle(() => ({
-    left: bx.value,
-    top: by.value,
-    width: bw.value,
-    height: bh.value,
-  }));
-
-  const showBox = Boolean(src) && !showingResult && useCover;
-
+  // --- what the caption says ----------------------------------------------
   let caption = '';
   if (problem) caption = problem;
   else if (busy) caption = COPY.working;
-  else if (showingResult && cardSize) {
-    caption = `${COPY.ready}. ${fill(COPY.cardSize, cardSize)}`;
-  } else if (showingResult) caption = COPY.ready;
-  else if (showBox) caption = COPY.coverHint;
+  else if (ed && ed.tool === 'crop') caption = COPY.cropHint;
+  else if (ed && ed.tool === 'cover') caption = COPY.coverHint;
+  else if (comp) caption = fill(COPY.cardSize, { width: comp.width, height: comp.height });
+
+  const mode = ed ? barMode(ed) : 'main';
+  const takeover = mode === 'takeover';
+  const stops = padStops();
+  // Labels keyed by the name the module uses, not a second list of tools in a
+  // second order. The ORDER comes from src/shell.js's TOOLS; this only says
+  // what each one is called, and naming each key here is also what lets
+  // tools/check-copy.mjs see that the string is used.
+  const toolLabel = { crop: COPY.crop, cover: COPY.cover, style: COPY.style };
+  const stopLabel = { snug: COPY.snug, standard: COPY.standard, roomy: COPY.roomy };
+  const frameLabel = { match: COPY.matchFrame, paper: COPY.paperFrame, ink: COPY.inkFrame };
 
   return (
     <GestureHandlerRootView style={[styles.root, { backgroundColor: palette.background }]}>
@@ -620,85 +872,169 @@ export default function App() {
           Empty, it was a full-height black slab with one line of grey text at
           the top, which reads as a broken viewport rather than as an empty
           app. It was also unreadable: the stage is dark in BOTH themes, so in
-          light mode that line was light-Graphite on Ink at 2.37:1. contrast.py
-          now checks the stage pairs, which is how that ratio was found. */}
+          light mode that line was light-Graphite on Ink at 2.37:1. */}
       <View
-        style={[styles.stage, shown ? { backgroundColor: palette.stage } : null]}
+        style={[styles.stage, src ? { backgroundColor: palette.stage } : null]}
         onLayout={onStageLayout}
       >
-        {shown && map && stage ? (
-          <Canvas style={{ width: stage.w, height: stage.h }}>
-            <SkiaImage image={shown} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
-          </Canvas>
-        ) : (
+        {!src ? (
           <View style={styles.empty}>
             <Text style={[styles.emptyText, { color: palette.graphite }]}>{COPY.emptyTitle}</Text>
           </View>
-        )}
+        ) : null}
 
-        {showBox ? (
-          <GestureDetector gesture={move}>
-            <Animated.View style={[styles.box, boxStyle]}>
-              <GestureDetector gesture={resize}>
-                <View style={styles.handle} />
+        {/* Layer one: the card, exactly as it will export. */}
+        {src && stage && shot && fillColour && !override ? (
+          <Animated.View style={[StyleSheet.absoluteFill, cardLayer]} pointerEvents="none">
+            <Canvas style={{ width: stage.w, height: stage.h }}>
+              <Group transform={[{ translateX: shot.offX }, { translateY: shot.offY }]}>
+                <Rect x={0} y={0} width={shot.width} height={shot.height} color={fillColour} />
+                {/* The image is clipped to the rounded destination and drawn
+                    scaled so that the CROP lands on it. Skia's Image has no
+                    source rect, so the placement does that job: the whole
+                    picture is scaled and positioned, and the clip keeps the
+                    part that belongs in the card. */}
+                <Group clip={skRRect(skRect(shot.dest.x, shot.dest.y, shot.dest.w, shot.dest.h), shot.radius, shot.radius)}>
+                  <SkiaImage
+                    image={src.img}
+                    fit="fill"
+                    x={shot.dest.x - ed.crop.x * (shot.dest.w / ed.crop.w)}
+                    y={shot.dest.y - ed.crop.y * (shot.dest.h / ed.crop.h)}
+                    width={src.width * (shot.dest.w / ed.crop.w)}
+                    height={src.height * (shot.dest.h / ed.crop.h)}
+                  />
+                  {ed.masks.map((m, i) => {
+                    // maskToDestPixels, the renderer's own mapping, against a
+                    // plan whose crop and dest are the projected ones. One
+                    // implementation of "where does this box land", so a box
+                    // cannot sit in one place on screen and another in the PNG.
+                    const r = maskToDestPixels(m, { crop: ed.crop, dest: shot.dest });
+                    if (!r) return null;
+                    return (
+                      <Rect
+                        key={i}
+                        x={r.x}
+                        y={r.y}
+                        width={r.w}
+                        height={r.h}
+                        color={fillColour}
+                      />
+                    );
+                  })}
+                </Group>
+              </Group>
+            </Canvas>
+          </Animated.View>
+        ) : null}
+
+        {/* The dev harness's own image, when it has put one there. */}
+        {src && stage && override ? (
+          <Canvas style={{ width: stage.w, height: stage.h }}>
+            <SkiaImage image={override} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
+          </Canvas>
+        ) : null}
+
+        {/* Layer two: the raw screenshot, which is what a takeover tool edits. */}
+        {src && stage && view && !override ? (
+          <Animated.View
+            style={[StyleSheet.absoluteFill, rawLayer]}
+            pointerEvents={takeover ? 'auto' : 'none'}
+          >
+            <Canvas style={{ width: stage.w, height: stage.h }}>
+              <SkiaImage image={src.img} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
+            </Canvas>
+            {ed && ed.tool === 'crop' ? (
+              <GestureDetector gesture={cropGesture}>
+                <View style={StyleSheet.absoluteFill}>
+                  <Scrim rect={toViewportRect(view, ed.crop)} stage={stage} />
+                  <CropFrame rect={toViewportRect(view, ed.crop)} />
+                </View>
               </GestureDetector>
-            </Animated.View>
-          </GestureDetector>
+            ) : null}
+            {ed && ed.tool === 'cover' ? (
+              <GestureDetector gesture={coverGesture}>
+                <View style={StyleSheet.absoluteFill}>
+                  {ed.masks.map((m, i) => (
+                    <View key={i} style={[styles.maskBox, boxStyle(toViewportRect(view, m))]} />
+                  ))}
+                </View>
+              </GestureDetector>
+            ) : null}
+          </Animated.View>
         ) : null}
       </View>
 
       {/* The way in to the measurement harness, and the only thing on this
           screen that is not for a person using the app. A long press rather
-          than a control, because a visible button would be the twelfth thing
-          this screen used to have and the first thing to make it look like a
-          tool again. Documented in the README. */}
+          than a control, because a visible button would be the first thing to
+          make this look like a tool again. Documented in the README. */}
       <Pressable onLongPress={() => setDevOpen(true)} delayLongPress={800} style={styles.captionWrap}>
         <Text style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}>
           {caption}
         </Text>
       </Pressable>
 
-      <View style={styles.bar}>
-        {!src ? (
+      {ed && ed.tool === 'style' ? (
+        <StyleStrip
+          ed={ed}
+          setEd={setEd}
+          palette={palette}
+          stops={stops}
+          stopLabel={stopLabel}
+          frameLabel={frameLabel}
+        />
+      ) : null}
+
+      {menu ? (
+        <View style={[styles.menu, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+          <MenuItem label={COPY.startOver} palette={palette} onPress={startOver} />
+          <MenuItem label={COPY.devTitle} palette={palette} onPress={() => { setMenu(false); setDevOpen(true); }} />
+        </View>
+      ) : null}
+
+      {!src ? (
+        <View style={styles.bar}>
           <Action label={COPY.choose} palette={palette} primary wide onPress={pick} />
-        ) : showingResult ? (
-          <>
-            <Action label={COPY.startOver} palette={palette} onPress={backToSource} />
-            <Action label={COPY.share} palette={palette} primary onPress={share} disabled={!cardPath} />
-          </>
-        ) : (
-          <>
-            <Action label={COPY.startOver} palette={palette} onPress={pick} />
-            <Action
-              label={COPY.cover}
-              palette={palette}
-              selected={useCover}
-              onPress={() => setUseCover((v) => !v)}
-            />
-            <Action
-              label={COPY.makeCard}
-              palette={palette}
-              primary
-              disabled={busy}
-              onPress={() => render(useCover)}
-            />
-          </>
-        )}
-      </View>
+        </View>
+      ) : takeover ? (
+        <View style={styles.bar}>
+          <Action label={COPY.cancel} palette={palette} onPress={cancel} />
+          <Action label={COPY.reset} palette={palette} disabled={!canReset(ed)} onPress={resetT} />
+          <Action label={COPY.done} palette={palette} primary onPress={done} />
+        </View>
+      ) : (
+        <>
+          <View style={styles.tools}>
+            {TOOLS.map((t) => (
+              <Action
+                key={t}
+                label={toolLabel[t]}
+                palette={palette}
+                selected={ed.tool === t}
+                onPress={() => (TOOL[t].takeover ? open(t) : toggle(t))}
+              />
+            ))}
+          </View>
+          <View style={styles.bar}>
+            <Action label={COPY.share} palette={palette} primary wide disabled={busy} onPress={share} />
+            <Action label={COPY.more} palette={palette} selected={menu} onPress={() => setMenu((v) => !v)} />
+          </View>
+        </>
+      )}
 
       {devOpen ? (
         <DevPanel
           palette={palette}
           log={log}
           src={src}
-          covered={covered}
-          showingResult={showingResult}
+          covered={Boolean(ed && ed.masks.length)}
+          override={Boolean(override)}
           scheme={scheme}
           onMeasureCheap={measureCheap}
           onStress={stress}
           onCompose={compose}
           onRender={render}
-          onBackToSource={backToSource}
+          onBackToSource={() => setOverride(null)}
           onClose={() => setDevOpen(false)}
           title={COPY.devTitle}
           hint={COPY.devHint}
@@ -709,10 +1045,189 @@ export default function App() {
   );
 }
 
+/** A viewport rect as absolute-position style. */
+function boxStyle(r) {
+  return { left: r.x, top: r.y, width: r.w, height: r.h };
+}
+
+/**
+ * The four bands of darkness outside the crop.
+ *
+ * Four Views rather than one with a hole in it, because there is no hole: a
+ * border cannot be transparent inside and a shadow cannot be a cut-out. Every
+ * crop surface surveyed dims the outside this way, and the alternative — a
+ * bright frame on undimmed pixels — leaves the user reading the whole
+ * screenshot rather than the part they chose.
+ */
+function Scrim({ rect, stage }) {
+  const right = rect.x + rect.w;
+  const bottom = rect.y + rect.h;
+  return (
+    <>
+      <View style={[styles.scrim, { left: 0, top: 0, width: stage.w, height: Math.max(0, rect.y) }]} />
+      <View style={[styles.scrim, { left: 0, top: bottom, width: stage.w, height: Math.max(0, stage.h - bottom) }]} />
+      <View style={[styles.scrim, { left: 0, top: rect.y, width: Math.max(0, rect.x), height: Math.max(0, rect.h) }]} />
+      <View style={[styles.scrim, { left: right, top: rect.y, width: Math.max(0, stage.w - right), height: Math.max(0, rect.h) }]} />
+    </>
+  );
+}
+
+/**
+ * The crop rectangle: a hairline and four corner brackets.
+ *
+ * Brackets rather than dots, because the survey is unambiguous about what the
+ * two mean: brackets say "this is a frame and the picture is behind it", dots
+ * say "this is an object you have selected". A crop is a frame. Phase 2 adds
+ * the rest of the list, including the rule-of-thirds grid on touch and the
+ * loupe at the dragged corner.
+ */
+function CropFrame({ rect }) {
+  const b = 3;
+  const len = 22;
+  const corners = [
+    { left: rect.x, top: rect.y, borderLeftWidth: b, borderTopWidth: b },
+    { left: rect.x + rect.w - len, top: rect.y, borderRightWidth: b, borderTopWidth: b },
+    { left: rect.x, top: rect.y + rect.h - len, borderLeftWidth: b, borderBottomWidth: b },
+    { left: rect.x + rect.w - len, top: rect.y + rect.h - len, borderRightWidth: b, borderBottomWidth: b },
+  ];
+  return (
+    <>
+      <View style={[styles.cropEdge, boxStyle(rect)]} />
+      {corners.map((c, i) => (
+        <View key={i} style={[styles.cropCorner, { width: len, height: len }, c]} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * Padding, corners and background. No apply: every control here is already
+ * its own preview, which is what `TOOL.style.takeover === false` means.
+ */
+function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel }) {
+  return (
+    <View style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+      <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.padding}</Text>
+      <View style={styles.chips}>
+        {stops.map((s) => (
+          <Chip
+            key={s.key}
+            label={stopLabel[s.key]}
+            palette={palette}
+            on={ed.padding === s.value}
+            onPress={() => setEd((v) => ({ ...v, padding: setPadding(s.value).padding }))}
+          />
+        ))}
+      </View>
+      <Slider
+        value={ed.padding}
+        min={PAD_MIN}
+        max={PAD_MAX}
+        palette={palette}
+        onChange={(v) => setEd((s) => ({ ...s, padding: setPadding(v).padding }))}
+      />
+
+      <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.corners}</Text>
+      <Slider
+        value={ed.radius}
+        min={0}
+        max={MAX_RADIUS}
+        palette={palette}
+        onChange={(v) => setEd((s) => ({ ...s, radius: setRadius(v) }))}
+      />
+
+      <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.background}</Text>
+      <View style={styles.chips}>
+        {BACKGROUNDS.map((b) => (
+          <Chip
+            key={b}
+            label={frameLabel[b]}
+            palette={palette}
+            on={ed.background === b}
+            onPress={() => setEd((s) => ({ ...s, background: setBackground(b) }))}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * A continuous control, written here because nothing in the dependency list is
+ * one and a slider is forty lines.
+ *
+ * The whole track is the touch target, not the thumb: a 20pt thumb is under
+ * the platform's 44pt floor and a track that only responds where the thumb
+ * already is makes a long drag start with a miss.
+ */
+function Slider({ value, min, max, onChange, palette }) {
+  const [w, setW] = useState(0);
+  const at = max > min ? (value - min) / (max - min) : 0;
+  const move = useMemo(
+    () =>
+      Gesture.Pan()
+        .onBegin((e) => { if (w > 0) onChange(min + (max - min) * clamp01(e.x / w)); })
+        .onChange((e) => { if (w > 0) onChange(min + (max - min) * clamp01(e.x / w)); })
+        .runOnJS(true),
+    [w, min, max, onChange],
+  );
+  return (
+    <GestureDetector gesture={move}>
+      <View
+        style={styles.sliderHit}
+        onLayout={(e) => setW(Math.round(e.nativeEvent.layout.width))}
+        accessibilityRole="adjustable"
+        accessibilityValue={{ min: 0, max: 100, now: Math.round(at * 100) }}
+      >
+        <View style={[styles.track, { backgroundColor: palette.hairline }]} />
+        <View style={[styles.trackFill, { backgroundColor: palette.signal, width: Math.max(0, at * w) }]} />
+        <View
+          style={[
+            styles.thumb,
+            { backgroundColor: palette.signal, borderColor: palette.surface, left: Math.max(0, at * w - 11) },
+          ]}
+        />
+      </View>
+    </GestureDetector>
+  );
+}
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/** A small selectable label. On state is shown by fill AND border, not colour alone. */
+function Chip({ label, on, onPress, palette }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: on }}
+      style={[
+        styles.chip,
+        {
+          backgroundColor: on ? palette.signal : 'transparent',
+          borderColor: on ? palette.signal : palette.hairline,
+        },
+      ]}
+    >
+      <Text style={[styles.chipText, { color: on ? palette.onSignal : palette.text }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** One row of the overflow. */
+function MenuItem({ label, onPress, palette }) {
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={styles.menuItem}>
+      <Text style={[styles.menuText, { color: palette.text }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 /**
  * One control. `primary` is the Signal-filled island; everything else is a
- * surface pill with a hairline. `selected` is the Cover toggle's on state,
- * which is shown by the border rather than by colour alone.
+ * surface pill with a hairline. `selected` is shown by the border rather than
+ * by colour alone.
  */
 function Action({ label, onPress, disabled, primary, selected, wide, palette }) {
   const bg = primary ? palette.signal : palette.surface;
@@ -761,30 +1276,70 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl },
   emptyText: { ...TYPE.body, textAlign: 'center' },
 
-  // White core plus a dark outline, because a coloured handle over arbitrary
+  scrim: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.55)' },
+  // White plus a dark outline, because a coloured frame over arbitrary
   // screenshot pixels can be invisible. No pair of theme tokens can express
   // that requirement, which is why it is not one.
-  box: {
+  cropEdge: {
     position: 'absolute',
-    borderWidth: 2,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.9)',
+  },
+  cropCorner: {
+    position: 'absolute',
     borderColor: '#FFFFFF',
     outlineWidth: 1,
     outlineColor: 'rgba(0,0,0,0.6)',
   },
-  handle: {
+  maskBox: {
     position: 'absolute',
-    right: -12,
-    bottom: -12,
-    width: 24,
-    height: 24,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.6)',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    outlineWidth: 1,
+    outlineColor: 'rgba(0,0,0,0.6)',
   },
 
   captionWrap: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.lg },
   caption: { ...TYPE.caption, textAlign: 'center' },
 
+  strip: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.sm,
+    marginHorizontal: SPACE.md,
+    borderRadius: RADIUS.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: SPACE.sm,
+  },
+  stripLabel: { ...TYPE.caption, marginTop: SPACE.xs },
+  chips: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.xs },
+  chip: {
+    minHeight: TOUCH,
+    justifyContent: 'center',
+    paddingHorizontal: SPACE.lg,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+  },
+  chipText: { ...TYPE.label },
+
+  sliderHit: { height: TOUCH, justifyContent: 'center' },
+  track: { height: 4, borderRadius: 2 },
+  trackFill: { position: 'absolute', height: 4, borderRadius: 2 },
+  thumb: { position: 'absolute', width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
+
+  menu: {
+    marginHorizontal: SPACE.md,
+    marginBottom: SPACE.sm,
+    borderRadius: RADIUS.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  menuItem: { minHeight: TOUCH + 4, justifyContent: 'center', paddingHorizontal: SPACE.lg },
+  menuText: { ...TYPE.body },
+
+  tools: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.sm },
   bar: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.xl },
   action: {
     flex: 1,
@@ -794,7 +1349,7 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.pill,
     paddingHorizontal: SPACE.lg,
   },
-  actionWide: { flex: 1 },
+  actionWide: { flex: 3 },
   actionOff: { opacity: 0.4 },
   actionText: { ...TYPE.label },
 });

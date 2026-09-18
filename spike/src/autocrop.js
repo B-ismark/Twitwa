@@ -33,6 +33,34 @@ import { MIN_CROP } from './crop.js';
 export const FLAT = 0.01;
 
 /**
+ * The largest image whose COLUMNS will be profiled, in pixels.
+ *
+ * A column profile is defined over whole columns, and there is no banded form
+ * of it: the statistic is each column's modal colour, so computing it across
+ * strips would need a 4096-bucket histogram per column and cost more memory
+ * than the image. That makes it the one place in this app that reads a whole
+ * decoded image, against the rule src/pipeline.js states at the top.
+ *
+ * So it is bounded rather than excused. 30MP is 120MiB of RGBA; a Pixel 6 Pro
+ * read 82MiB without complaint (results/phase0-device.md) and that is one
+ * driver, which is exactly the reason for a ceiling rather than a reason
+ * against one. Past it the proposal trims vertically only and says so — a
+ * worse proposal is a fine outcome, and an out-of-memory on import is not.
+ */
+export const MAX_PROFILE_PX = 30e6;
+
+/**
+ * Is this image small enough to profile its columns?
+ *
+ * Separated from `proposeCrop` because the caller has to decide BEFORE it
+ * reads any pixels, and a function that answers after the read has already
+ * happened would be decoration.
+ */
+export function canProfileColumns(width, height, budget = MAX_PROFILE_PX) {
+  return width * height <= budget;
+}
+
+/**
  * The flat run at each end of a profile.
  *
  * @returns {{lead, trail, inked}} `inked` is false when nothing in the profile
@@ -56,7 +84,10 @@ export function flatBand(profile, flat = FLAT) {
  *
  * @param width, height  the source image, in pixels
  * @param rows           `rowInkProfile` over EVERY row
- * @param cols           `colInkProfile` over EVERY column
+ * @param cols           `colInkProfile` over EVERY column, or null when the
+ *                       image was too large to profile them (see
+ *                       `canProfileColumns`), in which case nothing is
+ *                       trimmed horizontally and the reason says so
  * @param statusBar      `detectStatusBar`'s result, or null
  * @param min            the smallest crop a person could have dragged
  *
@@ -76,24 +107,33 @@ export function proposeCrop({ width, height, rows, cols, statusBar = null, flat 
   if (rows.length !== height) {
     throw new Error(`autocrop: the row profile covers ${rows.length} of ${height} rows`);
   }
-  if (cols.length !== width) {
+  if (cols && cols.length !== width) {
     throw new Error(`autocrop: the column profile covers ${cols.length} of ${width} columns`);
   }
 
   const whole = { x: 0, y: 0, w: width, h: height };
   const v = flatBand(rows, flat);
-  const h = flatBand(cols, flat);
+  // No column profile is not the same as a flat one. A flat profile means the
+  // screenshot has no ink at all, which gives up on BOTH axes; an unmeasured
+  // one means only that the horizontal answer is unknown, and the vertical
+  // trim is still good.
+  const h = cols ? flatBand(cols, flat) : null;
   const reasons = [];
+  if (!cols) reasons.push('the image was too large to profile its columns; nothing was trimmed sideways');
 
-  if (!v.inked || !h.inked) {
+  if (!v.inked || (h && !h.inked)) {
     reasons.push('no ink found; the whole screenshot is the crop');
-    return { crop: whole, trimmed: { top: 0, bottom: 0, left: 0, right: 0 }, reasons };
+    return {
+      crop: whole,
+      trimmed: { top: 0, bottom: 0, left: 0, right: 0, columnsProfiled: Boolean(cols) },
+      reasons,
+    };
   }
 
   let top = v.lead;
   const bottom = v.trail;
-  let left = h.lead;
-  let right = h.trail;
+  let left = h ? h.lead : 0;
+  let right = h ? h.trail : 0;
 
   // The status bar is ink, so the band trim above walked straight past it.
   // Only ever a floor: a screenshot already cropped below the status bar has a
@@ -125,7 +165,7 @@ export function proposeCrop({ width, height, rows, cols, statusBar = null, flat 
     w = width;
   }
 
-  const trimmed = { top: vTop, bottom: vBottom, left, right };
+  const trimmed = { top: vTop, bottom: vBottom, left, right, columnsProfiled: Boolean(cols) };
   if (!vTop && !vBottom && !left && !right && reasons.length === 0) {
     reasons.push('the screenshot has no flat edges to trim');
   }

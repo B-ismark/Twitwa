@@ -52,6 +52,25 @@ if (BREAK === 'no_shape_gate') {
       trimmedRows: c.trimmedRows, background, warnings: [...c.warnings, ...out.warnings],
     };
   };
+} else if (BREAK === 'frame_ignored') {
+  // The Style strip's Background choice sampled over. The control moves, the
+  // swatch lights, and the card does not change — which reads as the renderer
+  // being broken rather than as the argument being dropped.
+  F.planOutput = (a) => real.planOutput({ ...a, frame: 'match' });
+  F.planCard = (a) => real.planCard({ ...a, frame: 'match' });
+} else if (BREAK === 'frame_unvalidated') {
+  // An unknown frame falls through to Match instead of throwing, so a typo in
+  // one call site is a card with a colour nobody chose.
+  F.planOutput = (a) => real.planOutput({ ...a, frame: ['match', 'paper', 'ink'].includes(a.frame) ? a.frame : 'match' });
+} else if (BREAK === 'frame_warns') {
+  // Keep the sample's disagreement warning on a card the user asked to be
+  // Paper. Noise about a decision this call did not make, and the kind that
+  // trains someone to stop reading warnings.
+  F.planOutput = (a) => {
+    const r = real.planOutput(a);
+    if (r.fillSource !== 'chosen') return r;
+    return { ...r, warnings: [...r.warnings, 'background sampled from the crop edges disagreed (chosen); using the neutral frame'] };
+  };
 } else if (BREAK === 'fallback_flip') {
   F.planOutput = (a) => {
     const r = real.planOutput(a);
@@ -251,6 +270,61 @@ console.log('the sampled background becomes the frame');
   check('source recorded as sampled', r.fillSource === 'sampled', r.fillSource);
   check('no disagreement warning',
     !r.warnings.some((w) => /disagreed/.test(w)), JSON.stringify(r.warnings));
+}
+
+console.log('the Style strip can override the sample, and says it did');
+{
+  // Deliberately with a sample present and disagreeing with the choice, which
+  // is the only arrangement that can tell "chosen" from "the sample happened
+  // to be this colour".
+  const sampled = { source: 'sampled', hex: '#3A7BD5' };
+  const crop = { w: 1440, h: 3031 };
+
+  const match = F.planOutput({ crop, background: sampled, frame: 'match' });
+  check('Match takes the sampled colour', match.fill === '#3A7BD5', match.fill);
+  check('and is the default when no frame is passed',
+    F.planOutput({ crop, background: sampled }).fill === match.fill);
+
+  const paper = F.planOutput({ crop, background: sampled, frame: 'paper' });
+  check('Paper overrides a sample that disagrees', paper.fill === PAPER, paper.fill);
+  check('and records that it was chosen, not sampled', paper.fillSource === 'chosen', paper.fillSource);
+
+  const ink = F.planOutput({ crop, background: sampled, frame: 'ink' });
+  check('Ink does too', ink.fill === INK, ink.fill);
+  check('and the two are different colours', paper.fill !== ink.fill);
+
+  // The warning is about a decision this call did not make.
+  const noSample = F.planOutput({ crop, background: null, frame: 'paper' });
+  check('choosing Paper with no sample at all does not warn about the sample',
+    !noSample.warnings.some((w) => /disagreed/.test(w)), JSON.stringify(noSample.warnings));
+  check('where leaving it on Match does',
+    F.planOutput({ crop, background: null, frame: 'match' }).warnings.some((w) => /disagreed/.test(w)));
+
+  // Paper and Ink are the anchors the near-white and near-black warnings are
+  // measured against, so neither can warn about itself. Worth pinning: it is
+  // true by construction and the construction is one edit from being lost.
+  check('Paper does not warn that it has no visible edge',
+    !paper.warnings.some((w) => /visible edge/.test(w)), JSON.stringify(paper.warnings));
+  check('nor does Ink', !ink.warnings.some((w) => /visible edge/.test(w)), JSON.stringify(ink.warnings));
+
+  let threw = false;
+  try { F.planOutput({ crop, frame: 'papyrus' }); } catch (e) { threw = true; }
+  check('an unknown frame throws rather than quietly becoming Match', threw);
+
+  // Through planCard, because that is the call renderCard makes, and a
+  // parameter threaded into the wrong one of the two is the normal way this
+  // breaks.
+  const viaCard = F.planCard({
+    image: { width: 1440, height: 3120 },
+    crop: { x: 0, y: 0, w: 1440, h: 3031 },
+    trim: 'never',
+    frame: 'ink',
+    sampleBackground: () => sampled,
+  });
+  check('planCard passes the frame through', viaCard.fill === INK, viaCard.fill);
+  check('and still samples, so the Match swatch has a colour to show',
+    viaCard.background && viaCard.background.hex === '#3A7BD5',
+    JSON.stringify(viaCard.background));
 }
 
 console.log('the fallback picks by luma, and both ends are tested');

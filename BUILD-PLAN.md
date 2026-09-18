@@ -481,11 +481,44 @@ measured but has never been drawn -- this phone locks night mode.
 **Verification.** Run `contrast.py` against whatever ends up in `theme.ts`, not
 against what this plan says. It exits 1 on failure.
 
-## Phase 4.5 — the editor shell and Style
+## Phase 4.5 — the editor shell and Style — BUILT 2026-09-18
 
 **Added 2026-09-18, after the owner settled the IA.** It comes before Phase 5
 because Crop and Cover both hang off this shell, and because it is where the
 render step gets deleted.
+
+**Built the same day, and NOT looked at on a phone.** Every item below is done
+in code, every gate is green, and the app bundles. What that does not cover is
+everything this phase is actually about: whether the cross-fade reads as one
+picture, whether the live recompose keeps up with a padding drag, whether the
+corner radius looks like a card or like a sticker, and whether the proposed
+crop lands anywhere sensible on a real screenshot. The auto-crop's whole-image
+read is also unmeasured for time, and it runs on the JS thread at import.
+
+What landed, beyond the list below:
+
+- `src/shell.js`, the tool sessions, as a module rather than as flags in the
+  view. 70 checks, 13 mutants
+- `src/autocrop.js`, the proposal. 60 checks, 12 mutants. Its whole-image read
+  is bounded by `MAX_PROFILE_PX`, past which it trims vertically only and says
+  so — that read is the one place in the app that breaks `src/pipeline.js`'s
+  "never read a whole image" rule, and a column profile has no banded form
+- `src/pixels.js` gains `colInkProfile`, tested against `rowInkProfile` of a
+  transposed buffer rather than against a reimplementation
+- `planOutput` gains `frame`, so the Background control changes the card
+- `composeCard` clips the image to a rounded rect, and the pixel count comes
+  from `compose.js`'s `radiusPx` — the same call the preview makes
+- The preview's frame colour comes from `planOutput` itself, with the sample
+  taken by the renderer's own `sampleCropBackground` at import and on Done.
+  An earlier draft drew a neutral frame under Match and let the export decide,
+  which would have put a preview/export divergence on the DEFAULT setting
+
+**Still Phase 2 and Phase 3.** Crop ships with a scrim and corner brackets and
+real drag handling through `crop.js`; the grid on touch, the loupe and the
+`TOUCH` 44 to 48 change are not done. Cover is still one box per drag with no
+selection and no delete, which the survey says plainly is the wrong shape.
+**Still Phase 5.** Save to Photos and Copy image. The overflow ships with Start
+over and the developer panel rather than with two disabled rows.
 
 - **Delete the "Make card" step.** The canvas becomes the live card, composed at
   screen resolution, and re-composes on every change. `showingResult` and its

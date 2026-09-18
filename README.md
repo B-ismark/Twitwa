@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1109 of the 1125 checks run in a clone**, and the 16 that cannot say so
+true: most checks run in a clone, and the ones that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -144,13 +144,15 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1125 checks and 158 mutations** counting the two PNG tools, all three
-config plugins, the update module and the six rule-checking gates). Five of them
+none (**1359 checks and 191 mutations** counting the two PNG tools, all three
+config plugins, the update module and the six rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
 decides whether a newer APK exists, `crop.js` is Phase 2 gesture arithmetic,
-and `compose.js` is Phase 4.5's rule that the live preview and the exported
-PNG are one composition projected to two widths rather than two compositions.
+`compose.js` is Phase 4.5's rule that the live preview and the exported
+PNG are one composition projected to two widths rather than two compositions,
+`shell.js` is the editor's tool sessions, and `autocrop.js` is the crop the
+editor opens on.
 
 Those two numbers have a convention, because without one they are not
 comparable between readings: every check each gate prints as run, on a tree
@@ -159,8 +161,16 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1109 of those 1125 and reports 16 skipped**, which is the number
-to trust, because it is the artifact anyone else gets. The skips are 7 in
+**The clone figure below is STALE and is left stale rather than estimated.**
+It was 1109 of 1125 with 16 skipped on 2026-09-18, measured before Phase 4.5
+added `shell.js`, `autocrop.js` and their suites; the warm figure above was
+re-measured after. Nothing in Phase 4.5 added a suite that skips, so the clone
+number should have moved by the same amount as the warm one — but "should have"
+is arithmetic, not a measurement, and this README has published an unmeasured
+clone number once already. Re-derive it with the recipe below before quoting it.
+
+The clone number is the one to trust when it is current, because it is the
+artifact anyone else gets. The skips are 7 in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
 published, and 4, 2 and 3 in the three plugin suites, which compare against the
 generated `android/` tree that `prebuild` creates. Each prints the skips and
@@ -321,23 +331,23 @@ Both exit 1 on failure and have been verified to actually go red:
 ```
 python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
-cd spike && node src/pixels.test.mjs     # 168 checks on the pixel math
+cd spike && node src/pixels.test.mjs     # 179 checks on the pixel math
 cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
-cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
+cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 78 checks on the crop-gesture arithmetic
-cd spike && node src/compose.test.mjs    # 69 checks that the preview and the export are one composition
+cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
-cd spike && node src/autocrop.test.mjs   # 46 checks on the crop the editor opens on
+cd spike && node src/autocrop.test.mjs   # 60 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 65 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 109 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 106 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 135 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
-cd spike && node tools/check-style-members.mjs  # 49 checks; fails on a StyleSheet member RN does not define
+cd spike && node tools/check-style-members.mjs  # 51 checks; fails on a StyleSheet member RN does not define
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
 cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
@@ -387,7 +397,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 158 mutations
+done                                     # silence is the pass; 191 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

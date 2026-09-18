@@ -2,7 +2,7 @@
 //
 //   for b in band_symmetric band_all_flat axes_swapped statusbar_overrides \
 //            statusbar_ignored floor_whole floor_dead profile_short_ok \
-//            no_reason trim_not_subtracted; do
+//            no_reason trim_not_subtracted cols_null_as_flat budget_dead; do
 //     BREAK=$b node src/autocrop.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -101,6 +101,18 @@ if (BREAK === 'band_symmetric') {
     cols.set(args.cols.subarray(0, Math.min(args.cols.length, args.width)));
     return real.proposeCrop({ ...args, rows, cols });
   };
+} else if (BREAK === 'cols_null_as_flat') {
+  // No column profile treated as a flat one, which gives up on BOTH axes.
+  // "Not measured" and "measured, and there was nothing" are different facts
+  // and only one of them says anything about the vertical trim.
+  F.proposeCrop = (args) => {
+    if (args.cols) return real.proposeCrop(args);
+    return real.proposeCrop({ ...args, cols: new Float32Array(args.width) });
+  };
+} else if (BREAK === 'budget_dead') {
+  // The ceiling never applies, so a 64MP import reads 256MiB to find its
+  // gutters.
+  F.canProfileColumns = () => true;
 } else if (BREAK === 'no_reason') {
   F.proposeCrop = (args) => ({ ...real.proposeCrop(args), reasons: [] });
 } else if (BREAK === 'trim_not_subtracted') {
@@ -292,6 +304,42 @@ console.log('\na profile that does not cover its axis is refused');
   let threwSize = false;
   try { F.proposeCrop({ width: 0, height: H, rows: new Float32Array(H), cols: new Float32Array(0) }); } catch (e) { threwSize = true; }
   check('a zero-sized image throws', threwSize);
+}
+
+console.log('\nan unprofiled axis is not a flat one');
+{
+  // The whole-image read the column profile needs is bounded, and past the
+  // bound the proposal has to be worse rather than absent. "Not measured" and
+  // "measured, and flat" are different facts: the first says nothing about
+  // the vertical trim, the second gives up on both axes.
+  const r = F.proposeCrop({ ...base(), cols: null });
+  check('the vertical trim still happens', r.trimmed.top === TOP && r.trimmed.bottom === BOTTOM,
+    `${r.trimmed.top}/${r.trimmed.bottom}`);
+  check('the height is trimmed with it', r.crop.h === H - TOP - BOTTOM, String(r.crop.h));
+  check('nothing is trimmed sideways', r.trimmed.left === 0 && r.trimmed.right === 0,
+    `${r.trimmed.left}/${r.trimmed.right}`);
+  check('the full width is kept', r.crop.w === W && r.crop.x === 0, `${r.crop.x}+${r.crop.w}`);
+  check('and it says the columns were not profiled', r.trimmed.columnsProfiled === false);
+  check('with a reason a person could act on',
+    r.reasons.some((s) => s.includes('too large to profile')), JSON.stringify(r.reasons));
+  check('where a measured run says so too', F.proposeCrop(base()).trimmed.columnsProfiled === true);
+
+  // A flat column profile is the OTHER outcome, and it does give up on both.
+  const flatCols = F.proposeCrop({ ...base(), cols: new Float32Array(W) });
+  check('a measured but flat column profile proposes the whole image',
+    flatCols.crop.w === W && flatCols.crop.h === H, `${flatCols.crop.w}x${flatCols.crop.h}`);
+}
+
+console.log('\nthe whole-image read is bounded before it happens');
+{
+  check('an ordinary phone screenshot is profiled', F.canProfileColumns(1440, 3120) === true);
+  check('a very tall thread capture still is', F.canProfileColumns(1440, 20000) === true);
+  check('something past the ceiling is not',
+    F.canProfileColumns(8000, 8000) === false, String(8000 * 8000));
+  check('exactly at the ceiling is in', F.canProfileColumns(real.MAX_PROFILE_PX, 1) === true);
+  check('one pixel past it is out', F.canProfileColumns(real.MAX_PROFILE_PX + 1, 1) === false);
+  check('and the budget is an argument, not only a constant',
+    F.canProfileColumns(100, 100, 9999) === false);
 }
 
 console.log('\nthe asymmetric sweep: no two margins the same, no square images');

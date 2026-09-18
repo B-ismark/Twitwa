@@ -37,6 +37,7 @@ import {
 import { planCard, clampMasks, maskToDestPixels, orientedSize, needsOrientation } from './plan';
 import { readSubRect } from './read';
 import { MAX_PX } from './sizing';
+import { radiusPx } from './compose';
 
 const STATUS_BAND_ROWS = 400;   // enough to hold any status bar; never the whole image
 const EDGE_THICKNESS = 8;       // matches pixels.js's default, kept explicit here
@@ -193,8 +194,15 @@ function findStatusBar(img, rows = STATUS_BAND_ROWS) {
  * The fallback's whole-crop read is deferred behind a closure, so a crop whose
  * edges agree never pays for it. On a tall crop that is the difference between
  * four thin strips and tens of MiB.
+ *
+ * EXPORTED for Phase 4.5's live preview, which has to draw the same frame
+ * colour the export will write. The alternative was a second sampler in
+ * App.js, and a preview whose background is computed by different rules from
+ * the PNG's is the exact defect the phase exists to remove — worse here than
+ * anywhere, because Match is the default, so the divergence would be on every
+ * card by default rather than on an unusual one.
  */
-function sampleCropBackground(img, crop, opts = {}) {
+export function sampleCropBackground(img, crop, opts = {}) {
   const { thickness = EDGE_THICKNESS, tolerance = 16, agree = 12, step = 2, tiles } = opts;
   const strips = cropEdgeStrips(crop, thickness);
   const edges = {};
@@ -239,7 +247,7 @@ function sampleFallbackTiles(img, crop, tolerance = 16, tileOpts) {
  * whose whole point is the frame.
  */
 function composeCard(img, plan, opts = {}) {
-  const { colorSpace, masks = [] } = opts;
+  const { colorSpace, masks = [], radius = 0 } = opts;
   const t0 = now();
   let subpixel = 0;   // boxes that owned no whole output pixel
 
@@ -264,13 +272,46 @@ function composeCard(img, plan, opts = {}) {
 
   const paint = Skia.Paint();
   paint.setAntiAlias(true);
+
+  // Rounded corners, drawn as a clip on the IMAGE rather than as a shape over
+  // it. Painting the frame colour into the corners would be a second thing
+  // that has to be exactly the background, and the two go out of step the
+  // moment the Style strip changes one of them.
+  //
+  // The pixel count comes from compose.js's radiusPx, the same call the
+  // on-screen preview makes, because "a fraction of the image's width" is a
+  // one-line multiplication and a one-line multiplication written twice gets
+  // rounded differently the second time.
+  //
+  // Anti-aliasing ON here, unlike the Cover clip below, and for the opposite
+  // reason: a corner is a curve, so the stair-stepping AA removes is the whole
+  // defect, and there is no hidden content for a blended edge to leak.
+  const rPx = radiusPx(plan.dest.w, radius);
+  const rounded = rPx > 0;
+  if (rounded) {
+    canvas.save();
+    canvas.clipRRect(
+      Skia.RRectXY(
+        Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h),
+        rPx,
+        rPx,
+      ),
+      1, // Intersect
+      true,
+    );
+  }
   canvas.drawImageRect(
     img,
     Skia.XYWHRect(plan.crop.x, plan.crop.y, plan.crop.w, plan.crop.h),
     Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h),
     paint,
   );
-
+  // NOT restored before the Cover boxes, on purpose. A box overlapping a
+  // rounded corner has to be clipped to the SAME rounding the image is, or it
+  // paints a grey square into the corner where the frame shows through. That
+  // hides nothing: the image is clipped there too, so the corner carries no
+  // content for the missing part of the box to leak.
+  //
   // Cover boxes. Already clamped to the crop by plan.clampMasks, so this clip is
   // defence rather than the rule — but it is cheap, and the failure it prevents
   // is a grey rectangle sitting on the frame, which is the most visible possible
@@ -305,6 +346,7 @@ function composeCard(img, plan, opts = {}) {
     }
     canvas.restore();
   }
+  if (rounded) canvas.restore();
 
   const drawMs = +(now() - t0).toFixed(2);
   const t1 = now();
@@ -375,6 +417,8 @@ function maskFill(img, box, thickness = 6, tolerance = 16) {
  * @param crop         {x,y,w,h} in source pixels; omit for the whole image
  * @param padding      'snug' | 'standard' | 'roomy', or a fraction
  * @param trim         'auto' | 'always' | 'never'
+ * @param frame        'match' | 'paper' | 'ink' — the Style strip's Background
+ * @param radius       corner radius as a fraction of the image's own width
  * @param masks        Cover boxes in source pixels
  * @param colorSpace   a Skia ColorSpace, or omit for sRGB
  * @param outputName   basename for the written file
@@ -385,6 +429,8 @@ export async function renderCard({
   crop,
   padding = 'standard',
   trim = 'auto',
+  frame = 'match',
+  radius = 0,
   masks = [],
   colorSpace,
   orientation = 1,
@@ -424,6 +470,7 @@ export async function renderCard({
     padding,
     statusBar: statusBar.detected ? statusBar : null,
     trim,
+    frame,
     sampleBackground: (rect) => sampleCropBackground(img, rect),
   });
   plan = planned;
@@ -456,7 +503,7 @@ export async function renderCard({
     return { ...m, fill: r ? r.hex : plan.fill, coverage: r ? r.coverage : undefined };
   });
 
-  const composed = composeCard(img, plan, { colorSpace, masks: filledMasks });
+  const composed = composeCard(img, plan, { colorSpace, masks: filledMasks, radius });
   if (composed.error) {
     return { error: composed.error, plan, statusBar, source, warnings, timings };
   }
@@ -484,6 +531,13 @@ export async function renderCard({
     crop: plan.crop,
     dest: plan.dest,
     pad: plan.pad,
+    // Both, because the fraction is what the editor holds and the pixels are
+    // what landed. A gate comparing the preview with the export needs the
+    // fraction; someone reading a log wanting to know why a corner looks wrong
+    // needs the pixels.
+    radius,
+    radiusPx: radiusPx(plan.dest.w, radius),
+    frame,
     scale: plan.scale,
     clamped: plan.clamped,
     trimmed: plan.trimmed,

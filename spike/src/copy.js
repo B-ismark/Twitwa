@@ -27,18 +27,58 @@ export const COPY = {
 
   // --- actions ------------------------------------------------------------
   choose: 'Choose screenshot',
-  cover: 'Cover',
-  makeCard: 'Make card',
   share: 'Share',
   startOver: 'Start over',
   close: 'Close',
+  // The overflow behind the three dots. Named for what it holds rather than
+  // for its shape, because "More" is what a person reads and "overflow" is
+  // what a layout engine calls it.
+  more: 'More',
+
+  // --- the three tools ----------------------------------------------------
+  // There is no "Make card". The card is on the canvas from the moment a
+  // screenshot arrives, so a button that makes one has nothing to do; see
+  // BUILD-PLAN.md Phase 4.5. The string was removed rather than hidden,
+  // because a dead string is the next reader's evidence that a step exists.
+  crop: 'Crop',
+  cover: 'Cover',
+  style: 'Style',
+
+  // The triad a takeover tool returns through. Cancel undoes this session,
+  // Reset goes back to the proposed crop or to no boxes at all, Done keeps.
+  cancel: 'Cancel',
+  reset: 'Reset',
+  done: 'Done',
+
+  // --- the Style strip ----------------------------------------------------
+  padding: 'Padding',
+  corners: 'Corners',
+  background: 'Background',
+  // The three padding stops. Named, not measured: "6%" is a number about the
+  // card's construction and tells nobody how the card will look.
+  snug: 'Snug',
+  standard: 'Standard',
+  roomy: 'Roomy',
+  // The three frames. Match is first because it is the product.
+  matchFrame: 'Match',
+  paperFrame: 'Paper',
+  inkFrame: 'Ink',
 
   // --- what is happening --------------------------------------------------
   working: 'Making your card',
-  ready: 'Card ready',
-  // Shown under the crop box on the source image. It says what the box is for,
+  // There is no 'Card ready' any more. It was the caption of the state that
+  // followed the Make card button, and with the card live from the moment a
+  // screenshot arrives there is no moment at which it becomes ready. The
+  // caption carries the card's size instead, which is a fact rather than an
+  // announcement.
+  // Shown while a takeover tool is open. Each says what the thumb is for,
   // which is otherwise guessable only by trying it.
-  coverHint: 'Drag the box over anything you want hidden, then make the card.',
+  //
+  // coverHint used to end "then make the card". It does not any more, and the
+  // sentence is the reason to check: the card is already made, and copy
+  // describing a deleted step is the next reader's source of truth.
+  coverHint: 'Drag the box over anything you want hidden.',
+  cropHint: 'Drag the edges to choose what the card shows.',
   cardSize: '{width} by {height}',
 
   // --- when something goes wrong ------------------------------------------

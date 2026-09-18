@@ -2,7 +2,7 @@
 //
 //   for b in pad_from_crop dest_scaled radius_pixels radius_unclamped \
 //            aspect_from_crop no_round tol_blind symmetry_blind \
-//            min_project_dead; do
+//            min_project_dead comp_own_arithmetic radius_inline; do
 //     BREAK=$b node src/compose.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -20,6 +20,7 @@
 // the app and wrong on the phone. The sweep at the end is what catches it.
 import * as real from './compose.js';
 import { cardSize } from './sizing.js';
+import { planOutput } from './plan.js';
 
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
@@ -51,6 +52,39 @@ if (BREAK === 'pad_from_crop') {
     return {
       ...p,
       dest: { ...p.dest, w: Math.round(comp.dest.w * s), h: Math.round(comp.dest.h * s) },
+    };
+  };
+} else if (BREAK === 'radius_inline') {
+  // `project` doing the multiplication itself instead of calling radiusPx.
+  // Identical today and one rounding change away from not being — and the
+  // other caller is composeCard in src/pipeline.js, which no desktop test can
+  // reach. So the assertion is that project and radiusPx are the same call,
+  // which is the only part of that claim a desktop can hold.
+  F.project = (comp, width) => {
+    const p = real.project(comp, width);
+    return { ...p, radius: Math.floor(p.dest.w * comp.radius) };
+  };
+} else if (BREAK === 'comp_own_arithmetic') {
+  // The design mistake compose.js's header argues against, written out: derive
+  // the card from the raw inputs instead of asking `cardSize`. It agrees on an
+  // ordinary crop and disagrees on exactly the ones cardSize exists for — the
+  // encode clamp, the never-upscale rule, the thin-crop repair — which is to
+  // say, on the cases nobody checks by eye.
+  F.composition = (crop, stop = 'standard', radius = real.DEFAULT_RADIUS) => {
+    const pct = typeof stop === 'number' ? stop : { snug: 0.03, standard: 0.06, roomy: 0.1 }[stop];
+    const padSrc = Math.round(crop.w * pct);
+    const scale = Math.min(1, 1080 / (crop.w + padSrc * 2));
+    const width = Math.round((crop.w + padSrc * 2) * scale);
+    const height = Math.round((crop.h + padSrc * 2) * scale);
+    const pad = Math.round(padSrc * scale);
+    return {
+      width, height,
+      aspect: height / width,
+      padFrac: pad / width,
+      radius: Math.min(real.MAX_RADIUS, Math.max(0, radius)),
+      pad,
+      dest: { x: pad, y: pad, w: width - pad * 2, h: height - pad * 2 },
+      warnings: [], clamped: false, repaired: null,
     };
   };
 } else if (BREAK === 'radius_pixels') {
@@ -303,6 +337,104 @@ console.log('a preview at any stage width is the same card as the export');
   check(`all ${n} projections are the same composition`, bad === 0, `${bad} failed`);
   check('and the sweep actually ran', n === 648, String(n));
   check('the worst deviation is inside one rounding', worst <= 0.5, worst.toFixed(4));
+}
+
+console.log('\nradiusPx is the one place a radius becomes pixels');
+{
+  // src/pipeline.js `composeCard` calls this too, and that call is the half a
+  // desktop test cannot reach. What it CAN hold is that `project` does not
+  // have its own copy of the multiplication — so that when the renderer and
+  // the preview disagree, it is not because there were two of them.
+  check('a fraction of the image width, rounded', F.radiusPx(1000, 0.015) === 15, String(F.radiusPx(1000, 0.015)));
+  check('rounded, not floored', F.radiusPx(1000, 0.0159) === 16, String(F.radiusPx(1000, 0.0159)));
+  check('clamped at the top', F.radiusPx(1000, 1) === Math.round(1000 * real.MAX_RADIUS), String(F.radiusPx(1000, 1)));
+  check('and at the bottom', F.radiusPx(1000, -5) === 0, String(F.radiusPx(1000, -5)));
+  check('a non-number is square, not NaN', F.radiusPx(1000, undefined) === 0, String(F.radiusPx(1000, undefined)));
+
+  let bad = 0;
+  for (const w of [1080, 720, 393, 240]) {
+    for (const r of [0, 0.004, 0.015, 0.04]) {
+      const comp = F.composition({ w: 1200, h: 2000 }, 'standard', r);
+      const shot = F.project(comp, w);
+      if (shot.radius !== F.radiusPx(shot.dest.w, comp.radius)) bad++;
+    }
+  }
+  check('every projection takes its radius from radiusPx', bad === 0, `${bad} off`);
+}
+
+console.log('\nthe card on screen and the card in the PNG are one composition');
+{
+  // Phase 4.5's stated verification, and the reason this module exists. The
+  // preview reads `composition()`; the export reads `planOutput()` through
+  // renderCard. Those are two call sites, and the claim is that they are one
+  // answer — so it is asserted between the modules rather than inside either.
+  //
+  // The crops are chosen to reach `cardSize`'s special paths, because an
+  // ordinary crop cannot tell the two apart: derive-it-yourself and ask-cardSize
+  // agree on a 1080x1920 screenshot and part company at the encode clamp, the
+  // never-upscale rule and the thin-crop repair. `BREAK=comp_own_arithmetic`
+  // is that mistake written out.
+  const crops = [
+    { w: 1440, h: 3120, why: 'an ordinary phone screenshot' },
+    { w: 1440, h: 60000, why: 'tall enough to hit the encode clamp' },
+    { w: 300, h: 400, why: 'smaller than the target, so never upscaled' },
+    { w: 1440, h: 1, why: 'thin enough to fire the crop repair' },
+    { w: 2000, h: 900, why: 'landscape' },
+  ];
+  const stops = ['snug', 'standard', 'roomy', 0.045];
+  let bad = 0;
+  let n = 0;
+  for (const crop of crops) {
+    for (const stop of stops) {
+      n++;
+      const comp = F.composition({ w: crop.w, h: crop.h }, stop);
+      const plan = planOutput({ crop: { x: 0, y: 0, w: crop.w, h: crop.h }, padding: stop });
+      const same =
+        comp.width === plan.width &&
+        comp.height === plan.height &&
+        comp.pad === plan.pad &&
+        comp.dest.x === plan.dest.x && comp.dest.y === plan.dest.y &&
+        comp.dest.w === plan.dest.w && comp.dest.h === plan.dest.h;
+      if (!same) {
+        bad++;
+        if (bad <= 4) {
+          console.log(`    ${crop.w}x${crop.h} ${stop} (${crop.why}):`);
+          console.log(`      preview ${comp.width}x${comp.height} pad ${comp.pad} dest ${JSON.stringify(comp.dest)}`);
+          console.log(`      export  ${plan.width}x${plan.height} pad ${plan.pad} dest ${JSON.stringify(plan.dest)}`);
+        }
+      }
+    }
+  }
+  check(`all ${n} crop/padding pairs give the preview and the export one geometry`, bad === 0, `${bad} disagreed`);
+  check('and the comparison actually ran', n === 20, String(n));
+
+  // The other half of the claim: projecting the composition to the export's
+  // own width reproduces the export exactly, so "same ratios" and "same
+  // pixels" are not two different statements.
+  let projBad = 0;
+  for (const crop of crops) {
+    const comp = F.composition({ w: crop.w, h: crop.h }, 'standard');
+    const plan = planOutput({ crop: { x: 0, y: 0, w: crop.w, h: crop.h }, padding: 'standard' });
+    const shot = F.project(comp, plan.width);
+    if (shot.width !== plan.width || shot.height !== plan.height || shot.pad !== plan.pad ||
+        shot.dest.w !== plan.dest.w || shot.dest.h !== plan.dest.h) {
+      projBad++;
+      console.log(`    ${crop.w}x${crop.h}: projected ${shot.width}x${shot.height} pad ${shot.pad}, export ${plan.width}x${plan.height} pad ${plan.pad}`);
+    }
+  }
+  check('projecting to the export width reproduces the export', projBad === 0, `${projBad} off`);
+
+  // And the case that makes the sweep mean something: the clamp and the repair
+  // really did fire, so the interesting rows were not all ordinary ones.
+  const clampedComp = F.composition({ w: 1440, h: 60000 }, 'standard');
+  check('the encode clamp fired on the tall crop', clampedComp.clamped === true);
+  // 'standard' specifically: at roomy the padding scales down far enough that
+  // neither axis closes, so the repair does not fire and the check would be
+  // asserting nothing. Which stop reaches which repair is not obvious, and
+  // that is the reason to pin it rather than to pick one and hope.
+  const repairedComp = F.composition({ w: 1440, h: 1 }, 'standard');
+  check('the thin-crop repair fired on the thin one', repairedComp.repaired !== null,
+    String(repairedComp.repaired));
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

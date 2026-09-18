@@ -127,14 +127,27 @@ export function planCrop({ image, crop, statusBar = null, trim = 'auto' }) {
  * @param crop        the crop returned by planCrop — not the user's request
  * @param padding     a PADDING key or a fraction
  * @param background  cropBackground() run on THAT crop
+ * @param frame       'match' | 'paper' | 'ink' — the Style strip's choice
+ *
+ * `frame` is the user overriding the sample, and 'match' is the product: the
+ * frame is the screenshot's own edge colour, and the other two are what you
+ * reach for when that sample is wrong or ugly. A chosen frame skips the
+ * sampling branch entirely rather than sampling and discarding, because the
+ * "the edges disagreed" warning is about a decision this call did not make.
+ * Nobody wants to be told the sample failed on a card they asked to be Paper.
  */
-export function planOutput({ crop, padding = 'standard', background = null }) {
+export function planOutput({ crop, padding = 'standard', background = null, frame = 'match' }) {
   const size = cardSize(crop, padding);
   const warnings = [...size.warnings];
 
   let fill;
   let fillSource;
-  if (background && background.source === 'sampled' && background.hex) {
+  if (frame === 'paper' || frame === 'ink') {
+    fill = frame === 'paper' ? PAPER : INK;
+    fillSource = 'chosen';
+  } else if (frame !== 'match') {
+    throw new Error(`unknown frame: ${String(frame)}. Known: match, paper, ink`);
+  } else if (background && background.source === 'sampled' && background.hex) {
     fill = background.hex;
     fillSource = 'sampled';
   } else {
@@ -177,10 +190,13 @@ export function planOutput({ crop, padding = 'standard', background = null }) {
  * asserts which rect arrived. `BREAK=sample_order` feeds it the pre-trim rect
  * and the spy assertion goes red.
  */
-export function planCard({ image, crop, padding = 'standard', statusBar = null, trim = 'auto', sampleBackground }) {
+export function planCard({ image, crop, padding = 'standard', statusBar = null, trim = 'auto', frame = 'match', sampleBackground }) {
   const c = planCrop({ image, crop, statusBar, trim });
+  // Sampled even when the frame is chosen. It costs a strip read and it is
+  // what the Style strip's Match swatch shows, so a user switching to Match
+  // sees the colour before choosing it rather than after.
   const background = sampleBackground ? sampleBackground(c.crop) : null;
-  const out = planOutput({ crop: c.crop, padding, background });
+  const out = planOutput({ crop: c.crop, padding, background, frame });
   return {
     ...out,
     crop: c.crop,

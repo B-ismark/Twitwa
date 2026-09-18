@@ -58,6 +58,24 @@ export const MIN_PROJECT = 32;
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /**
+ * How many pixels a radius fraction is, against an image `destW` wide.
+ *
+ * Exported and used by BOTH `project()` below and `composeCard` in
+ * src/pipeline.js, which is the point: "the radius is a fraction of the
+ * image's width" is a one-line multiplication, and a one-line multiplication
+ * is exactly the kind of rule that gets written twice and rounded differently
+ * the second time. One floor call apart is one pixel of corner, which on a
+ * 16px radius is visible.
+ *
+ * It clamps too, so a radius arriving from a slider cannot reach the renderer
+ * unbounded through a path that skipped `composition()`.
+ */
+export function radiusPx(destW, radiusFrac) {
+  const r = Number.isFinite(radiusFrac) ? clamp(radiusFrac, 0, MAX_RADIUS) : 0;
+  return Math.round(destW * r);
+}
+
+/**
  * What the card is, independent of how big it is drawn.
  *
  * @param crop    {w, h} in source pixels
@@ -126,7 +144,7 @@ export function project(comp, width) {
         'The stage is too small for this composition.',
     );
   }
-  return { width: w, height, pad, dest, radius: Math.round(dest.w * comp.radius) };
+  return { width: w, height, pad, dest, radius: radiusPx(dest.w, comp.radius) };
 }
 
 /**

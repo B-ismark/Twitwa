@@ -42,7 +42,12 @@ export default function DevPanel({
   log,
   src,
   covered,
-  showingResult,
+  // True while one of THESE buttons has put a measured image on the canvas in
+  // place of the live card. It was called `showingResult` and named a state
+  // the app no longer has: Phase 4.5 deleted the render step, so there is no
+  // "result" to be showing. This is a dev override and nothing else, which is
+  // also why it is not part of the editor's own state in src/shell.js.
+  override,
   scheme,
   onMeasureCheap,
   onStress,
@@ -55,7 +60,7 @@ export default function DevPanel({
   closeLabel,
 }) {
   const hasSrc = Boolean(src);
-  const live = hasSrc && !showingResult;
+  const live = hasSrc && !override;
   return (
     <View style={[styles.sheet, { backgroundColor: palette.background }]}>
       <View style={styles.head}>
@@ -90,20 +95,19 @@ export default function DevPanel({
           disabled={!live}
           palette={palette}
         />
-        {/* The only way out of result mode, and the only thing that puts the box
-            back. Without it the box stayed live over a rendered card and the next
-            render covered a region other than the one selected. */}
+        {/* The only way back to the live card once one of these buttons has
+            replaced it. */}
         <DevBtn
           name="Back to source"
           onPress={onBackToSource}
-          disabled={!hasSrc || !showingResult}
+          disabled={!hasSrc || !override}
           palette={palette}
         />
       </View>
 
       <Text style={[styles.state, { color: palette.graphite }]}>
         {(src
-          ? `${src.width}x${src.height}  ${src.megapixels}MP  ${src.rgbaMiB}MiB RGBA  ${showingResult ? 'result' : 'source'}  ${covered ? 'covered' : 'uncovered'}`
+          ? `${src.width}x${src.height}  ${src.megapixels}MP  ${src.rgbaMiB}MiB RGBA  ${override ? 'override' : 'card'}  ${covered ? 'covered' : 'uncovered'}`
           : 'no image') + `  scheme:${scheme === null || scheme === undefined ? 'null' : scheme}`}
       </Text>
 
