@@ -30,6 +30,7 @@ import {
 } from './src/measure';
 import { renderCard, decodeUri } from './src/pipeline';
 import {
+  canReloadRuntime,
   isStaleLauncherError,
   launcherWentStale,
   recoveryPlan,
@@ -166,7 +167,9 @@ export default function App() {
   // either. Both were measured on 2026-09-18 — see src/recover.js.
   const recoverPicker = useCallback(
     (why) => {
-      const canReload = typeof DevSettings !== 'undefined' && typeof DevSettings.reload === 'function';
+      // __DEV__ is load-bearing, not decoration: DevSettings.reload exists in a
+      // release build and is an empty function. See canReloadRuntime.
+      const canReload = canReloadRuntime(DevSettings, __DEV__);
       const plan = recoveryPlan({ canReload, alreadyTried: recoveryUsed.current });
       emit('pick.recover', { why, action: plan.action, message: plan.message });
       if (plan.action !== 'reload') return;

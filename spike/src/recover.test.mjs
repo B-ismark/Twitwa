@@ -22,6 +22,7 @@ let isStaleLauncherError = real.isStaleLauncherError;
 let launcherWentStale = real.launcherWentStale;
 let resumeDecision = real.resumeDecision;
 let recoveryPlan = real.recoveryPlan;
+let canReloadRuntime = real.canReloadRuntime;
 
 if (BREAK === 'match_whole_sentence') {
   // Match Expo's formatted sentence instead of the AndroidX fragment. Passes
@@ -58,6 +59,15 @@ if (BREAK === 'match_whole_sentence') {
     canReload
       ? { action: 'reload', message: 'reloading' }
       : { action: 'report', message: 'cannot reload' };
+} else if (BREAK === 'typeof_only') {
+  // The defect that shipped. Test that the method EXISTS rather than that it
+  // does anything: React Native declares DevSettings.reload as an empty
+  // function and only replaces it inside `if (__DEV__)`, so this answers true
+  // in a release build and the reload that follows does nothing.
+  canReloadRuntime = (devSettings) => Boolean(devSettings) && typeof devSettings.reload === 'function';
+} else if (BREAK === 'dev_ignored') {
+  // Ignore the runtime flag entirely.
+  canReloadRuntime = () => true;
 } else if (BREAK === 'reload_without_devsettings') {
   // Claim a reload is possible when nothing can perform one, which is how a
   // release build would silently do nothing at all.
@@ -156,6 +166,21 @@ check('every answer carries a reason',
     .every((f) => typeof resumeDecision(f, NOW).reason === 'string'
       && resumeDecision(f, NOW).reason.length > 0));
 
+console.log('\ncan this runtime replace itself');
+// The release build is the case that matters, and it is the one a `typeof`
+// test gets wrong: the method is there and does nothing.
+check('a release build cannot reload even though the method exists',
+  canReloadRuntime({ reload: () => {} }, false) === false);
+check('a dev build with the method can',
+  canReloadRuntime({ reload: () => {} }, true) === true);
+check('a dev build without DevSettings cannot',
+  canReloadRuntime(undefined, true) === false);
+check('a dev build whose reload is not callable cannot',
+  canReloadRuntime({ reload: 'nope' }, true) === false);
+check('the answer is a boolean, never a truthy object',
+  [[{ reload: () => {} }, true], [{ reload: () => {} }, false], [null, true], [null, false]]
+    .every(([d, dev]) => typeof canReloadRuntime(d, dev) === 'boolean'));
+
 console.log('\nchoosing the repair');
 check('a fresh runtime that can reload -> reload',
   recoveryPlan({ canReload: true, alreadyTried: false }).action === 'reload');
@@ -167,6 +192,8 @@ check('cannot reload AND already tried -> give up',
   recoveryPlan({ canReload: false, alreadyTried: true }).action === 'give-up');
 check('the report names what a release build would need',
   /expo-updates/.test(recoveryPlan({ canReload: false, alreadyTried: false }).message));
+check('the report tells the person what to actually do about it',
+  /open it again/i.test(recoveryPlan({ canReload: false, alreadyTried: false }).message));
 check('the report names the configChanges fix too',
   /configChanges/.test(recoveryPlan({ canReload: false, alreadyTried: false }).message));
 check('every plan carries a message',

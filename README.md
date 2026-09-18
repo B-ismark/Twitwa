@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **668 of the 680 checks run in a clone**, and the 12 that cannot say so
+true: **674 of the 686 checks run in a clone**, and the 12 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -127,13 +127,13 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 422 checks and 71 mutations between them while the renderer carries
-none (**680 checks and 121 mutations** counting the two PNG tools, both config
+none (**686 checks and 123 mutations** counting the two PNG tools, both config
 plugins, the update module and the four rule-checking gates). Three of them are
 not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, and `update.js`
 decides whether a newer APK exists.
 
-**A clone runs 668 of those 680 and reports 12 skipped**, which is the number to
+**A clone runs 674 of those 686 and reports 12 skipped**, which is the number to
 trust, because it is the artifact anyone else gets. The skips are in
 `tools/chunks.test.mjs`, which needs a real capture that is deliberately not
 published, and in the two plugin suites, which compare against the generated
@@ -182,6 +182,22 @@ Things the runs changed that no test could have:
   does **not**, because `MainActivity` declares `orientation|screenSize` in
   `configChanges` and absorbs it without recreating the activity. Two guesses,
   one of them wrong, which is why the sentence is gone.
+- **The repair itself did not work in the release build, and that took a release
+  build to find.** `recoveryPlan` has always had three answers, and one of them
+  — `report` — exists precisely for a build that cannot reload itself.
+  It could never be reached. `App.js` decided by asking
+  `typeof DevSettings.reload === 'function'`, and React Native declares
+  `reload(reason) {}` — an empty function — replacing it with a working one
+  only inside `if (__DEV__)`
+  (`react-native/Libraries/Utilities/DevSettings.js:37` and `:45`). So in the
+  release APK the method is present, `typeof` says `function`, the call is
+  legal, and it does nothing. Measured on the phone on 2026-09-18: the app
+  logged `pick.recover` with `"action":"reload"`, logged
+  `pick.recover.reload {"resumeFlagWritten":true}`, called `reload()` — and
+  the process id was 29696 before and 29696 after. The picker stayed dead and
+  the app had announced a repair it did not perform. The guard is now
+  `canReloadRuntime(DevSettings, __DEV__)` in `src/recover.js`, pure and tested,
+  with `typeof_only` as one of its mutants.
 
 And two from a third review pass, both cases of a check that could not go red:
 
@@ -251,7 +267,7 @@ python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 168 checks on the pixel math
 cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
-cd spike && node src/recover.test.mjs    # 43 checks on the picker-recovery policy
+cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
@@ -305,7 +321,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 121 mutations
+done                                     # silence is the pass; 123 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

@@ -93,6 +93,31 @@ export function resumeDecision(flag, nowMs, maxAgeMs = RESUME_MAX_AGE_MS) {
  * condition buried in a handler. `reload` is the only repair known to work; the
  * other two answers exist so the app says something true instead of nothing.
  */
+/**
+ * Can this runtime actually replace itself?
+ *
+ * Not the same question as "does DevSettings.reload exist". React Native
+ * declares `reload(reason) {}` -- an empty function -- and only replaces it
+ * with a working one inside `if (__DEV__)`
+ * (react-native/Libraries/Utilities/DevSettings.js:37 and :45). So in a release
+ * build the method is present, `typeof` says 'function', calling it is legal,
+ * and it does nothing whatsoever.
+ *
+ * App.js used to test only for the method, which meant the release APK chose
+ * the `reload` plan, announced it, wrote the resume flag, called reload() and
+ * stayed exactly where it was. Measured on the release APK on 2026-09-18: pid
+ * 29696 before the call and pid 29696 after it. The picker stayed dead and the
+ * one branch written to say so -- `report` -- could never be reached in the
+ * only build that needed it.
+ *
+ * Pure so it can be tested, because the thing it guards cannot be: App.js
+ * imports Skia and does not load in node.
+ */
+export function canReloadRuntime(devSettings, isDev) {
+  if (!isDev) return false;
+  return Boolean(devSettings) && typeof devSettings.reload === 'function';
+}
+
 export function recoveryPlan({ canReload, alreadyTried }) {
   if (alreadyTried) {
     return {
@@ -108,7 +133,8 @@ export function recoveryPlan({ canReload, alreadyTried }) {
       action: 'report',
       message:
         'the picker launcher did not survive an activity recreation, and this build cannot reload ' +
-        'itself: DevSettings is unavailable. A release build needs expo-updates reloadAsync, or the ' +
+        'itself: DevSettings.reload is the empty release stub, not the real one. Close Twitwa and ' +
+        'open it again. A release build needs expo-updates reloadAsync, or the ' +
         'fontScale|density configChanges fix, neither of which is in this spike',
     };
   }
