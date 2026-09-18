@@ -35,6 +35,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | --- | --- |
 | `src/pixels.js` | All the pixel math. Ring flatness, modal background, row ink profile, status-bar cut and shape test, four-edge card background, colour round-trip delta. No Skia — none of it needs Skia to be correct |
 | `src/sizing.js` | Output size: width-bounded, never upscaling, no long-edge cap, encode ceiling |
+| `src/recover.js` | When the photo picker's launcher has died and what to do about it: detect the recreation, recognise the rejection, bound the resume flag, and reload at most once. Pure, so the policy is testable without a phone |
 | `src/read.js` | One clamped sub-rect read, shared by the pipeline and the measurement harness. Was two copies returning the same values under different field names — `{width, height}` in one, `{w, h}` in the other. Pure: the colour constants arrive as an argument, so it loads in node and has a test |
 | `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
@@ -53,11 +54,12 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
-those carry 379 checks and 65 mutations between them while the renderer carries
-none (446 checks and 78 mutations counting the two PNG tools, and 84 mutations
-counting the two gates that check their own rules).
+those carry 422 checks and 71 mutations between them while the renderer carries
+none (489 checks and 84 mutations counting the two PNG tools, and 90 mutations
+counting the two gates that check their own rules). The newest of them is
+`recover.js`, which is the picker's self-repair policy rather than pixel work.
 
-`renderCard()` was run twice on a Pixel 6 Pro against a real 1440x3120 capture
+`renderCard()` was run four times on a Pixel 6 Pro against a real 1440x3120 capture
 picked through the system photo picker, so the input was a `content://` URI:
 **1080x2146 out, 550ms wall, status bar found and 89 rows trimmed.** The card was
 pulled off the device byte-exact and decoded with `tools/png.mjs`, which shares no
@@ -166,10 +168,11 @@ python contrast.py                       # WCAG ratios for every token pair
 python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 168 checks on the pixel math
 cd spike && node src/read.test.mjs       # 52 checks on the shared sub-rect read
+cd spike && node src/recover.test.mjs    # 43 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 99 checks on the decision layer
-cd spike && node tools/check-imports.mjs # 42 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 57 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 46 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 62 exports + 7 self-checks on its own rule
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
@@ -187,13 +190,13 @@ behind, which is the same failure as a mutation that cannot go red:
 
 ```
 cd spike
-for t in src/pixels.test.mjs src/read.test.mjs src/plan.test.mjs \
-         src/sizing.test.mjs tools/chunks.test.mjs tools/png.test.mjs \
-         tools/check-imports.mjs tools/check-dead.mjs; do
+for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
+         src/plan.test.mjs src/sizing.test.mjs tools/chunks.test.mjs \
+         tools/png.test.mjs tools/check-imports.mjs tools/check-dead.mjs; do
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 84 mutations
+done                                     # silence is the pass; 90 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
