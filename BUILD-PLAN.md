@@ -248,6 +248,22 @@ and the exact steps that would close it.
 
 ## Phase 2 — the crop gesture
 
+**NEXT, and the owner said why on 2026-09-18: the app has no crop at all.** What
+shipped in Phase 4 is the Cover mask, and it is standing in for two different
+features it is bad at. A person opening Twitwa expects to crop a screenshot the
+way every other app on the phone crops one -- drag the frame, pull a corner,
+keep what is inside. Instead they get a single rectangle that hides what is
+under it. The two are not substitutes, and neither is optional:
+
+  - **Crop** chooses what the card is. Standard, familiar, direct manipulation.
+  - **Cover** hides things inside that choice, and there is usually more than
+    one thing to hide -- a handle here, a face there. One box cannot do it.
+
+So Phase 2 delivers the real crop surface, and Phase 3's multiple boxes stop
+being a refinement and become the rest of the answer. Until both land, the
+single Cover box should be understood as a placeholder that the owner has
+already called out as the wrong shape.
+
 - Pan and resize from corners and edge midpoints, gesture-handler + reanimated,
   worklets so it runs off the JS thread
 - Minimum crop clamped at ~120px on the short edge — clamp the gesture, do not error
@@ -267,7 +283,9 @@ surface that stutters is the one performance failure a user cannot ignore.
 
 ## Phase 3 — Cover
 
-- Drag to add a mask box, tap a box to remove it, multiple boxes
+- Drag to add a mask box, tap a box to remove it, multiple boxes. **The one
+  box in the Phase 4 build is the placeholder this replaces**: it cannot cover
+  two places in one screenshot, which is the ordinary case, not the rare one
 - Fill is the **modal** colour of the ring outside each box, recomputed live —
   never the mean, which text in the ring drags off the background
 - Surface `coverage` when it is low: the box is misplaced, not the background rough
