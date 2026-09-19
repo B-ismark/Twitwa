@@ -342,3 +342,102 @@ export function pickHandle(point, crop, view, { touch } = {}) {
   if (point.x >= left && point.x <= right && point.y >= top && point.y <= bottom) return 'move';
   return null;
 }
+
+/**
+ * The four edges an auto-proposed crop can have taken something away from.
+ *
+ * The same compass vocabulary `HANDLES` uses, and for the reason two
+ * vocabularies for one idea is a defect: `edgeBand('n', ...)` and the `n`
+ * handle are the same edge of the same rect, and a second naming would be a
+ * second thing to keep in step.
+ */
+export const EDGES = ['n', 'e', 's', 'w'];
+
+/**
+ * The strip between one edge of the crop and the same edge of the image.
+ *
+ * WHAT THIS IS FOR. Phase 2 promises the status bar "shown as an excluded
+ * band that can be dragged back in". This is that, generalised, and the
+ * survey in BUILD-PLAN is why: every surveyed app auto-proposes, and the
+ * status bar is only the visible case of it. So the rule is not "remember
+ * what the status-bar detector cut" -- it is "this is what the crop is
+ * currently leaving out on each side, and you can take it back".
+ *
+ * That choice removes a second source of truth rather than adding one. The
+ * alternative was to hold the proposal alongside the live crop for the life
+ * of the editor and diff them, which means two rects that can disagree, a
+ * band that survives the user dragging over it, and a question with no good
+ * answer about what Reset does to it. Computed from the live crop there is
+ * one rect, and an edge already at the image's edge simply has no band.
+ *
+ * SPANNED TO THE CROP, NOT TO THE IMAGE. The north band is `crop.w` wide and
+ * sits directly above the frame, not the full image width. Full width is the
+ * scrim's job, and a band that ran the whole way would make restoring the top
+ * edge also widen the crop -- `BREAK=band_full_width` is that version, and it
+ * is the mistake that looks correct in a screenshot where the crop happens to
+ * be full width already.
+ *
+ * @returns a rect in IMAGE pixels, or null when that edge takes nothing away.
+ */
+export function edgeBand(edge, bounds, crop) {
+  'worklet';
+  if (!EDGES.includes(edge)) throw new Error(`unknown edge: ${edge}`);
+  if (edge === 'n') {
+    const h = crop.y - bounds.y;
+    return h > 0 ? { x: crop.x, y: bounds.y, w: crop.w, h } : null;
+  }
+  if (edge === 's') {
+    const y = crop.y + crop.h;
+    const h = bounds.y + bounds.h - y;
+    return h > 0 ? { x: crop.x, y, w: crop.w, h } : null;
+  }
+  if (edge === 'w') {
+    const w = crop.x - bounds.x;
+    return w > 0 ? { x: bounds.x, y: crop.y, w, h: crop.h } : null;
+  }
+  const x = crop.x + crop.w;
+  const w = bounds.x + bounds.w - x;
+  return w > 0 ? { x, y: crop.y, w, h: crop.h } : null;
+}
+
+/**
+ * Give one edge back: the crop, grown to the image on that side.
+ *
+ * Only that side. Growing `h` without moving `y` is the north case's whole
+ * risk -- it grows the crop downwards, over the picture, and the band it was
+ * meant to reclaim stays exactly where it was. That reads on screen as "the
+ * button did nothing and also broke the crop", which is why `BREAK=grow_wrong_way`
+ * exists rather than being trusted to the property sweep.
+ */
+export function expandToEdge(crop, edge, bounds) {
+  'worklet';
+  const band = edgeBand(edge, bounds, crop);
+  if (!band) return crop;
+  if (edge === 'n') return { x: crop.x, y: bounds.y, w: crop.w, h: crop.h + band.h };
+  if (edge === 's') return { x: crop.x, y: crop.y, w: crop.w, h: crop.h + band.h };
+  if (edge === 'w') return { x: bounds.x, y: crop.y, w: crop.w + band.w, h: crop.h };
+  return { x: crop.x, y: crop.y, w: crop.w + band.w, h: crop.h };
+}
+
+/**
+ * Which band a point in IMAGE pixels landed in, or null.
+ *
+ * The four bands cannot overlap -- north and south span the crop's width,
+ * west and east span its height -- so there is no precedence to get wrong and
+ * the image's corners belong to no band. That is the right answer: a corner
+ * strip would have to grow two axes at once, and the user has a corner handle
+ * for that.
+ *
+ * Callers test this AFTER `pickHandle`, so the 48pt grab zone around the
+ * frame wins. A band is what is left when the finger is clearly outside.
+ */
+export function pickBand(point, bounds, crop) {
+  'worklet';
+  for (let i = 0; i < EDGES.length; i++) {
+    const b = edgeBand(EDGES[i], bounds, crop);
+    if (b && point.x >= b.x && point.x <= b.x + b.w && point.y >= b.y && point.y <= b.y + b.h) {
+      return EDGES[i];
+    }
+  }
+  return null;
+}

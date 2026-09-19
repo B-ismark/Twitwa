@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1422 of the 1438 checks run in a clone**, and the 16 that cannot say so
+true: **1471 of the 1487 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -136,6 +136,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `tools/check-dead.mjs` | Finds exported names nothing outside their own module refers to. Comments are stripped first, because this repo's comments name functions constantly and a dead export otherwise stays alive by being discussed |
 | `tools/check-copy.mjs` | Fails when the app's words break the copy voice, or when a view writes its own words instead of taking them from `src/copy.js`. Reads the values by importing the module, not by grepping its source |
 | `tools/check-style-members.mjs` | Fails on a `StyleSheet.<member>` the installed React Native does not define. The member list is read out of React Native's own source, so it cannot drift on an upgrade. Exists because `StyleSheet.absoluteFillObject` was removed in 0.86 and spreading a missing property is silent: two styles lost their positioning with no warning and no failing test |
+| `tools/check-call-arity.mjs` | Fails on a call to one of our own imported functions with an illegal number of arguments. Parses the consumer AND the module rather than importing the module and reading `fn.length`: the modules most worth checking are the ones that cannot be loaded in node at all, and `fn.length` stops counting at the first default, so it cannot tell three required from one required and two optional. Its last check injects a short call into the real `App.js`, so its green cannot mean "matched nothing". Exists because `readSubRect(img, box, colour)` was called with two arguments, every import crashed for a day, and `check-imports`, a clean `expo export` and 1359 checks were all green throughout |
 | `tools/check-fs-sync.mjs` | Fails on an expo-file-system member used as if it were synchronous. The trap names are derived from the library's own Kotlin module rather than listed here, so the list cannot drift on an upgrade. Exists because this defect was made twice: fixed and written into a comment in `App.js`, then written again into `src/update-io.js` — see "A throttle that never throttled" |
 | `tools/chunks.mjs` | Reads a PNG's chunk table and any embedded ICC profile, and names the colour space **by its primaries** — the profile's name cannot, since Skia names both of the ones it writes "Skia". For the Display P3 question, which only the bytes can answer |
 | `tools/capture.mjs` | Drains the device's `PHASE0` log lines into `results/phase0-device-raw.txt`; exits 1 rather than write an empty capture |
@@ -145,8 +146,8 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1438 checks and 209 mutations** counting the two PNG tools, all three
-config plugins, the update module and the six rule-checking gates). Seven of them
+none (**1487 checks and 219 mutations** counting the two PNG tools, all three
+config plugins, the update module and the seven rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
 decides whether a newer APK exists, `crop.js` is Phase 2 gesture arithmetic,
@@ -162,14 +163,14 @@ They were re-derived by running all of it on 2026-09-18, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1422 of those 1438 and reports 16 skipped**, and it runs all 209
-mutations with none surviving. Measured 2026-09-18 from `git write-tree` over
+**A clone runs 1471 of those 1487 and reports 16 skipped**, and it runs all 219
+mutations with none surviving. Measured 2026-09-19 from `git write-tree` over
 the staged tree of this commit, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1438 − 1422 = 16, which is the skip count, so the
+That pairing is the check: 1487 − 1471 = 16, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -378,18 +379,19 @@ cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
-cd spike && node src/crop.test.mjs       # 111 checks on the crop-gesture arithmetic
+cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
 cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 107 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 140 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 115 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 147 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
-cd spike && node tools/check-style-members.mjs  # 52 checks; fails on a StyleSheet member RN does not define
+cd spike && node tools/check-style-members.mjs  # 58 checks; fails on a StyleSheet member RN does not define
+cd spike && node tools/check-call-arity.mjs     # 14 checks; fails on a call with the wrong argument count
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
 cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
@@ -424,7 +426,7 @@ cd spike
 # back.
 for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
          plugins/withDebugSuffix.test.mjs tools/check-copy.mjs \
-         tools/check-style-members.mjs src/update.test.mjs; do
+         tools/check-style-members.mjs tools/check-call-arity.mjs \n         src/update.test.mjs; do
   for b in $(node "$p" --list-mutants); do
     BREAK=$b node "$p" >/dev/null 2>&1
     [ $? -eq 1 ] || echo "NOT RED: $p $b"
@@ -439,7 +441,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 209 mutations
+done                                     # silence is the pass; 219 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

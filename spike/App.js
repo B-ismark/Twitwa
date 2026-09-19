@@ -50,6 +50,7 @@ import Animated, {
   interpolateColor,
   runOnJS,
   useAnimatedStyle,
+  useDerivedValue,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
@@ -96,7 +97,20 @@ import {
 import { proposeFromImage } from './src/autocrop';
 import { readRect } from './src/skia';
 import { maskToDestPixels, planOutput } from './src/plan';
-import { dragCrop, fitView, pickHandle, toImageDelta, toViewportRect, MIN_CROP } from './src/crop';
+import {
+  dragCrop,
+  edgeBand,
+  expandToEdge,
+  fitView,
+  handlePoint,
+  loupeScale,
+  pickBand,
+  pickHandle,
+  toImageDelta,
+  toImagePoint,
+  toViewportRect,
+  MIN_CROP,
+} from './src/crop';
 import {
   canReloadRuntime,
   isStaleLauncherError,
@@ -632,12 +646,50 @@ export default function App() {
     setEd((s) => (s ? { ...s, crop: next } : s));
   }, []);
 
+  // Read off `src` here, in the render, rather than inside a worklet: a
+  // worklet captures what it closes over by value at creation, and a Skia
+  // image is not serialisable across the boundary. Plain numbers are.
+  //
+  // ONE rect, not one per consumer. The gesture and the band overlay both
+  // need the image's extent, and two `{ x: 0, y: 0, w: src.width, h:
+  // src.height }` literals is the two-copies defect at its smallest and
+  // easiest to miss -- they cannot disagree today and they can the moment one
+  // of them learns about, say, a rotation.
+  const imageBounds = useMemo(
+    () => (src ? { x: 0, y: 0, w: src.width, h: src.height } : null),
+    [src],
+  );
+
   const cropGesture = useMemo(() => {
-    // Read off `src` here, in the render, rather than inside the worklet: a
-    // worklet captures what it closes over by value at creation, and a Skia
-    // image is not serialisable across the boundary. Plain numbers are.
-    const bounds = src ? { x: 0, y: 0, w: src.width, h: src.height } : null;
-    return (
+    const bounds = imageBounds;
+
+    // A TAP, RACED AGAINST THE PAN, and the race is what makes both possible
+    // from one detector. A tap needs the finger to go down and up without
+    // travelling; the pan needs it to travel. Whichever condition is met
+    // first wins and the other is cancelled, so reclaiming a band never
+    // fires at the end of a drag and a drag never has to wait for a tap to
+    // time out. `Gesture.Exclusive` would not do: it decides by the order
+    // the two are written in, and the pan activates for a finger that
+    // grabbed nothing.
+    const reclaim = Gesture.Tap().onEnd((e) => {
+      'worklet';
+      const cur = liveCrop.value;
+      if (!view || !bounds || !cur) return;
+      // The frame's own 48pt grab zone comes first. A tap just outside the
+      // top edge is a miss at the handle, not a request to undo the trim.
+      if (pickHandle({ x: e.x, y: e.y }, cur, view)) return;
+      const edge = pickBand(toImagePoint(view, { x: e.x, y: e.y }), bounds, cur);
+      if (!edge) return;
+      const next = expandToEdge(cur, edge, bounds);
+      // Both, in this order. `liveCrop` so the overlay moves on this frame,
+      // and `ed.crop` because that is what the card and the export read; the
+      // effect above then writes the same value back and they agree.
+      liveCrop.value = next;
+      runOnJS(commitCrop)(next);
+    });
+
+    return Gesture.Race(
+      reclaim,
       Gesture.Pan()
         .onBegin((e) => {
           'worklet';
@@ -680,11 +732,11 @@ export default function App() {
           grabbed.value = null;
           dragFrom.value = null;
           gridOn.value = withTiming(0, { duration: GRID_MS });
-        })
+        }),
     );
     // `ed` is deliberately NOT a dependency. It used to be, so every frame of
     // the old drag rebuilt the Gesture object it was in the middle of.
-  }, [view, src, commitCrop, liveCrop, grabbed, dragFrom, gridOn]);
+  }, [view, imageBounds, commitCrop, liveCrop, grabbed, dragFrom, gridOn]);
 
   // Cover, still one box. Phase 3 makes it several objects with a selection and
   // a delete; this is the shipped behaviour moved onto the new state, not a new
@@ -1024,8 +1076,17 @@ export default function App() {
                       put the projection back in the render and undo the whole
                       change: React would have to re-render to move the frame. */}
                   <Scrim crop={liveCrop} view={view} stage={stage} />
+                  <CropBands crop={liveCrop} view={view} bounds={imageBounds} on={gridOn} />
                   <CropGrid crop={liveCrop} view={view} on={gridOn} />
                   <CropFrame crop={liveCrop} view={view} />
+                  <CropLoupe
+                    crop={liveCrop}
+                    view={view}
+                    stage={stage}
+                    image={src.img}
+                    handle={grabbed}
+                    on={gridOn}
+                  />
                 </View>
               </GestureDetector>
             ) : null}
@@ -1150,6 +1211,21 @@ const ZERO_RECT = { x: 0, y: 0, w: 0, h: 0 };
  * and nothing in this repo can make it.
  */
 const GRID_MS = 120;
+
+/**
+ * The loupe's size, its inset from the stage's corner, and how many POINTS
+ * one image pixel is magnified to.
+ *
+ * `LOUPE_ZOOM` is not a magnification. `loupeScale` turns it into one using
+ * the projection, so this number stays meaningful across screenshot widths:
+ * 2 says "one image pixel is two points across", which is the smallest thing
+ * a thumb can be aligned against. 112 is four of those pixels either side of
+ * the crosshair at a 1080-wide capture in this stage -- enough context to see
+ * an edge, small enough not to be the screen.
+ */
+const LOUPE = 112;
+const LOUPE_GAP = 12;
+const LOUPE_ZOOM = 2;
 
 const BRACKET = 22;
 const BRACKET_W = 3;
@@ -1303,6 +1379,160 @@ function CropGrid({ crop, view, on }) {
       <Animated.View style={[styles.gridH, h1]} />
       <Animated.View style={[styles.gridH, h2]} />
     </>
+  );
+}
+
+/**
+ * One band's position, or nothing. Shared by the four hooks below so the
+ * arithmetic exists once; a hook cannot be called in a loop, but the worklet
+ * inside it can.
+ */
+function bandStyle(edge, crop, bounds, view, on) {
+  'worklet';
+  const b = crop && bounds ? edgeBand(edge, bounds, crop) : null;
+  if (!b) return { opacity: 0, left: 0, top: 0, width: 0, height: 0 };
+  const r = toViewportRect(view, b);
+  return { left: r.x, top: r.y, width: r.w, height: r.h, opacity: 1 - on };
+}
+
+/**
+ * The strips the auto-proposed crop is leaving out, and the way to take one back.
+ *
+ * WHAT THE USER SEES. The editor opens on a proposal, so on almost every
+ * screenshot there is already a band above the frame holding the status bar
+ * and whatever flat space was above the post. Until now the only evidence of
+ * that was that the frame did not start at the top, and the only way back was
+ * Reset, which throws away the whole proposal including the parts that were
+ * right.
+ *
+ * WHY NOT A BUTTON. Every surveyed app auto-proposes and every one of them
+ * puts the undo where the thing was removed, because a chip in a bar cannot
+ * say WHICH edge it means and this can. It is also the answer to Phase 2's
+ * "status bar shown as an excluded band that can be dragged back in": the
+ * status bar is the visible case of a general rule, not a special case with
+ * its own state.
+ *
+ * TAP, NOT DRAG, and that is a change to the phrase in the plan rather than
+ * an omission. A band is reclaimed whole or not at all -- half a status bar
+ * is not a thing anyone wants -- so a drag would be a gesture whose only
+ * meaningful outcomes are its two ends. Dragging the edge back by hand is
+ * still there: it is the `n` handle, and it already works.
+ *
+ * SOLID AT LOW ALPHA RATHER THAN DASHED. A dashed 1px border is the obvious
+ * vocabulary for "removed", and on Android RN it renders as a solid line at
+ * hairline widths often enough that it would read as a bug on some devices
+ * and not others. The fill lifts the band out of the scrim; the border gives
+ * it an edge against a pale screenshot, the same problem `CropGrid`'s outline
+ * solves.
+ *
+ * Hidden while a finger is down, off the SAME shared value the grid appears
+ * on. One value, opposite senses: the two are the same statement about
+ * whether a drag is in progress, and a second timer could drift from the
+ * first.
+ */
+function CropBands({ crop, view, bounds, on }) {
+  // One hook per edge, written out, for the reason CropGrid is: hooks are
+  // positional, and the `EDGES.map(...)` that would read better here becomes
+  // a conditional hook the first time an edge has no band.
+  const n = useAnimatedStyle(() => {
+    'worklet';
+    return bandStyle('n', crop.value, bounds, view, on.value);
+  });
+  const e = useAnimatedStyle(() => {
+    'worklet';
+    return bandStyle('e', crop.value, bounds, view, on.value);
+  });
+  const s = useAnimatedStyle(() => {
+    'worklet';
+    return bandStyle('s', crop.value, bounds, view, on.value);
+  });
+  const w = useAnimatedStyle(() => {
+    'worklet';
+    return bandStyle('w', crop.value, bounds, view, on.value);
+  });
+  return (
+    <>
+      <Animated.View style={[styles.band, n]} />
+      <Animated.View style={[styles.band, e]} />
+      <Animated.View style={[styles.band, s]} />
+      <Animated.View style={[styles.band, w]} />
+    </>
+  );
+}
+
+/**
+ * A magnifier at the handle being dragged.
+ *
+ * WHY IT EXISTS, from the survey and from arithmetic rather than from taste.
+ * `fitView` contains the screenshot in the stage, so on a 1080-wide capture
+ * in a ~400pt stage one screen point is about six image pixels. Trimming a
+ * status bar to the row is therefore not something a person can do with a
+ * finger, and the finger is on top of the row in any case. `loupeScale`
+ * derives the magnification from that projection rather than picking a
+ * factor, so it is right on a 720-wide capture and on a 1440-wide one.
+ *
+ * IT DRAWS THE SAME IMAGE THE STAGE DRAWS, at the same contain-fit size, and
+ * then transforms it so the handle's pixel lands in the middle. That is the
+ * point: a loupe rendered from a second projection would magnify a slightly
+ * different picture from the one underneath it, and the user would align the
+ * crop to the wrong one. The transform is Skia's, applied to the child, so it
+ * reads point -> scale -> translate.
+ *
+ * NO LOUPE FOR `move`. `handlePoint` returns null for it, because a
+ * translation has no pixel to align -- and a magnifier over the middle of a
+ * rect being slid around shows the picture at 2x with nothing to line it up
+ * against, which looks like a feature and is noise.
+ *
+ * IT SWAPS SIDES rather than following the finger. Pinned to the top of the
+ * stage, and to the far side of whichever half the handle is in, so it is
+ * never under the hand. Following the finger is the other convention and it
+ * costs a second moving thing on a screen whose aesthetic notes allow one.
+ *
+ * A SQUARE, not the circle the convention suggests. A round loupe needs a
+ * clip path in Skia and a matching outline in RN, two shapes to keep in
+ * step; the crosshair is what says which pixel, and it is legible either way.
+ */
+function CropLoupe({ crop, view, stage, image, handle, on }) {
+  const transform = useDerivedValue(() => {
+    'worklet';
+    const c = crop.value;
+    const h = handle.value;
+    const p = c && h ? handlePoint(h, c) : null;
+    if (!p) return [{ translateX: 0 }, { translateY: 0 }, { scale: 1 }];
+    const k = loupeScale(view, LOUPE_ZOOM);
+    const vx = view.offsetX + p.x * view.scale;
+    const vy = view.offsetY + p.y * view.scale;
+    return [
+      { translateX: LOUPE / 2 - vx * k },
+      { translateY: LOUPE / 2 - vy * k },
+      { scale: k },
+    ];
+  });
+
+  const box = useAnimatedStyle(() => {
+    'worklet';
+    const c = crop.value;
+    const h = handle.value;
+    const p = c && h ? handlePoint(h, c) : null;
+    if (!p) return { opacity: 0, left: LOUPE_GAP, top: LOUPE_GAP };
+    const vx = view.offsetX + p.x * view.scale;
+    return {
+      opacity: on.value,
+      top: LOUPE_GAP,
+      left: vx < stage.w / 2 ? stage.w - LOUPE - LOUPE_GAP : LOUPE_GAP,
+    };
+  });
+
+  return (
+    <Animated.View style={[styles.loupe, box]} pointerEvents="none">
+      <Canvas style={{ width: LOUPE, height: LOUPE }}>
+        <Group transform={transform}>
+          <SkiaImage image={image} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
+        </Group>
+      </Canvas>
+      <View style={styles.loupeCrossV} />
+      <View style={styles.loupeCrossH} />
+    </Animated.View>
   );
 }
 
@@ -1503,6 +1733,48 @@ const styles = StyleSheet.create({
   // One device pixel of line with a dark outline around it, so the grid is
   // legible over a white screenshot and a black one. Thinner than cropEdge
   // because the frame is the statement and the thirds are a guide.
+  // The reclaimable band: a fill that lifts it out of the scrim, and a
+  // hairline so it still has an edge over a pale screenshot. No dashed
+  // border -- see CropBands for why.
+  band: {
+    position: 'absolute',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+  loupe: {
+    position: 'absolute',
+    width: LOUPE,
+    height: LOUPE,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    backgroundColor: '#000',
+  },
+  // The crosshair, in the frame's white-over-dark treatment: the loupe shows
+  // arbitrary screenshot pixels and a single-colour hairline disappears into
+  // some of them.
+  loupeCrossV: {
+    position: 'absolute',
+    left: LOUPE / 2,
+    top: 0,
+    width: 1,
+    height: LOUPE,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    outlineWidth: 1,
+    outlineColor: 'rgba(0,0,0,0.35)',
+  },
+  loupeCrossH: {
+    position: 'absolute',
+    left: 0,
+    top: LOUPE / 2,
+    width: LOUPE,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    outlineWidth: 1,
+    outlineColor: 'rgba(0,0,0,0.35)',
+  },
   gridV: {
     position: 'absolute',
     width: 1,

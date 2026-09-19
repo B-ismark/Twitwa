@@ -423,18 +423,19 @@ NEW came out of that survey and were not in the original plan.
   means the alternative is guessing, and the finger covers the target
 - **NEW: a reset-to-original control**, distinct from Start over
 - ~~**NEW: `TOUCH` raised from 44 to 48.** 44 is the iOS floor; Material's is 48dp~~ **DONE 2026-09-18**
-- Status bar pre-trimmed, shown as an excluded band that can be dragged back in,
+- ~~Status bar pre-trimmed, shown as an excluded band that can be dragged back in,
   and **NEW:** as the visible case of a general auto-propose, which is the one
-  place this app can beat a general photo cropper
+  place this app can beat a general photo cropper~~ **DONE 2026-09-19, as a TAP
+  rather than a drag, and generalised to all four edges**
 
 Deferred out of Phase 2 on purpose, with the survey's reasoning: the aspect row
 (needs an `aspect` parameter that `dragCrop` and `normalizeCrop` do not have)
 and user pinch-zoom (the loupe answers the same need for less).
 
-**Started 2026-09-18: the arithmetic exists, the surface does not.**
+**Started 2026-09-18, and the surfaces followed on 2026-09-19.**
 `spike/src/crop.js` holds the geometry -- contain-fit projection, viewport-to-image
 conversion, the nine handles, the minimum clamp and hit testing -- as a pure module
-with 89 checks and 11 mutations. Everything in it is in image pixels, per the
+with 135 checks and 20 mutations. Everything in it is in image pixels, per the
 constraint below.
 
 **Shipping as of 2026-09-18:** the scrim, the corner brackets, the drag itself
@@ -476,8 +477,80 @@ image pixel is about a sixth of a point, and a fixed 2x or 3x would be right
 for one screenshot width and wrong for the next. `loupe_fixed` returns 3 and
 `loupe_shrinks` drops the clamp that stops a "loupe" reducing.
 
-**Still to do in this phase:** the loupe's surface, and the status-bar band as
-something that can be dragged back in.
+**The loupe's surface is written and NOT SEEN ON A DEVICE**, 2026-09-19.
+`CropLoupe` draws the same `src.img` at the same contain-fit stage size the
+layer underneath it draws, then applies a Skia transform that puts
+`handlePoint`'s pixel under the crosshair. Drawing it from a second projection
+was the alternative and it is the bug it would have caused: the user would
+align the crop against a picture that is not quite the one on screen. It is
+pinned to the top of the stage and swaps to the far side of whichever half the
+handle is in, rather than following the finger -- one fewer moving thing, and
+never under the hand. It is a square, because a round one needs a Skia clip
+path and a matching RN outline, which is two shapes to keep in step for no
+information. It never shows for `move`, because `handlePoint` returns null
+there.
+
+### The excluded bands -- 2026-09-19
+
+Phase 2 promised the status bar "shown as an excluded band that can be dragged
+back in". What shipped is that generalised, and the survey above is why: every
+app surveyed auto-proposes, so the status bar is the visible case of a rule and
+not a case of its own.
+
+`edgeBand(edge, bounds, crop)` is the strip between one edge of the crop and
+the same edge of the image, `expandToEdge` gives that edge back, and `pickBand`
+says which strip a point is in. Computed from the LIVE crop, not from a
+remembered proposal. That is the load-bearing choice and it removes a source of
+truth rather than adding one: holding the proposal alongside the live crop for
+the life of the editor means two rects that can disagree, a band that survives
+the user dragging over it, and no good answer about what Reset does to it.
+
+Each band is the width or height of the CROP, not of the image, so it sits
+directly against the frame. Full-width was the obvious version and
+`BREAK=band_full_width` is it: reclaiming the top would also widen the crop,
+which is invisible on any screenshot whose crop is already full width --
+which is most of them.
+
+**A TAP, not a drag,** and that is a change to the plan's own phrase rather
+than a shortfall. A band is reclaimed whole or not at all; half a status bar is
+not a thing anyone wants, so a drag would be a gesture whose only meaningful
+outcomes are its two ends. Dragging the edge back by hand is still there --
+it is the `n` handle. The tap is RACED against the pan rather than sequenced
+after it, so reclaiming never fires at the end of a drag.
+
+`crop.test.mjs` is at 135 checks and 20 mutations. The four new ones are
+`band_full_width`, `band_zero` (an edge already at the image offers a strip
+that reclaims nothing), `grow_wrong_way` (the height grows and the origin does
+not, so the top eats the picture downwards and the band stays put) and
+`band_ignores_span` (the hit test checks only the axis the band is thick on, so
+a tap beside a narrow crop reports the band above it).
+
+### A gate that can see App.js calling a function wrongly -- 2026-09-19
+
+`tools/check-call-arity.mjs`. `check-imports.mjs` proves an imported name
+RESOLVES and says nothing about how it is then called; `expo export` bundles
+arity-blind. That gap cost a day on 2026-09-18, when App.js called the
+three-argument `readSubRect(img, box, colour)` with two and 1359 checks stayed
+green.
+
+It parses the consumer AND the module, rather than importing the module and
+reading `fn.length`. Two reasons, and the first decides it: the modules most
+worth checking are the ones that cannot be loaded in node at all, and
+`fn.length` stops counting at the first default, so it cannot tell "three
+required" from "one required and two optional".
+
+Its last check injects a call one argument short into the REAL App.js and
+requires the scan to catch it. Without that, a green would also be what a scan
+that matched nothing looks like -- which is exactly how the original bug got
+past three gates. Six mutants, all red: `arity_blind`, `min_blind`,
+`max_blind`, `rest_blind`, `imports_blind`, `parse_blind`.
+
+Nothing in the suites still loads App.js, and the gate does not change that: it
+cannot see namespace imports, re-exported bindings, argument types or order, or
+any decision the component makes.
+
+**Still to do in this phase:** nothing on the list. What is left is device work
+-- see below.
 
 **Queued for the next time the phone is connected**, because the owner
 unplugged it mid-session and none of the above has been seen:
@@ -490,9 +563,27 @@ unplugged it mid-session and none of the above has been seen:
   not an observation);
 - `DEFAULT_RADIUS` 0.02 on a real card rather than on a cropped corner.
 
-What WAS available without the phone and was used: Metro still bundles, so
-`App.js` was built (9,292,035 bytes, `CropGrid` present) which catches a
-syntax error or an unresolved import. It cannot catch a crash at render.
+Added 2026-09-19, same reason -- the phone was still unplugged:
+
+- the four excluded bands are visible over a real screenshot and read as
+  removed rather than as part of the scrim, on a pale capture as well as a
+  dark one;
+- a tap on the band above the frame gives the status bar back, ONCE, and does
+  not also widen the crop;
+- a tap and a drag are actually separable by the race: a slow deliberate drag
+  from inside a band does not reclaim it on release, and a quick tap is not
+  swallowed as a zero-distance pan;
+- the loupe appears at the dragged corner and shows the same pixels as the
+  layer under it, offset by nothing;
+- the loupe's side-swap does not flicker when a handle crosses the midline;
+- the loupe does not cost frames -- a Skia canvas per drag frame is the one
+  thing here that could, and `gfxinfo` is how to find out.
+
+What WAS available without the phone and was used: `npx expo export` bundles
+clean (1329 modules, a 3.4MB `.hbc`), which catches a syntax error or an
+unresolved import; `check-call-arity.mjs` now catches a wrong argument count
+as well. None of the three can catch a crash at render, and none of them can
+see a pixel.
 
 **The owner has now used it, 2026-09-18: "moving the crop is not as smooth as
 I'd expect."** That is the verdict this phase exists to answer, and the cause
@@ -631,7 +722,8 @@ a control whose purpose its own author could not state.
 most three controls. Run on a Pixel 6 Pro through the debug build: empty state,
 source state, Cover, Make card, result, Share (the chooser opens), and the long
 press into the old measurement harness. Gated by `tools/check-copy.mjs`,
-`tools/check-style-members.mjs` and `contrast.py`.
+`tools/check-style-members.mjs`, `tools/check-call-arity.mjs` and
+`contrast.py`.
 
 Not done here: the nav island and the one morph below, which belong to a second
 screen this app does not have yet.
@@ -755,11 +847,12 @@ What landed, beyond the list below:
   An earlier draft drew a neutral frame under Match and let the export decide,
   which would have put a preview/export divergence on the DEFAULT setting
 
-**Still Phase 2 and Phase 3.** Crop ships with a scrim, corner brackets, real
-drag handling through `crop.js` and, as of 2026-09-18, a 48pt touch target.
-The grid on touch and the loupe are not done.
-Cover is still one box per drag with no
-selection and no delete, which the survey says plainly is the wrong shape.
+**Still Phase 3.** Every item on Phase 2's list is written, as of 2026-09-19:
+a scrim, corner brackets, drag handling through `crop.js`, a 48pt touch
+target, the rule-of-thirds grid, the loupe, and the excluded bands. The last
+three have not been seen on a device -- see the queue above, and do not read
+"written" as "works". Cover is still one box per drag with no selection and no
+delete, which the survey says plainly is the wrong shape.
 **Still Phase 5.** Save to Photos and Copy image. The overflow ships with Start
 over and the developer panel rather than with two disabled rows.
 

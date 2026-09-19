@@ -122,6 +122,48 @@ if (BREAK === 'fit_cover') {
     if (inX && inY) return 'move';
     return null;
   };
+} else if (BREAK === 'band_full_width') {
+  // The band runs the whole image width instead of the crop's, so taking the
+  // top back also widens the crop. Invisible on a crop that is already full
+  // width, which is most of the screenshots anyone will test with.
+  F.edgeBand = (edge, bounds, crop) => {
+    if (edge !== 'n') return real.edgeBand(edge, bounds, crop);
+    const h = crop.y - bounds.y;
+    return h > 0 ? { x: bounds.x, y: bounds.y, w: bounds.w, h } : null;
+  };
+} else if (BREAK === 'band_zero') {
+  // An edge already at the image's edge reports an empty band instead of
+  // null, so the surface offers a strip that reclaims nothing.
+  F.edgeBand = (edge, bounds, crop) => {
+    const b = real.edgeBand(edge, bounds, crop);
+    if (b) return b;
+    if (edge === 'n') return { x: crop.x, y: bounds.y, w: crop.w, h: 0 };
+    if (edge === 's') return { x: crop.x, y: crop.y + crop.h, w: crop.w, h: 0 };
+    if (edge === 'w') return { x: bounds.x, y: crop.y, w: 0, h: crop.h };
+    return { x: crop.x + crop.w, y: crop.y, w: 0, h: crop.h };
+  };
+} else if (BREAK === 'grow_wrong_way') {
+  // The height grows and the origin does not, so restoring the top edge eats
+  // the picture downwards and leaves the band exactly where it was.
+  F.expandToEdge = (crop, edge, bounds) => {
+    if (edge !== 'n') return real.expandToEdge(crop, edge, bounds);
+    const b = real.edgeBand('n', bounds, crop);
+    return b ? { x: crop.x, y: crop.y, w: crop.w, h: crop.h + b.h } : crop;
+  };
+} else if (BREAK === 'band_ignores_span') {
+  // The hit test checks only the axis the band is thick on, so a tap beside a
+  // narrow crop reports the band above it.
+  F.pickBand = (point, bounds, crop) => {
+    for (const e of real.EDGES) {
+      const b = real.edgeBand(e, bounds, crop);
+      if (!b) continue;
+      const hit = e === 'n' || e === 's'
+        ? point.y >= b.y && point.y <= b.y + b.h
+        : point.x >= b.x && point.x <= b.x + b.w;
+      if (hit) return e;
+    }
+    return null;
+  };
 } else if (BREAK === 'no_round') {
   // Fractional deltas reach the rect, so the crop sits on half pixels.
   F.dragCrop = (a) => {
@@ -399,6 +441,78 @@ console.log('loupeScale: magnification derived from the projection, not picked')
   let threw = false;
   try { F.loupeScale({ scale: 0 }); } catch (e) { threw = true; }
   check('a viewport with no scale throws rather than dividing by zero', threw);
+}
+
+console.log('the bands an auto-proposed crop leaves behind, and taking them back');
+{
+  const bounds = { x: 0, y: 0, w: 1080, h: 2400 };
+  // A proposal shaped like a real one: the status bar and a flat lead gone
+  // from the top, a gutter gone from each side, nothing from the bottom.
+  const crop = { x: 40, y: 130, w: 1000, h: 2270 };
+
+  const n = F.edgeBand('n', bounds, crop);
+  check('the north band is the strip above the crop',
+    n.x === 40 && n.y === 0 && n.h === 130, JSON.stringify(n));
+  check('and it is the width of the CROP, not of the image',
+    n.w === 1000, `${n.w} wide; the image is ${bounds.w} and the crop ${crop.w}`);
+  const w = F.edgeBand('w', bounds, crop);
+  check('the west band is the strip beside the crop, the height of the crop',
+    w.x === 0 && w.y === 130 && w.w === 40 && w.h === 2270, JSON.stringify(w));
+  check('an edge already at the image reports no band at all',
+    F.edgeBand('s', bounds, crop) === null, JSON.stringify(F.edgeBand('s', bounds, crop)));
+
+  let threw = false;
+  try { F.edgeBand('up', bounds, crop); } catch (e) { threw = true; }
+  check('an edge name it does not know throws', threw);
+  // The lesson `handlePoint` is a table for: a substring test would make
+  // 'move' an east edge. Here the same mistake would make 'ne' a north band.
+  check('the edge list and the handle list use one vocabulary',
+    F.EDGES.every((e) => real.HANDLES.includes(e)), F.EDGES.join(' '));
+
+  const back = F.expandToEdge(crop, 'n', bounds);
+  check('taking the north band back moves the top edge up',
+    back.y === 0, `y went ${crop.y} -> ${back.y}`);
+  check('and the bottom edge stays exactly where it was',
+    back.y + back.h === crop.y + crop.h, `${back.y + back.h} vs ${crop.y + crop.h}`);
+  check('and the width is untouched',
+    back.x === crop.x && back.w === crop.w, JSON.stringify(back));
+  check('taking an edge back that has no band is a no-op',
+    JSON.stringify(F.expandToEdge(crop, 's', bounds)) === JSON.stringify(crop));
+
+  // Every edge, both properties, rather than the north case alone: three of
+  // the four were written by copying the first, which is how a sign survives.
+  for (const e of F.EDGES) {
+    const b = F.edgeBand(e, bounds, crop);
+    if (!b) continue;
+    const g = F.expandToEdge(crop, e, bounds);
+    const area = g.w * g.h;
+    check(`${e}: the band's area is exactly what the crop gains`,
+      area === crop.w * crop.h + b.w * b.h, `${area} vs ${crop.w * crop.h + b.w * b.h}`);
+    check(`${e}: the band is inside the image and outside the crop`,
+      b.x >= bounds.x && b.y >= bounds.y
+      && b.x + b.w <= bounds.x + bounds.w && b.y + b.h <= bounds.y + bounds.h
+      && (b.x + b.w <= crop.x || b.x >= crop.x + crop.w
+        || b.y + b.h <= crop.y || b.y >= crop.y + crop.h),
+      JSON.stringify(b));
+  }
+
+  check('a point in the strip above the crop picks the north band',
+    F.pickBand({ x: 500, y: 60 }, bounds, crop) === 'n',
+    String(F.pickBand({ x: 500, y: 60 }, bounds, crop)));
+  check('a point beside the crop, level with the north band, picks nothing',
+    F.pickBand({ x: 10, y: 60 }, bounds, crop) === null,
+    String(F.pickBand({ x: 10, y: 60 }, bounds, crop)));
+  check('a point in the crop picks nothing',
+    F.pickBand({ x: 500, y: 1000 }, bounds, crop) === null,
+    String(F.pickBand({ x: 500, y: 1000 }, bounds, crop)));
+  check('a point in the west strip picks the west band',
+    F.pickBand({ x: 10, y: 1000 }, bounds, crop) === 'w',
+    String(F.pickBand({ x: 10, y: 1000 }, bounds, crop)));
+  check('and no two bands claim the same point',
+    F.EDGES.filter((e) => {
+      const b = F.edgeBand(e, bounds, crop);
+      return b && 500 >= b.x && 500 <= b.x + b.w && 60 >= b.y && 60 <= b.y + b.h;
+    }).length === 1);
 }
 
 console.log('every gesture, from every handle, lands somewhere legal');
