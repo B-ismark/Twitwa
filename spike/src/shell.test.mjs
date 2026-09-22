@@ -12,8 +12,8 @@
 // `canvas_flag` is the regression this whole module exists to prevent: a
 // canvas that shows the card while a takeover tool is open. That is what the
 // shipped app did with `showingResult`, and the symptom was not a wrong canvas
-// — it was a Cover box drawn over one image and applied to another, because
-// the same on-screen rectangle points at different content in the two.
+// — it was a box drawn over one image and applied to another, because the same
+// on-screen rectangle points at different content in the two.
 //
 // `stops_typed` is the second source of truth. The padding chips and the
 // padding used by `cardSize` have to be one table, and a hand-typed copy of
@@ -36,7 +36,7 @@ const F = { ...real };
 if (BREAK === 'snapshot_shallow') {
   // Snapshot the owned fields by reference. Correct for as long as every edit
   // replaces the value, and silently wrong the first time one is edited in
-  // place — which is what a gesture writing back a dragged box looks like.
+  // place — which is what a gesture writing back a dragged rect looks like.
   F.openTool = (state, tool) => {
     const s = real.openTool(state, tool);
     if (!s.session) return s;
@@ -102,8 +102,8 @@ if (BREAK === 'snapshot_shallow') {
 } else if (BREAK === 'radius_unclamped') {
   F.setRadius = (frac) => frac;
 } else if (BREAK === 'reopen_allowed') {
-  // Opening Crop over an open Cover silently takes a fresh snapshot, so the
-  // Cover session can never be cancelled again.
+  // Opening Crop over an open Crop silently takes a fresh snapshot, so the
+  // session already running can never be cancelled back to where it began.
   F.openTool = (state, tool) => ({
     ...state,
     tool,
@@ -147,10 +147,9 @@ console.log('the tool table says one thing, not two');
     bad.length === 0,
     bad.join(', '),
   );
-  check('and there are three tools', F.TOOLS.length === 3, F.TOOLS.join(','));
+  check('and there are two tools', F.TOOLS.length === 2, F.TOOLS.join(','));
   check('Style owns nothing, which is what "needs no apply" means', F.TOOL.style.owns.length === 0);
   check('Crop owns the crop', F.TOOL.crop.owns.join() === 'crop');
-  check('Cover owns the masks', F.TOOL.cover.owns.join() === 'masks');
 }
 
 console.log('\nthe editor opens on a finished card');
@@ -185,9 +184,6 @@ console.log('\na takeover tool shows the raw screenshot, because that is what is
   const c = F.openTool(fresh(), 'crop');
   check('Crop shows the screenshot', F.canvasShows(c) === 'screenshot', F.canvasShows(c));
   check('and takes the bar over', F.barMode(c) === 'takeover', F.barMode(c));
-  const v = F.openTool(fresh(), 'cover');
-  check('Cover shows the screenshot', F.canvasShows(v) === 'screenshot', F.canvasShows(v));
-  check('and takes the bar over', F.barMode(v) === 'takeover', F.barMode(v));
   const y = F.openTool(fresh(), 'style');
   // The one that matters: Style is adjusting the padding and the corners, and
   // both are invisible on a raw screenshot.
@@ -215,22 +211,20 @@ console.log('\nCancel puts back, Done keeps');
 
 console.log('\nCancel survives an edit made in place');
 {
-  // Not a hypothetical: a crop or a box handed to a gesture and written back is
-  // the normal way this state gets edited, and a snapshot that shares the array
-  // restores a list whose contents already moved. The identity check below says
-  // so directly; this one demonstrates the consequence.
-  const open = F.openTool(fresh(), 'cover');
-  const live = { ...open, masks: [{ x: 1, y: 2, w: 3, h: 4 }] };
+  // Not a hypothetical: a crop handed to a gesture and written back is the
+  // normal way this state gets edited, and a snapshot that shares the object
+  // restores a rect that already moved. The identity check below says so
+  // directly; this one demonstrates the consequence.
+  const open = F.openTool(fresh(), 'crop');
+  const live = { ...open, crop: { x: 1, y: 2, w: 300, h: 400 } };
   const reopened = F.doneTool(live);
-  const second = F.openTool(reopened, 'cover');
-  second.masks[0].w = 999; // the drag
+  const second = F.openTool(reopened, 'crop');
+  second.crop.w = 999; // the drag
   const back = F.cancelTool(second);
-  check('Cancel puts back the box as it was, not as it was dragged to',
-    back.masks[0].w === 3, String(back.masks[0].w));
-  check('the session does not share the live array',
-    second.session.masks !== second.masks);
-  check('nor the boxes inside it',
-    second.session.masks[0] !== second.masks[0]);
+  check('Cancel puts back the crop as it was, not as it was dragged to',
+    back.crop.w === 300, String(back.crop.w));
+  check('the session does not share the live rect',
+    second.session.crop !== second.crop);
 }
 
 console.log('\nReset goes to the base, which is not where Cancel goes');
@@ -252,19 +246,19 @@ console.log('\nReset goes to the base, which is not where Cancel goes');
   check('Reset is live while the crop differs from the proposal', F.canReset(nudged) === true);
   check('and dead once it matches it', F.canReset(F.resetTool(nudged)) === false);
 
-  const cover = F.openTool(fresh(), 'cover');
-  check('Reset is dead with no boxes drawn', F.canReset(cover) === false);
-  check('and live with one', F.canReset({ ...cover, masks: [{ x: 1, y: 1, w: 1, h: 1 }] }) === true);
-  check('Reset clears every box', F.resetTool({ ...cover, masks: [{ x: 1, y: 1, w: 1, h: 1 }] }).masks.length === 0);
+  check('Reset is dead in a Crop opened on the proposal', F.canReset(F.openTool(fresh(), 'crop')) === false);
   check('Reset is never live with no tool open', F.canReset(fresh()) === false);
 }
 
 console.log('\none takeover at a time, and no silent switch');
 {
-  const open = F.openTool(fresh(), 'cover');
+  const open = F.openTool(fresh(), 'crop');
   let threw = false;
   try { F.openTool(open, 'crop'); } catch (e) { threw = true; }
-  check('opening Crop over an open Cover is refused, not absorbed', threw);
+  check('opening Crop over an open Crop is refused, not absorbed', threw);
+  let threwStyle = false;
+  try { F.openTool(open, 'style'); } catch (e) { threwStyle = true; }
+  check('and so is opening Style over it', threwStyle);
 
   // Style is not a takeover, so leaving it is ordinary.
   const styling = F.openTool(fresh(), 'style');

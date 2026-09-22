@@ -34,8 +34,9 @@ const hexLuma = (hex) => luma([
  * It survived a test because the only case tested was `{-50,-50,9999,9999}`,
  * which overshoots every edge at once. There, clamping each field and
  * intersecting give the same answer, so the assertion could not tell them
- * apart. Partial overlap is the discriminating input, and clampMasks — written
- * later, and correctly — is what made the inconsistency visible.
+ * apart. Partial overlap is the discriminating input, and a later clamp for
+ * boxes drawn on the crop — written correctly, and since removed with the tool
+ * it served — is what made the inconsistency visible.
  *
  * An empty intersection throws. A crop entirely outside its image is a caller
  * bug, not a rendering decision: every real gesture is clamped to the image
@@ -207,92 +208,6 @@ export function planCard({ image, crop, padding = 'standard', statusBar = null, 
     background,
     warnings: [...c.warnings, ...out.warnings],
   };
-}
-
-/**
- * Clamp Cover boxes to the crop, in source pixels.
- *
- * A box is dragged over the on-screen image and can extend past the crop edge —
- * the gesture is clamped to the image, not to the crop, and the crop can also be
- * trimmed AFTER a box was placed. Mapping such a box straight into the output
- * draws it over the padding, i.e. a grey rectangle sitting on the frame, outside
- * the picture it was meant to cover.
- *
- * Clamping here rather than relying on a Skia clip keeps the decision testable
- * and keeps one answer: the renderer additionally clips, but that is defence, not
- * the rule. Boxes with no overlap at all are dropped, and reported, because
- * silently drawing nothing and silently drawing in the wrong place are both worse
- * than saying a box fell outside the crop.
- */
-export function clampMasks(masks, crop) {
-  const kept = [];
-  const dropped = [];
-  for (const m of masks || []) {
-    const x0 = Math.max(crop.x, Math.round(m.x));
-    const y0 = Math.max(crop.y, Math.round(m.y));
-    const x1 = Math.min(crop.x + crop.w, Math.round(m.x + m.w));
-    const y1 = Math.min(crop.y + crop.h, Math.round(m.y + m.h));
-    if (x1 <= x0 || y1 <= y0) {
-      dropped.push(m);
-      continue;
-    }
-    kept.push({ ...m, x: x0, y: y0, w: x1 - x0, h: y1 - y0, clipped: x0 !== Math.round(m.x) || y0 !== Math.round(m.y) || x1 - x0 !== Math.round(m.w) || y1 - y0 !== Math.round(m.h) });
-  }
-  return { masks: kept, dropped };
-}
-
-/**
- * Map one Cover box from source pixels into output pixels.
- *
- * The scale comes from `dest/crop`, not from `plan.scale`, so it cannot drift
- * from where the image was actually drawn — `dest` was derived by subtraction and
- * is a rounded integer, so `dest.w / crop.w` is the real scale and `plan.scale`
- * is only what it was before rounding.
- */
-export function maskToDest(mask, plan) {
-  const sx = plan.dest.w / plan.crop.w;
-  const sy = plan.dest.h / plan.crop.h;
-  return {
-    x: plan.dest.x + (mask.x - plan.crop.x) * sx,
-    y: plan.dest.y + (mask.y - plan.crop.y) * sy,
-    w: mask.w * sx,
-    h: mask.h * sy,
-  };
-}
-
-/**
- * The output pixels one Cover box owns: `maskToDest` snapped OUTWARD to integers
- * and intersected with `dest`.
- *
- * `maskToDest` answers where the box lands, which is a fraction of a pixel almost
- * always — the scale is `dest/crop` and neither is a multiple of the other. Drawn
- * from those coordinates, Skia anti-aliases the boundary and **one row of the
- * covered content survives**: measured at up to 53/255 on the first device run,
- * see results/phase1-pipeline.md. A Cover box is a redaction, so that is a leak,
- * not a rounding detail.
- *
- * Outward rather than nearest, because the two errors are not symmetric: covering
- * one pixel more than asked costs a pixel of background-coloured fill on a
- * background-coloured surround, and covering one pixel less leaves part of what
- * the user was hiding. Then intersected with `dest`, so growing outward cannot
- * push fill onto the frame.
- *
- * Returns null for a box that owns nothing: a degenerate source rect, or one that
- * falls outside `dest` entirely. The degenerate case is checked **before**
- * rounding, and it has to be: outward rounding of a zero-width box at a
- * fractional coordinate would otherwise manufacture a 1px mark out of no area at
- * all. `clampMasks` cannot catch it either — a zero-size rect inside the crop
- * overlaps it and is a legal source rect.
- */
-export function maskToDestPixels(mask, plan) {
-  if (!(mask.w > 0) || !(mask.h > 0)) return null;
-  const f = maskToDest(mask, plan);
-  const x0 = Math.max(plan.dest.x, Math.floor(f.x));
-  const y0 = Math.max(plan.dest.y, Math.floor(f.y));
-  const x1 = Math.min(plan.dest.x + plan.dest.w, Math.ceil(f.x + f.w));
-  const y1 = Math.min(plan.dest.y + plan.dest.h, Math.ceil(f.y + f.h));
-  if (x1 <= x0 || y1 <= y0) return null;
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 /**

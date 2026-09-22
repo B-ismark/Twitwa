@@ -2,21 +2,21 @@
 //
 // WHY THIS IS NOT IN App.js. The thing being deleted is `showingResult` — a
 // boolean that decided which of two previews was on the canvas and therefore
-// what the Cover box meant. It was one `useState` among fourteen, and the bug
-// it caused (a box drawn over one image, applied to another) was invisible in
-// every code review because the rule lived in a comment beside the flag rather
-// than in anything that could be run.
+// what a rectangle drawn on it meant. It was one `useState` among fourteen, and
+// the bug it caused (a box drawn over one image, applied to another) was
+// invisible in every code review because the rule lived in a comment beside the
+// flag rather than in anything that could be run.
 //
 // So the rules are a module. A tool session, what it owns, what Cancel and
 // Reset each put back, and which image the canvas is showing are all pure
 // functions of a plain object, and `shell.test.mjs` breaks each of them on
 // purpose. The view reads the answers and draws them.
 //
-// THE THREE TOOLS, and the one property that separates them. Crop and Cover
-// take the bar over and return with Done, because both are direct manipulation
-// of the picture and the user needs the raw screenshot under their thumb, not
-// a padded card. Style does not, because every Style control is already its own
-// preview: the card is live, so moving the padding IS the apply step. That is
+// THE TWO TOOLS, and the one property that separates them. Crop takes the bar
+// over and returns with Done, because it is direct manipulation of the picture
+// and the user needs the raw screenshot under their thumb, not a padded card.
+// Style does not, because every Style control is already its own preview: the
+// card is live, so moving the padding IS the apply step. That is
 // the whole reason `takeover` and `owns` are one table below rather than two
 // lists in two `if`s.
 
@@ -39,7 +39,6 @@ import { DEFAULT_RADIUS, MAX_RADIUS } from './compose.js';
  */
 export const TOOL = {
   crop: { takeover: true, owns: ['crop'] },
-  cover: { takeover: true, owns: ['masks'] },
   style: { takeover: false, owns: [] },
 };
 
@@ -97,12 +96,12 @@ export function padStops() {
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-// Plain data only — crop rects, mask boxes, numbers and strings. JSON rather
-// than structuredClone because this runs in Hermes, and rather than a spread
-// because `masks` is an array of objects: a shallow copy shares every box with
-// the live state, so Cancel would restore a list whose contents had already
-// been dragged. That is the exact shape of bug this module exists to prevent,
-// and `BREAK=snapshot_shallow` is it.
+// Plain data only — crop rects, numbers and strings. JSON rather than
+// structuredClone because this runs in Hermes, and rather than a plain
+// assignment because `crop` is an object: a shallow snapshot shares it with the
+// live state, so Cancel would restore a rect that had already been dragged.
+// That is the exact shape of bug this module exists to prevent, and
+// `BREAK=snapshot_shallow` is it.
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
 /**
@@ -117,7 +116,6 @@ export function editorState(proposed) {
     tool: null,
     proposed: copy(proposed),
     crop: copy(proposed),
-    masks: [],
     padding: PADDING.standard,
     radius: DEFAULT_RADIUS,
     background: BACKGROUNDS[0],
@@ -131,7 +129,6 @@ export function editorState(proposed) {
 /** What Reset puts back, per tool. The base value, not the open-time value. */
 const RESET_TO = {
   crop: (state) => ({ crop: copy(state.proposed) }),
-  cover: () => ({ masks: [] }),
   style: () => ({}),
 };
 
@@ -144,11 +141,13 @@ function snapshot(state, tool) {
 /**
  * Open a tool.
  *
- * Opening one takeover tool while another is open throws rather than closing it
- * implicitly. It is unreachable through the UI — a takeover replaces the bar
- * the other tools live on — so reaching it means the bar and this module
- * disagree about what is on screen, and guessing which the user meant is how
- * an edit gets silently dropped. Style is not a takeover, so switching away
+ * Opening any tool while a takeover tool is open throws rather than closing it
+ * implicitly, and that includes opening Crop over itself: a second open would
+ * take a fresh snapshot, and the session already running could never be
+ * cancelled back to where it began. It is unreachable through the UI — a
+ * takeover replaces the bar the other tools live on — so reaching it means the
+ * bar and this module disagree about what is on screen, and guessing which the
+ * user meant is how an edit gets silently dropped. Style is not a takeover, so switching away
  * from it is ordinary and discards nothing.
  */
 export function openTool(state, tool) {
@@ -182,8 +181,8 @@ export function cancelTool(state) {
 }
 
 /**
- * Put the open tool's values back to their base — the proposed crop, or no
- * masks — and stay in the tool.
+ * Put the open tool's values back to their base — the proposed crop — and stay
+ * in the tool.
  *
  * Distinct from Cancel on purpose, and the distinction is the reason both are
  * in the triad: Cancel undoes this session, Reset undoes every session. A crop

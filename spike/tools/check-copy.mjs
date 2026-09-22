@@ -34,7 +34,7 @@ import { COPY, fill } from '../src/copy.js';
 
 // Files that may show words to a person. src/DevPanel.js is deliberately NOT
 // here: it is the measurement harness, its words are for whoever is holding a
-// cable, and "Q1+Q3" is exactly the label this gate exists to stop everywhere
+// cable, and "Q3" is exactly the label this gate exists to stop everywhere
 // else. Its buttons take `name` rather than `label` so the boundary is visible
 // in the source and not only in this comment.
 const VIEWS = ['App.js'];
@@ -53,7 +53,7 @@ const ALLOWED_CAPS = new Set(['PNG', 'APK', 'JPEG', 'HTTP', 'HTTPS', 'OK']);
 // stricter rules: short, and no full stop, because a button is not a sentence.
 const LABEL_KEYS = new Set([
   'choose', 'share', 'startOver', 'close', 'more',
-  'crop', 'cover', 'style',
+  'crop', 'style',
   'cancel', 'reset', 'done',
   'padding', 'corners', 'background',
   'snug', 'standard', 'roomy',
@@ -234,7 +234,7 @@ console.log('the three source-reading decisions work on a fixture');
     unusedKeys(['ghost'], 'const x = COPY.ghost;').length === 0);
   // The discriminating pair: a prefix must not count as a use.
   check('unusedKeys does not accept a longer name as a use',
-    unusedKeys(['cover'], 'COPY.coverHint').join(',') === 'cover');
+    unusedKeys(['crop'], 'COPY.cropHint').join(',') === 'crop');
 
   check('literalWords finds a hardcoded label',
     literalWords('f.js', '<Action label="Save it" />').length === 1);

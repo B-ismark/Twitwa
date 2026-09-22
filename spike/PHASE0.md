@@ -233,9 +233,15 @@ guard was watched failing before it was trusted.
 
 ## Buttons, and why they are separate
 
-`Q1+Q3` are the cheap reads. `Cover on` / `Cover off` are the A/B for the seam,
-and also produce the Q2 timings and the Q4 round trip. `P3` repeats the compose
-through a Display P3 offscreen surface. `Q5 stress` deliberately asks for the
+`Q3` is the cheap read. `Compose` produces the Q2 timings and the Q4 round
+trip. `P3` repeats the compose through a Display P3 offscreen surface.
+
+History: until 2026-09-22 the first button was `Q1+Q3` and the compose was an
+A/B pair, `Cover on` / `Cover off`, for the seam around a drawn Cover box. The
+owner cut Cover that day; its box was Q1's only on-device input, so the device
+half of Q1 went with it. The figures it produced are in
+`results/phase0-device.md`, and `tools/probe.mjs` still answers Q1 on the
+desktop. `Q5 stress` deliberately asks for the
 whole RGBA buffer — the thing production must never do — so the ceiling becomes a
 measurement instead of the guess the spec currently carries.
 
@@ -243,11 +249,11 @@ One button per question rather than one Measure that runs them all, because Q5 i
 expected to be able to die and a single button would lose the four cheap answers
 every time it did.
 
-`Q1+Q3` emits **both** estimators side by side — the modal fill that is actually
-used, and the mean fill that would have been used — so the device confirms on real
-captures what the desktop probe already measured, rather than taking it on trust.
-It also emits the status-bar shape verdict and `shouldTrim`, which is `false`
-whenever the shape test fails.
+`Q1+Q3` emitted **both** estimators side by side — the modal fill that was
+actually used, and the mean fill that would have been used — so the device
+confirmed on real captures what the desktop probe already measured, rather than
+taking it on trust. `Q3`, what is left of it, emits the status-bar shape verdict
+and `shouldTrim`, which is `false` whenever the shape test fails.
 
 ## Findings before the device
 

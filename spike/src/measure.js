@@ -13,8 +13,6 @@ import {
 } from '@shopify/react-native-skia';
 
 import {
-  ringStats,
-  ringBackground,
   rowInkProfile,
   detectStatusBar,
   zoneInk,
@@ -61,42 +59,15 @@ export async function decodeFromUri(uri) {
   };
 }
 
-// --- Q1: is the ring flat enough for the fill to be seamless? ---------------
-export function measureRing(img, box, thickness = 6) {
-  const outer = {
-    x: box.x - thickness,
-    y: box.y - thickness,
-    w: box.w + thickness * 2,
-    h: box.h + thickness * 2,
-  };
-  const read = timed('readPixels(ring sub-rect)', () => readRect(img, outer));
-  if (!read.value) return { error: 'readPixels returned null' };
-
-  const { buf, rowBytes, width, height, rect } = read.value;
-  // Box position inside the sub-rect we actually read, after clamping.
-  const local = { x: box.x - rect.x, y: box.y - rect.y, w: box.w, h: box.h };
-
-  // Both estimators, deliberately. The modal one is what fills the box; the mean
-  // is kept alongside it so the device confirms on real captures what the desktop
-  // probe already measured — that text in the sampling ring drags a mean fill off
-  // the background, once to #7F7F7F on a #000000 ground.
-  const bg = timed('ringBackground', () => ringBackground(buf, rowBytes, width, height, local, thickness));
-  const mean = timed('ringStats (mean, for comparison)', () =>
-    ringStats(buf, rowBytes, width, height, local, thickness));
-
-  return {
-    readMs: read.ms,
-    bgMs: bg.ms,
-    meanMs: mean.ms,
-    bytesRead: read.value.bytes,
-    subRect: rect,
-    ring: bg.value,       // the fill: modal colour, spread, coverage
-    meanRing: mean.value, // comparison only, never the fill
-  };
-}
+// --- Q1 is not measured here any more ---------------------------------------
+// It asked whether the ring around a drawn Cover box was flat enough for a
+// sampled fill to be seamless, and its only input was that box. Cover was cut
+// on 2026-09-22, so the on-device half went with it. The published figures are
+// in results/phase0-device.md, and the desktop half is tools/probe.mjs, which
+// still runs over real captures.
 
 // --- Q2: composite + encode cost, and Q4: what the colour space does --------
-export function composeAndEncode(img, crop, padPx, fillBox, colors, colorSpace) {
+export function composeAndEncode(img, crop, padPx, background, colorSpace) {
   const outW = crop.w + padPx * 2;
   const outH = crop.h + padPx * 2;
 
@@ -108,28 +79,15 @@ export function composeAndEncode(img, crop, padPx, fillBox, colors, colorSpace) 
     return { error: 'MakeOffscreen(' + outW + 'x' + outH + ') returned null', outW, outH };
   }
 
-  const draw = timed('draw (clear + image + mask)', () => {
+  const draw = timed('draw (clear + image)', () => {
     const canvas = surface.getCanvas();
-    canvas.clear(Skia.Color(colors.background));
+    canvas.clear(Skia.Color(background));
     canvas.drawImageRect(
       img,
       Skia.XYWHRect(crop.x, crop.y, crop.w, crop.h),
       Skia.XYWHRect(padPx, padPx, crop.w, crop.h),
       Skia.Paint(),
     );
-    if (fillBox) {
-      const mask = Skia.Paint();
-      mask.setColor(Skia.Color(colors.mask));
-      canvas.drawRect(
-        Skia.XYWHRect(
-          fillBox.x - crop.x + padPx,
-          fillBox.y - crop.y + padPx,
-          fillBox.w,
-          fillBox.h,
-        ),
-        mask,
-      );
-    }
     return true;
   });
 

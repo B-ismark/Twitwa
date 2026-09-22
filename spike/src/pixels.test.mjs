@@ -607,7 +607,7 @@ console.log('a ring split between two colours reports it through coverage, not s
   // The boundary case for Q1. The modal estimator answers "which colour is the
   // background", so on a 50/50 ring it picks one and reports spread ~0 for that
   // cluster. Spread is NOT the signal here and never was; coverage is, which is
-  // why ringBackground returns it and why pipeline.js warns below 0.6.
+  // why ringBackground returns it and why tools/probe.mjs flags a ring below 0.6.
   const W = 40, H = 40, rb = W * 4;
   const buf = new Uint8Array(rb * H);
   for (let y = 0; y < H; y++) {

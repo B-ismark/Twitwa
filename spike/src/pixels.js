@@ -11,9 +11,11 @@ function px(buf, rowBytes, x, y) {
 /**
  * Colour statistics for the ring of pixels immediately OUTSIDE `box`.
  *
- * This is the measurement Q1 turns on: the Cover tool fills `box` with this
- * ring's mean, so the seam is invisible exactly to the degree the ring is flat.
- * stddev is therefore a prediction, made before anyone looks at the result.
+ * This is the measurement Phase 0's Q1 turned on: a box filled with this
+ * ring's mean hides its seam exactly to the degree the ring is flat, so stddev
+ * is a prediction, made before anyone looks at the result. The tool Q1 was
+ * asked for, Cover, was cut on 2026-09-22; tools/probe.mjs still reports this
+ * over real captures, which is what keeps the function here.
  */
 export function ringStats(buf, rowBytes, width, height, box, thickness = 6) {
   const { x, y, w, h } = box;
@@ -135,10 +137,15 @@ function modalOf(pts, tolerance) {
  * This exists so that sampling a box's surround does not require reading the
  * box. `ringBackground` takes a buffer that already contains the whole padded
  * region and skips the interior while scanning, which is fine for a detector
- * running on a crop already in memory — but `pipeline.js` was using it on a
- * Cover box by reading the box's padded bounding rectangle out of the source
- * image first. For a Cover box over a whole 1080x20000 capture that is an
- * 82.4MiB `readPixels` of which everything but a 6px border is discarded.
+ * running on a crop already in memory — but the renderer's Cover fill, cut with
+ * that tool on 2026-09-22, was using it by reading the box's padded bounding
+ * rectangle out of the source image first. For a box over a whole 1080x20000
+ * capture that is an 82.4MiB `readPixels` of which everything but a 6px border
+ * is discarded.
+ *
+ * Nothing in the app calls this now; its own tests do, and it is kept for the
+ * day a surround is sampled again, because the tiling is the part that is easy
+ * to get wrong.
  *
  * The strips cover exactly the same pixels as the scan: top and bottom take the
  * full padded width including the corners, left and right take only the box's
@@ -147,8 +154,8 @@ function modalOf(pts, tolerance) {
  * and a corner missed would drop the pixels most likely to be background.
  *
  * Returns [] when the box covers the image and there is no surround to read.
- * That is a real case — a Cover box can be dragged over everything — and the
- * caller must treat it as "no answer", not as a black background.
+ * That is a real case — a box can be dragged over everything — and the caller
+ * must treat it as "no answer", not as a black background.
  */
 export function ringStrips(box, thickness, width, height) {
   const { x, y, w, h } = box;
@@ -584,10 +591,10 @@ export function detectStatusBar(profile, { flat = 0.01, run = 8, minRow = 8 } = 
 /**
  * Contiguous runs of inked rows, each with the flat gap above and below it.
  *
- * This is what finds the Cover tool's real targets. A like-count row is a thin
- * band of ink sitting on flat ground, which is exactly the shape that a flat
- * sampled fill can hide — so these runs, not a blind grid of boxes, are the
- * population Q1 should be measured over.
+ * This is what found Phase 0's Q1 targets. A like-count row is a thin band of
+ * ink sitting on flat ground, which is exactly the shape that a flat sampled
+ * fill can hide — so these runs, not a blind grid of boxes, are the population
+ * Q1 was measured over (tools/probe.mjs).
  */
 export function inkRuns(profile, { flat = 0.01 } = {}) {
   const runs = [];

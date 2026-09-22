@@ -5,14 +5,20 @@ decisions and the measured evidence; this one holds the order of work.*
 
 ## What we are building
 
-Share a screenshot in, drag a crop, optionally cover leftover chrome, get a padded
-PNG on a background matched to the screenshot. No network in v1.
+Share a screenshot in, drag a crop, get a padded PNG on a background matched to
+the screenshot. No network in v1.
 
 ## The one thing that could kill it
 
+**History since 2026-09-22.** The owner cut Cover (see Phase 3), so nothing in the
+app depends on this section any more. It stays because it is a real measurement,
+and because it is what Phase 3's design stands on if redaction ever comes back.
+What the cut gives up is exactly the case below: on Instagram a card now keeps the
+like count or loses the caption.
+
 The Cover tool. A crop cannot exclude the like count that sits between an Instagram
-image and its caption, so Cover is what makes the app meet its own problem
-statement. It fills a dragged box with the colour sampled from just outside that
+image and its caption, so Cover was what would make the app meet its own problem
+statement. It filled a dragged box with the colour sampled from just outside that
 box, which is seamless **only if** social backgrounds are as flat as they look.
 
 **Answered, 2026-09-16: they are.** Four real captures, 58 Cover target rows,
@@ -25,7 +31,7 @@ pixel math, and only Skia speed, the colour round trip and the memory ceiling
 need a device. The assumption that they all needed hardware cost nothing here, but
 it is the reason this was nearly deferred behind a Gradle build.
 
-The condition it came with: the fill must be the ring's **modal** colour. A mean
+The condition it came with: the fill had to be the ring's **modal** colour. A mean
 is dragged by text caught in the sampling ring and produced a mid-grey fill on a
 pure-black background.
 
@@ -34,8 +40,8 @@ pure-black background.
 ## Dependencies — and what got cut
 
 The instinct with Skia is that it is heavy, so avoid it. That is backwards here.
-Skia does the pixel sampling for background matching, the crop, the mask fill, the
-composition, and the PNG encode — **one dependency replacing four**:
+Skia does the pixel sampling for background matching, the crop, the composition,
+and the PNG encode — **one dependency replacing four**:
 
 | Cut | Why |
 | --- | --- |
@@ -49,9 +55,9 @@ Final list — nine, three of them Expo-bundled:
 
 ```
 expo
-react-native-gesture-handler      crop + mask gestures
+react-native-gesture-handler      crop gestures
 react-native-reanimated           gesture values on the UI thread, the one morph
-@shopify/react-native-skia        sample, crop, mask, compose, encode
+@shopify/react-native-skia        sample, crop, compose, encode
 expo-image-picker                 pick a screenshot
 expo-media-library                save via MediaStore
 expo-sharing                      share sheet / WhatsApp
@@ -107,8 +113,8 @@ is now a control rather than a fixed 14px (2026-09-18). Still exactly one shadow
 in the app, under the island: a second one on the card was wanted and dropped the
 same day, because it could not be elevation and a Skia shadow clips against the
 padding budget in the export where nobody would see it. The only animation is the
-cross-fade between the composed card and the raw screenshot when Crop or Cover
-takes the bar; gestures track the finger 1:1 with no easing theatrics.
+cross-fade between the composed card and the raw screenshot when Crop takes the
+bar; gestures track the finger 1:1 with no easing theatrics.
 
 **Two type sizes, two weights.** System font. Empty states are one line of Graphite,
 centred, no illustration.
@@ -207,9 +213,9 @@ interactive.
 - The ordering is enforced in code, not documented: `src/plan.js` exposes
   `planCard`, which takes the edge sampler as a **callback** so there is no way to
   sample the background from the pre-trim rect and then throw those rows away
-- Cover boxes are clamped to the crop in pure code and clipped in Skia as
+- ~~Cover boxes are clamped to the crop in pure code and clipped in Skia as
   defence; each box is filled with the modal colour of its **own** ring, not the
-  card background
+  card background~~ **Built, then removed with Cover on 2026-09-22**
 - EXIF orientation is baked in **before** planning, because applying it at draw
   time also moves the destination rect and leaves a 90-degree rotation sized for
   the wrong aspect
@@ -242,8 +248,8 @@ encoding is separately proven.
 476 / 640): the card is byte-identical across a 2x range. Byte-identity is
 available here *because* it is one device and therefore one encoder — the caveat
 above still governs a real second device. Not evidence about another GPU, Skia
-build or Android skin. The masked path is density-**dependent** by construction and
-measured to be; see `spike/results/phase1-pipeline.md`.
+build or Android skin. The Cover path, since removed, was density-**dependent** by
+construction and measured to be; see `spike/results/phase1-pipeline.md`.
 
 Then send one through WhatsApp and look at what arrives. The sizing rules were
 chosen against WhatsApp's recompression and have never been checked against it.
@@ -274,7 +280,8 @@ at the bottom.
    app, two vocabularies, and the line between them is exactly the line the
    owner drew: brackets for the frame the whole image sits inside, dots for a
    thing sitting on top of it. VSCO and Freeform agree on the dots. This is a
-   free way to make Crop and Cover unmistakable without a word of copy.
+   free way to make Crop and Cover unmistakable without a word of copy. (Cover
+   has since been cut; the bracket half of this stands.)
 3. **The grid appears on touch, not at rest.** X and Binance show rule-of-thirds
    during a drag; Reddit, Google Photos and Apple Photos show brackets only when
    idle. uCrop and Android-Image-Cropper both name "show on touch" as an option,
@@ -406,7 +413,8 @@ under it. The two are not substitutes, and neither is optional:
 So Phase 2 delivers the real crop surface, and Phase 3's multiple boxes stop
 being a refinement and become the rest of the answer. Until both land, the
 single Cover box should be understood as a placeholder that the owner has
-already called out as the wrong shape.
+already called out as the wrong shape. **Settled 2026-09-22: Phase 3 was cut
+rather than built, and the placeholder went with it.**
 
 The list below is what the survey above says a crop surface is. Items marked
 NEW came out of that survey and were not in the original plan.
@@ -415,7 +423,8 @@ NEW came out of that survey and were not in the original plan.
   worklets so it runs off the JS thread
 - Minimum crop clamped at ~120px on the short edge — clamp the gesture, do not error
 - Corner brackets per the aesthetic notes, and **NEW:** brackets specifically,
-  because eight dots is the other vocabulary and it means Cover
+  because eight dots is the other vocabulary and it means an object on the
+  picture
 - **NEW: a scrim over everything outside the crop.** Present in every surveyed
   surface without exception, and it is what makes the frame read as a frame
 - **NEW: rule-of-thirds grid while a finger is down, and not at rest**
@@ -679,31 +688,48 @@ cannot vary its pressure, it cannot pause, and it moves in a straight line.
 **Still not done:** the same check on the slowest device available rather
 than the fastest. Every frame number here is from a Pixel 6 Pro.
 
-## Phase 3 — Cover
+## Phase 3 — Cover — **CUT 2026-09-22**
 
-**OPEN QUESTION, raised by the owner on 2026-09-18 after using the build:
-"the Cover feature is still here, not sure its use."** Unresolved on purpose
-rather than answered here, because it decides whether this phase happens at
-all and it is not a question the code can settle.
+The owner cut Cover, settling the question they had raised on 2026-09-18 after
+using the build: "the Cover feature is still here, not sure its use." The app
+is Crop and Style.
 
-What Cover was for, per the owner's own earlier reasoning recorded above:
-Crop chooses what the card IS, Cover hides things inside that choice — a
-handle here, a face there. The two were called out as not substitutes.
+Removed end to end: the tool and its bar button, the box state and its Reset in
+`src/shell.js`, the box clamp and output mapping in `src/plan.js`, the
+ring-sampled fill and its clip in `src/pipeline.js`, the live preview's boxes in
+`App.js`, the copy, and the developer panel's Cover buttons. The on-device half
+of Phase 0's Q1 went too, because a drawn Cover box was its only input; the
+desktop half, `tools/probe.mjs`, still runs. Kept, with their tests, because
+`tools/probe.mjs` consumes them: `ringStats` and `ringBackground` in
+`src/pixels.js`. Kept with only its own tests as a consumer: `ringStrips`, the
+four-strip ring read, which is the sampling half of the design below already
+written.
 
-What has changed since that reasoning: the editor now opens on an auto-proposed
-crop that already removes the status bar, so the most common thing anyone
-wanted to hide is gone before the user sees the card. What remains for Cover
-is redaction — a handle, a face, a name — which is a real need but a rarer
-one, and the current single box is the shape the owner already called wrong.
+What the cut gives up: redaction of any kind — a handle, a face, a name — and
+the like-count row between an Instagram image and its caption, which a single
+crop cannot exclude. That row was "the one thing that could kill it" at the top
+of this plan.
 
-So the fork is: **cut Cover** (one screen, one job, and the overflow gets the
-room), or **build it properly** as the objects-with-eight-dots surface below.
-Shipping the placeholder indefinitely is the one option to rule out — it is
-a control whose purpose its own author could not state.
+The question as it stood before the decision, kept as the record of what it was
+taken against:
+
+- Crop chooses what the card IS, Cover hides things inside that choice — a
+  handle here, a face there. The two were called out as not substitutes.
+- Since that reasoning, the editor had come to open on an auto-proposed crop
+  that already removes the status bar, so the most common thing anyone wanted
+  to hide was gone before the user saw the card. What remained for Cover was
+  redaction, a real need but a rarer one, and the shipped single box was the
+  shape the owner had already called wrong.
+- The fork was **cut Cover** (one screen, one job) or **build it properly** as
+  the objects-with-eight-dots surface below. Shipping the placeholder
+  indefinitely was the one option ruled out.
+
+The rest is kept as the design to return to if redaction is ever wanted:
 
 - Drag to add a mask box, tap a box to remove it, multiple boxes. **The one
-  box in the Phase 4 build is the placeholder this replaces**: it cannot cover
-  two places in one screenshot, which is the ordinary case, not the rare one
+  box the Phase 4 build shipped was the placeholder this would replace**: it
+  could not cover two places in one screenshot, which is the ordinary case, not
+  the rare one
 - Fill is the **modal** colour of the ring outside each box, recomputed live —
   never the mean, which text in the ring drags off the background
 - Surface `coverage` when it is low: the box is misplaced, not the background rough
@@ -714,6 +740,13 @@ a control whose purpose its own author could not state.
   else uses and nobody will guess
 - **Not being built:** auto-redaction over OCR, declined by the owner on
   2026-09-18. Every box is one the user drew
+- What the removed build had already learned, so it is not relearned: boxes are
+  stored in **image** pixels, because view coordinates cover a different region
+  at each density; a box is clamped to the final crop, which a later trim can
+  move under it; and its output rect is snapped **outward** to whole pixels and
+  drawn with anti-aliasing off, because an anti-aliased edge leaked the covered
+  content at up to 53/255. `spike/results/phase1-pipeline.md` has the
+  measurements
 
 ## Phase 4 — chrome
 
@@ -757,7 +790,8 @@ against what this plan says. It exits 1 on failure.
 ## Phase 4.5 — the editor shell and Style — BUILT 2026-09-18
 
 **Added 2026-09-18, after the owner settled the IA.** It comes before Phase 5
-because Crop and Cover both hang off this shell, and because it is where the
+because Crop and (until it was cut on 2026-09-22) Cover both hang off this
+shell, and because it is where the
 render step gets deleted.
 
 **Built 2026-09-18, and RUN ON THE PHONE the same day.** It did not survive
@@ -851,8 +885,8 @@ What landed, beyond the list below:
 a scrim, corner brackets, drag handling through `crop.js`, a 48pt touch
 target, the rule-of-thirds grid, the loupe, and the excluded bands. The last
 three have not been seen on a device -- see the queue above, and do not read
-"written" as "works". Cover is still one box per drag with no selection and no
-delete, which the survey says plainly is the wrong shape.
+"written" as "works". Cover was cut on 2026-09-22 rather than rebuilt; see
+Phase 3.
 **Still Phase 5.** Save to Photos and Copy image. The overflow ships with Start
 over and the developer panel rather than with two disabled rows.
 
@@ -862,8 +896,9 @@ over and the developer panel rather than with two disabled rows.
   Phase 3's own line forbids and that nothing in the survey has
 - One island, primary, **Share**. Save to Photos and Copy image move into an
   overflow with Start over and Settings
-- A three-item tool bar: Crop, Cover, Style. Crop and Cover take the bar over and
-  return with Done; Style opens a control strip and needs no apply
+- A tool bar: Crop and Style. Crop takes the bar over and returns with Done;
+  Style opens a control strip and needs no apply. (Built with Cover as a third
+  takeover tool; Cover was cut on 2026-09-22)
 - The canvas cross-fades between the composed card and the raw screenshot when a
   takeover tool opens. The one piece of motion in the app
 - **Style: padding, corners, background.** Padding is three stops plus a drag to
@@ -972,7 +1007,8 @@ can move or be deleted mid-session. It is session-scoped now rather than
 persistent.
 
 The rest is kept here as the design to return to if a Library is ever wanted:
-crop rect and mask boxes persisted in **source-image pixel space** so they
+crop rect (and any boxes, should Cover return) persisted in **source-image pixel
+space** so they
 survive a different screen, a different density and a re-render at a different
 size; two distinct destructive actions, never one button, because "clear
 rendered outputs" loses nothing and "delete originals" destroys re-editability;
@@ -994,8 +1030,9 @@ because the aesthetic depends on seeing real crops in it — designing the islan
 against a placeholder rectangle is how apps end up looking generic.
 
 **Revised 2026-09-18.** Phase 4.5 now sits between chrome and save, because the
-IA changed under the build: the editor shell is what Crop and Cover hang off, and
-the live card it introduces is what makes them worth having. Phase 4's screen was
+IA changed under the build: the editor shell is what Crop and Cover hung off
+(Cover since cut), and the live card it introduces is what makes them worth
+having. Phase 4's screen was
 built around a render button that the shell deletes, so doing Phase 2 first would
 mean building the crop surface into a state machine already scheduled for
 removal.
@@ -1006,9 +1043,10 @@ Phase 0 has run on a device and all five questions have measured answers
 (`spike/results/`). What remains unverified is narrower, and none of it is a
 measurement this repo can take on its own:
 
-- **Q1's verdict on a real display.** Every number predicts no visible seam. A
+- ~~**Q1's verdict on a real display.** Every number predicts no visible seam. A
   number below the eye's threshold is not the eye. This is the one open item that
-  could still change direction.
+  could still change direction.~~ **Moot since 2026-09-22**: Cover was cut, so the
+  app draws no fill for a seam to show in.
 - ~~**Whether the Display P3 colour chunk reaches the PNG.**~~ **Measured.**
   `colorSpace: DisplayP3` writes an `iCCP` whose colorant tags are Display P3's,
   and 961238 channel samples re-encode. The default output carries no colour

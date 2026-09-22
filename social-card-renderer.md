@@ -14,9 +14,9 @@ the crop problem but slap on their own branding or reformat things oddly.
 
 The user screenshots the post themselves, shares the image into the app, and drags a
 crop to the part they want. The app re-renders that crop with generous, adjustable
-padding on a background matched to the screenshot, and offers a mask tool for any
-leftover chrome the crop could not exclude. Output saves to Photos or shares
-straight to WhatsApp.
+padding on a background matched to the screenshot. Output saves to Photos or
+shares straight to WhatsApp. (It also offered a mask tool, Cover, for chrome the
+crop could not exclude, until the owner cut it on 2026-09-22; see below.)
 
 No fetching, no API, no network. The app is a crop-and-compose tool, which is why it
 works on anything the user can see: public posts, private accounts, locked posts,
@@ -41,7 +41,12 @@ What it gives up: fixed pixels. A light-mode screenshot stays light, text cannot
 re-wrapped, and a saved card cannot be re-rendered later in a different theme. Those
 are real, and they are what the link path would buy back in v2.
 
-### The honest weakness, and the fix
+### The honest weakness, and the fix that was cut
+
+**Cover was cut by the owner on 2026-09-22.** The weakness below is real and is
+now simply accepted: on Instagram a card keeps the like count or loses the
+caption. The fix is kept as a record of what was measured, and BUILD-PLAN.md's
+Phase 3 holds the design to return to if redaction is ever wanted.
 
 A crop cannot remove chrome that sits *between* two things the user wants. On X the
 action bar sits below the post text, so cropping it away works. On Instagram the
@@ -49,19 +54,18 @@ on-screen order runs image → action row → like count → caption, so a crop 
 both the image and the caption keeps the like count with it — which is precisely
 what the problem statement is about.
 
-Hence the **mask tool**: after cropping, the user drags a box over leftover chrome
-and it is filled with the colour sampled from immediately around the box. Social UIs
-are flat single-colour backgrounds, so a sampled fill is seamless without real
-inpainting. This is not a nice-to-have — it is the thing that decides whether the
-app delivers the stated problem or only most of it, so it ships in v1 and gets
-prototyped first.
+Hence the **mask tool** as it was designed: after cropping, the user drags a box
+over leftover chrome and it is filled with the colour sampled from immediately
+around the box. Social UIs are flat single-colour backgrounds, so a sampled fill is
+seamless without real inpainting. It was called the thing that decides whether the
+app delivers the stated problem or only most of it, and it was prototyped first.
 
 **Measured, 2026-09-16** (`spike/results/phase0-q1-q3.md`). On a real dark-mode X
 capture and a real dark-mode Instagram capture, every row the Cover tool would
-target has a background spread below 1/255 — the engagement rows come in at 0.04
+have targeted has a background spread below 1/255 — the engagement rows come in at 0.04
 to 0.59. The premise holds.
 
-With one condition that changes the implementation: **the fill is the ring's modal
+With one condition that changed the implementation: **the fill is the ring's modal
 colour, not its mean.** The sampling ring around a like-count row catches
 ascenders and descenders from the rows either side, and a mean is dragged by them.
 On one measured row a mean fill came out `#7F7F7F` — mid grey — where the actual
@@ -82,11 +86,10 @@ visible fill.
    bands are detected and trimmed, the background is sampled, the padding is at its
    default. **There is nothing to press to make this happen.**
 3. Optional: **Crop** to a different region.
-4. Optional: **Cover** anything left over — like counts, a stray icon, a face.
-5. Optional: **Style** — padding, corner radius, background.
-6. Share. The chooser opens on the card.
+4. Optional: **Style** — padding, corner radius, background.
+5. Share. The chooser opens on the card.
 
-Steps 3 to 5 are optional by design, and the default path is share in, then share
+Steps 3 and 4 are optional by design, and the default path is share in, then share
 out. That is two taps and no decisions, which is the entire product.
 
 **There is no render step.** The card on screen is the card that exports, and it
@@ -255,21 +258,21 @@ can express, so it is a device check.
 - **Layout**: content-first, single column. The crop surface fills the screen; nav
   and controls float above and below on their own surfaces.
 - **Motion**: one deliberate moment — the Save button morphing into the export
-  sheet. Crop and mask gestures are direct manipulation, not animation.
+  sheet. Crop gestures are direct manipulation, not animation.
 
 ### Icon pack and UI library
 
 - **Icons**: [Lucide](https://lucide.dev) — one consistent outline weight, native
-  React Native package (`lucide-react-native`). Small vocabulary: crop, mask, share,
-  save, settings.
+  React Native package (`lucide-react-native`). Small vocabulary: crop, share, save,
+  settings.
 - **Framework**: React Native + Expo — fits the share-target requirement and keeps
   Android/iOS in one codebase.
-- **Crop and mask surface**: `react-native-gesture-handler` plus
-  `react-native-reanimated`, driving the crop rect and mask boxes on the UI thread.
+- **Crop surface**: `react-native-gesture-handler` plus
+  `react-native-reanimated`, driving the crop rect on the UI thread.
   This is the only genuinely new work in the app.
 - **All pixel work**: `@shopify/react-native-skia`, as the single imaging
   dependency. It does the edge sampling for background matching, the crop (draw a
-  sub-rect), the mask fill, the composition, and the PNG encode. The instinct is
+  sub-rect), the composition, and the PNG encode. The instinct is
   that Skia is heavy and should be avoided, but here it **replaces** four libraries
   — `react-native-view-shot`, `expo-image-manipulator`, and the alternatives for
   pixel reads — so taking it is the lighter choice, not the heavier one. Skia
@@ -298,8 +301,6 @@ can express, so it is a device check.
   or triad-heavy microcopy.
 - Empty states are an invitation: "Share in a screenshot, or pick one to get
   started."
-- The mask tool is named for its effect, not its method: "Cover" or "Hide", never
-  "Inpaint" or "Heal".
 
 ## Information architecture
 
@@ -312,7 +313,6 @@ Editor — the only screen
 │                        island: pick a screenshot
 └── With a screenshot    the card, live, as it will export
     ├── Crop     ── takes over the bar ── Cancel / Reset / Done
-    ├── Cover    ── takes over the bar ── Cancel / Done
     ├── Style    ── a control strip, no takeover
     │                Padding · Corners · Background
     ├── island: Share
@@ -328,15 +328,15 @@ Editor — the only screen
             └── About
 ```
 
-**Three tools, and they are not peers of each other in kind.** Crop and Cover are
-direct manipulation on the image and each needs the whole surface, so each takes
-the bar over and returns with Done — the pattern X, Apple Photos and CapCut all
+**Two tools, and they are not peers of each other in kind.** Crop is direct
+manipulation on the image and needs the whole surface, so it takes the bar over
+and returns with Done — the pattern X, Apple Photos and CapCut all
 use for their crop. Style is four knobs whose effect is already visible on the
 canvas, so it needs no takeover and no apply.
 
 **What the canvas shows depends on the tool.** Style and the resting state show
-the composed card — background, padding, radius. Crop and Cover show the
-raw screenshot, full-bleed, because padding around a crop you are still choosing
+the composed card — background, padding, radius. Crop shows the raw
+screenshot, full-bleed, because padding around a crop you are still choosing
 is noise. Switching tools cross-fades between the two. This is the one piece of
 motion in the app.
 
@@ -355,10 +355,7 @@ flowchart TD
     D -->|"Tiny"| D1["Warn: card will be small, never upscaled"]
     D -->|"Yes"| E["Detect and trim status bar"]
     E --> F["Crop surface: user drags region"]
-    F --> G{"Leftover chrome?"}
-    G -->|"Yes"| H["Cover tool: mask box, sampled background fill"]
-    G -->|"No"| I["Sample crop edges for background colour"]
-    H --> I
+    F --> I["Sample crop edges for background colour"]
     I --> J{"Edges agree?"}
     J -->|"Yes"| K["Background = sampled colour"]
     J -->|"No"| K2["Background = Paper or Ink by luminance"]
@@ -382,7 +379,7 @@ Note there is no clipboard path any more, and with it goes the pasteboard-read
 concern from the link design. An image on the clipboard is still worth accepting if
 it is free, but it is not an entry point.
 
-### The editor, and its three tools
+### The editor, and its two tools
 
 **Rewritten 2026-09-18** against the survey of 24 shipped surfaces in
 BUILD-PLAN.md. Each convention below is there because everything surveyed had it,
@@ -401,13 +398,10 @@ bar becomes Cancel / Reset / Done.
 The phone's chrome is pre-trimmed and shown as an excluded band the user can drag
 back in — the visible case of the auto-propose below.
 
-**Cover.** Drag on the image to add a box; **a box is an object**, so it carries
-eight dots and a small floating toolbar with a delete, which is what Apple Markup,
-VSCO and Freeform all do. Tap a box to select it, drag it to move, drag a dot to
-resize. Any number of boxes, because one screenshot routinely has a handle in one
-corner and a face in another — one box was never enough and the owner said so.
-Fill is the modal colour of the ring outside each box. The bar becomes Cancel /
-Done.
+**Cover was the third tool, and the owner cut it on 2026-09-22.** Its design —
+boxes as objects with eight dots and a delete, any number of them, each filled
+with the modal colour of its own ring — is kept in BUILD-PLAN.md's Phase 3 as the
+design to return to if redaction is ever wanted.
 
 **Style.** Four controls on a strip, all live, no apply:
 
@@ -450,7 +444,8 @@ not a decision they have to discover and undo.
 
 **Auto-redaction is out**, declined by the owner on 2026-09-18. Xnapper does it
 over OCR and it would have been Cover's other half; it is not being built, and the
-ML Kit dependency it needed is not being added.
+ML Kit dependency it needed is not being added. With Cover cut too, the app does
+no redaction of any kind.
 
 ## Screen inventory and states
 
@@ -460,7 +455,6 @@ Revised 2026-09-18 with the Library and its detail screen removed.
 | --- | --- | --- | --- | --- |
 | Editor | "Share in a screenshot, or pick one to get started" | Image decode skeleton at the source's own proportions | "This image couldn't be opened" + pick another | The live card |
 | Crop tool | n/a | n/a | n/a | Scrim, brackets, grid on touch, loupe on drag |
-| Cover tool | n/a | n/a | n/a | Boxes as objects; select, move, resize, delete |
 | Style tool | n/a | n/a | n/a | Four controls, live |
 | Share | n/a | Encode at full resolution, island shows progress | "This phone has no way to share the card" | System chooser on the PNG |
 | Settings | n/a | n/a | n/a | Grouped list in a sheet |
@@ -487,7 +481,6 @@ not on a blocking overlay.
 | Status bar already cropped out | Do nothing. Measured on two real captures: the old heuristic found a confident "status bar" at 7.6% and 7.9% of height that was in fact the author's avatar-and-name row, so auto-trim would have silently eaten the byline. Detecting a top boundary is not the same as detecting chrome. |
 | Rounded platform corners inside the crop | Leave them. Matching the card radius to them is a guess; the user cropped where they cropped. |
 | Crop edges disagree on background colour | Fall back to Paper or Ink by the crop's overall luminance rather than picking one edge and hoping. |
-| Mask box over non-flat background | The sampled fill will be visible. Allow it, show the result live so the user sees it immediately, and do not pretend it is seamless. |
 | Screenshot already padded by its source app | Nothing to do — the user's own padding plus ours just reads as roomier. Not worth detecting. |
 | Screenshot of a screenshot | Works, no special handling. |
 | Photos permission denied | Fall back to the share sheet silently. Don't nag, don't block — sharing to WhatsApp is the actual goal. |
@@ -496,14 +489,14 @@ not on a blocking overlay.
 | Same screenshot used twice | Two independent sessions. Two crops of one screenshot are two different cards, so there is nothing to deduplicate and nothing that remembers the first. |
 | Device theme changes mid-session | Chrome follows the system. The card's background is either sampled or explicitly chosen, so it never changes underneath the user. |
 | Alt text on export | Not generated. Out of scope for v1, stated so the omission is deliberate. |
-| Likes or counts still visible after crop | This is the Cover tool's entire reason to exist. If Cover proves unconvincing in practice, the problem statement is not fully met and the link path in the appendix becomes the answer rather than an enhancement. |
+| Likes or counts still visible after crop | They stay. This was the Cover tool's entire reason to exist, and Cover was cut on 2026-09-22, so a row sitting between two things the user keeps cannot be removed and the problem statement is not fully met on Instagram. If that matters, the link path in the appendix becomes the answer rather than an enhancement. |
 
 ## Decisions settled
 
 | Decision | Choice | What it means for the build |
 | --- | --- | --- |
 | Input mode | **Screenshot, shared in or picked** | No network in v1. Deletes the entire fetch layer, every per-platform parser, and every error state around deleted, private, unsupported, or rate-limited posts. |
-| Chrome removal | Crop, plus a **Cover** mask with sampled-background fill | The crop alone cannot satisfy the problem statement on Instagram. Prototype Cover first — it carries the premise. |
+| Chrome removal | **Crop only** (Cover cut 2026-09-22) | The crop alone cannot satisfy the problem statement on Instagram, and that is now accepted. Cover, a mask with sampled-background fill, was prototyped first and measured seamless, and the owner cut it; BUILD-PLAN.md's Phase 3 records the question that came before the decision. |
 | Card background | Sampled from the crop's edges, overridable to Paper or Ink | Padding that matches the screenshot reads as breathing room rather than a mount. Replaces the per-card theme toggle, which fixed pixels make meaningless. |
 | Quote posts, reply parents | **Free** | Already in the screenshot, rendered by the platform as the user saw them. No fetch chains, no nested template, no parent lookup. |
 | Private and login-walled posts | **Supported** | They were impossible under link input. This is the single largest capability gain. |
@@ -543,8 +536,9 @@ not on a blocking overlay.
 
 ## Open questions
 
-- **Does Cover actually look seamless?** The premise depends on it. Prototype
-  against a real Instagram screenshot before building anything else.
+- ~~**Does Cover actually look seamless?** The premise depends on it. Prototype
+  against a real Instagram screenshot before building anything else.~~ **Moot
+  since 2026-09-22**: measured seamless on real captures, then cut by the owner.
 - ~~**Status-bar detection**: whether a simple top-band heuristic is reliable
   across Android skins, or whether it needs to be a draggable default rather than
   automatic.~~ **Answered 2026-09-18 by the IA**: it is a draggable default, and
@@ -576,8 +570,10 @@ not on a blocking overlay.
 # Appendix: link input (v2)
 
 Everything below was measured against live endpoints and real public posts on
-2026-09-16. It is correct, and it is deferred rather than discarded. If Cover proves
-unconvincing, or if typeset output becomes the point, this is the design.
+2026-09-16. It is correct, and it is deferred rather than discarded. With Cover cut
+(2026-09-22), it is the only design here that removes chrome sitting between two
+things the user wants; if that, or typeset output, becomes the point, this is the
+design.
 
 ## Platform sources and fetching
 
@@ -782,4 +778,5 @@ v1 works:
 - whether the sampled background reads better than a fixed Paper or Ink
 - crop-gesture performance on mid-range hardware
 - how WhatsApp recompresses a given output size
-- Instagram's on-screen element order, which decides how much Cover has to do
+- Instagram's on-screen element order, which decided how much Cover had to do
+  (moot since Cover was cut on 2026-09-22)

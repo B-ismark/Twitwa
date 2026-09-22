@@ -11,7 +11,7 @@
 //
 //   - The words in here are for whoever is holding a cable, not for a person
 //     using Twitwa. That is why this file is NOT in `check-copy.mjs`'s list of
-//     views: "Q1+Q3" is exactly the sort of label that gate exists to stop, and
+//     views: "Q3" is exactly the sort of label that gate exists to stop, and
 //     exactly the right label here.
 //   - Buttons here take `name`, not `label`. The gate looks for `label=` with a
 //     literal string, so the two props keep the boundary visible in the source
@@ -41,7 +41,6 @@ export default function DevPanel({
   palette,
   log,
   src,
-  covered,
   // True while one of THESE buttons has put a measured image on the canvas in
   // place of the live card. It was called `showingResult` and named a state
   // the app no longer has: Phase 4.5 deleted the render step, so there is no
@@ -72,17 +71,17 @@ export default function DevPanel({
       <Text style={[styles.hint, { color: palette.graphite }]}>{hint}</Text>
 
       <View style={styles.row}>
-        <DevBtn name="Q1+Q3" onPress={onMeasureCheap} disabled={!live} palette={palette} />
+        <DevBtn name="Q3" onPress={onMeasureCheap} disabled={!live} palette={palette} />
         <DevBtn name="Q5 stress" onPress={onStress} disabled={!hasSrc} palette={palette} />
       </View>
       <View style={styles.row}>
-        <DevBtn name="Cover on" onPress={() => onCompose(undefined, true)} disabled={!live} palette={palette} />
-        <DevBtn name="Cover off" onPress={() => onCompose(undefined, false)} disabled={!live} palette={palette} />
-        <DevBtn name="P3" onPress={() => onCompose(ColorSpace.DisplayP3, true)} disabled={!live} palette={palette} />
+        {/* Wrapped, not passed bare: Pressable hands its press event to
+            onPress, and it would arrive here as the colour space. */}
+        <DevBtn name="Compose" onPress={() => onCompose()} disabled={!live} palette={palette} />
+        <DevBtn name="P3" onPress={() => onCompose(ColorSpace.DisplayP3)} disabled={!live} palette={palette} />
       </View>
       <View style={styles.row}>
-        <DevBtn name="Render" onPress={() => onRender(false)} disabled={!live} palette={palette} />
-        <DevBtn name="Render + cover" onPress={() => onRender(true)} disabled={!live} palette={palette} />
+        <DevBtn name="Render" onPress={() => onRender()} disabled={!live} palette={palette} />
       </View>
       <View style={styles.row}>
         {/* Q4 through the real pipeline. The "P3" button above drives Phase 0's
@@ -91,7 +90,7 @@ export default function DevPanel({
             whether renderCard tags a P3 card. */}
         <DevBtn
           name="Render P3"
-          onPress={() => onRender(false, ColorSpace.DisplayP3)}
+          onPress={() => onRender(ColorSpace.DisplayP3)}
           disabled={!live}
           palette={palette}
         />
@@ -107,7 +106,7 @@ export default function DevPanel({
 
       <Text style={[styles.state, { color: palette.graphite }]}>
         {(src
-          ? `${src.width}x${src.height}  ${src.megapixels}MP  ${src.rgbaMiB}MiB RGBA  ${override ? 'override' : 'card'}  ${covered ? 'covered' : 'uncovered'}`
+          ? `${src.width}x${src.height}  ${src.megapixels}MP  ${src.rgbaMiB}MiB RGBA  ${override ? 'override' : 'card'}`
           : 'no image') + `  scheme:${scheme === null || scheme === undefined ? 'null' : scheme}`}
       </Text>
 

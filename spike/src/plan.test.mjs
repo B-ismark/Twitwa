@@ -1,9 +1,7 @@
 // Tests for src/plan.js — the Phase 1 decision layer.
 //
 //   for b in no_shape_gate never_ignored trim_outside sample_order fallback_flip \
-//            no_edge_warn always_no_warn literal_bounds no_mask_clamp \
-//            mask_keep_outside mask_scale_from_plan no_swap clamp_fields \
-//            mask_px_nearest mask_px_inward mask_px_unclamped mask_px_no_null; do
+//            no_edge_warn always_no_warn literal_bounds no_swap clamp_fields; do
 //     BREAK=$b node src/plan.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -84,70 +82,6 @@ if (BREAK === 'no_shape_gate') {
   };
 } else if (BREAK === 'always_no_warn') {
   F.planCrop = (a) => ({ ...real.planCrop(a), warnings: [] });
-} else if (BREAK === 'no_mask_clamp') {
-  // Masks passed through untouched, so a box overlapping the crop edge keeps its
-  // original rect and lands on the frame.
-  F.clampMasks = (masks, crop) => ({ masks: (masks || []).map((m) => ({ ...m })), dropped: [] });
-} else if (BREAK === 'mask_keep_outside') {
-  // Clamp, but keep boxes with no overlap instead of dropping them.
-  F.clampMasks = (masks, crop) => {
-    const r = real.clampMasks(masks, crop);
-    return { masks: [...r.masks, ...r.dropped], dropped: [] };
-  };
-} else if (BREAK === 'mask_scale_from_plan') {
-  // Map with plan.scale instead of dest/crop — the pre-rounding scale, which
-  // drifts from where the image was actually drawn.
-  F.maskToDest = (mask, plan) => ({
-    x: plan.dest.x + (mask.x - plan.crop.x) * plan.scale,
-    y: plan.dest.y + (mask.y - plan.crop.y) * plan.scale,
-    w: mask.w * plan.scale,
-    h: mask.h * plan.scale,
-  });
-} else if (BREAK === 'mask_px_nearest') {
-  // Round to nearest instead of outward. Nearest loses up to half a pixel on
-  // each edge, which is the leak this rule exists to stop.
-  F.maskToDestPixels = (mask, plan) => {
-    const f = real.maskToDest(mask, plan);
-    const x0 = Math.max(plan.dest.x, Math.round(f.x));
-    const y0 = Math.max(plan.dest.y, Math.round(f.y));
-    const x1 = Math.min(plan.dest.x + plan.dest.w, Math.round(f.x + f.w));
-    const y1 = Math.min(plan.dest.y + plan.dest.h, Math.round(f.y + f.h));
-    if (x1 <= x0 || y1 <= y0) return null;
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-  };
-} else if (BREAK === 'mask_px_inward') {
-  // Round inward — the worst version, and the one a "shrink to fit" instinct
-  // produces.
-  F.maskToDestPixels = (mask, plan) => {
-    const f = real.maskToDest(mask, plan);
-    const x0 = Math.max(plan.dest.x, Math.ceil(f.x));
-    const y0 = Math.max(plan.dest.y, Math.ceil(f.y));
-    const x1 = Math.min(plan.dest.x + plan.dest.w, Math.floor(f.x + f.w));
-    const y1 = Math.min(plan.dest.y + plan.dest.h, Math.floor(f.y + f.h));
-    if (x1 <= x0 || y1 <= y0) return null;
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-  };
-} else if (BREAK === 'mask_px_unclamped') {
-  // Grow outward but forget to intersect with dest, so a box on the crop edge
-  // puts fill on the frame — the most visible defect in a framed picture.
-  F.maskToDestPixels = (mask, plan) => {
-    const f = real.maskToDest(mask, plan);
-    const x0 = Math.floor(f.x);
-    const y0 = Math.floor(f.y);
-    const x1 = Math.ceil(f.x + f.w);
-    const y1 = Math.ceil(f.y + f.h);
-    if (x1 <= x0 || y1 <= y0) return null;
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-  };
-} else if (BREAK === 'mask_px_no_null') {
-  // Return a 1px rect instead of null for a box that owns no whole pixel, so a
-  // sub-pixel box silently becomes a visible mark.
-  F.maskToDestPixels = (mask, plan) => {
-    const r = real.maskToDestPixels(mask, plan);
-    if (r) return r;
-    const f = real.maskToDest(mask, plan);
-    return { x: Math.floor(f.x), y: Math.floor(f.y), w: 1, h: 1 };
-  };
 } else if (BREAK === 'clamp_fields') {
   // The original clampCrop: each field clamped on its own, so a rect hanging off
   // the left or top edge comes back wider than it was asked for. The crop the
@@ -417,121 +351,6 @@ console.log('warnings from both steps reach the caller');
     r.warnings.some((w) => /shape test/.test(w)), JSON.stringify(r.warnings));
   check('the output-step warning is present too',
     r.warnings.some((w) => /near-black/.test(w)), JSON.stringify(r.warnings));
-}
-
-console.log('Cover boxes are clamped to the crop, not to the image');
-{
-  const crop = { x: 0, y: 89, w: 1440, h: 3031 };
-  const r = F.clampMasks([
-    { x: 100, y: 200, w: 300, h: 50 },      // wholly inside
-    { x: -50, y: 50, w: 300, h: 100 },      // overlaps the top-left corner
-    { x: 1400, y: 200, w: 300, h: 50 },     // overruns the right edge
-    { x: 0, y: 0, w: 100, h: 50 },          // entirely above the trimmed crop
-  ], crop);
-  check('three boxes kept', r.masks.length === 3, r.masks.length);
-  check('one box dropped', r.dropped.length === 1, r.dropped.length);
-  check('an inside box is untouched',
-    r.masks[0].x === 100 && r.masks[0].w === 300 && r.masks[0].clipped === false,
-    JSON.stringify(r.masks[0]));
-  check('a corner overlap is pulled to the crop origin',
-    r.masks[1].x === 0 && r.masks[1].y === 89, r.masks[1].x + ',' + r.masks[1].y);
-  check('and loses exactly the overhang',
-    r.masks[1].w === 250 && r.masks[1].h === 61, r.masks[1].w + 'x' + r.masks[1].h);
-  check('a right overrun is trimmed to the crop edge',
-    r.masks[2].x + r.masks[2].w === 1440, r.masks[2].x + r.masks[2].w);
-  check('clipped boxes say so', r.masks[1].clipped === true && r.masks[2].clipped === true);
-  const inside = r.masks.every((m) =>
-    m.x >= crop.x && m.y >= crop.y &&
-    m.x + m.w <= crop.x + crop.w && m.y + m.h <= crop.y + crop.h);
-  check('no kept box escapes the crop', inside, JSON.stringify(r.masks));
-  check('an empty mask list is fine', F.clampMasks([], crop).masks.length === 0);
-  check('an absent mask list is fine', F.clampMasks(undefined, crop).masks.length === 0);
-}
-
-console.log('a mask maps by the scale the image was actually drawn with');
-{
-  // Chosen so dest/crop and plan.scale DIVERGE: dest.w is an integer derived by
-  // subtraction, so the true scale is dest.w/crop.w while plan.scale is the
-  // value before rounding.
-  const crop = { x: 0, y: 0, w: 904, h: 904 };
-  const p = { ...F.planOutput({ crop, padding: 'roomy' }), crop };
-  const far = { x: 900, y: 900, w: 4, h: 4 };
-  const m = F.maskToDest(far, p);
-  const trueSx = p.dest.w / crop.w;
-  check('scale is taken from dest/crop',
-    Math.abs(m.w - far.w * trueSx) < 1e-9, m.w + ' vs ' + far.w * trueSx);
-  check('dest/crop and plan.scale actually differ for this input',
-    Math.abs(trueSx - p.scale) > 1e-6, trueSx + ' vs ' + p.scale);
-  const corner = F.maskToDest({ x: crop.w, y: crop.h, w: 0, h: 0 }, p);
-  check('the crop corner maps to the dest corner',
-    Math.abs(corner.x - (p.dest.x + p.dest.w)) < 1e-9,
-    corner.x + ' vs ' + (p.dest.x + p.dest.w));
-}
-
-console.log('a Cover box owns whole output pixels, rounded outward');
-{
-  // Same divergent scale as above, so the mapping is genuinely fractional. If
-  // it were not, every rounding rule would agree and none of this would bite.
-  const crop = { x: 0, y: 0, w: 904, h: 904 };
-  const p = { ...F.planOutput({ crop, padding: 'roomy' }), crop };
-  const box = { x: 101, y: 203, w: 57, h: 31 };
-  const f = F.maskToDest(box, p);
-  const r = F.maskToDestPixels(box, p);
-
-  check('the continuous mapping really is fractional for this input',
-    f.x % 1 !== 0 || f.y % 1 !== 0 || (f.x + f.w) % 1 !== 0 || (f.y + f.h) % 1 !== 0,
-    JSON.stringify(f));
-  check('every field is an integer',
-    Number.isInteger(r.x) && Number.isInteger(r.y) && Number.isInteger(r.w) && Number.isInteger(r.h),
-    JSON.stringify(r));
-  // The whole point: the integer rect must COVER the fractional one. Any pixel
-  // the fractional rect touches, even partly, must be inside the integer rect,
-  // because a partly-touched pixel is a partly-covered pixel.
-  check('it covers the continuous rect on every edge',
-    r.x <= f.x && r.y <= f.y && r.x + r.w >= f.x + f.w && r.y + r.h >= f.y + f.h,
-    JSON.stringify(r) + ' must cover ' + JSON.stringify(f));
-  check('it grows by less than a pixel on each edge',
-    f.x - r.x < 1 && f.y - r.y < 1 && (r.x + r.w) - (f.x + f.w) < 1 && (r.y + r.h) - (f.y + f.h) < 1,
-    JSON.stringify(r) + ' vs ' + JSON.stringify(f));
-
-  // A box on the crop's edge maps to dest's edge, and growing outward there
-  // must not push fill onto the frame.
-  const edge = { x: 0, y: 0, w: 4, h: 4 };
-  const re = F.maskToDestPixels(edge, p);
-  check('growing outward never escapes dest',
-    re.x >= p.dest.x && re.y >= p.dest.y &&
-    re.x + re.w <= p.dest.x + p.dest.w && re.y + re.h <= p.dest.y + p.dest.h,
-    JSON.stringify(re) + ' vs dest ' + JSON.stringify(p.dest));
-  const far = { x: crop.w - 4, y: crop.h - 4, w: 4, h: 4 };
-  const rf = F.maskToDestPixels(far, p);
-  check('the far corner also stays inside dest',
-    rf.x + rf.w <= p.dest.x + p.dest.w && rf.y + rf.h <= p.dest.y + p.dest.h,
-    JSON.stringify(rf) + ' vs dest ' + JSON.stringify(p.dest));
-
-  // Asymmetric: a non-square crop scales x and y differently, so a rule that
-  // reused one scale for both would pass every square test above.
-  const tall = { x: 0, y: 0, w: 600, h: 1800 };
-  const pt = { ...F.planOutput({ crop: tall, padding: 'standard' }), crop: tall };
-  const tb = { x: 51, y: 151, w: 33, h: 77 };
-  const ft = F.maskToDest(tb, pt);
-  const rt = F.maskToDestPixels(tb, pt);
-  check('a non-square crop still covers on every edge',
-    rt.x <= ft.x && rt.y <= ft.y && rt.x + rt.w >= ft.x + ft.w && rt.y + rt.h >= ft.y + ft.h,
-    JSON.stringify(rt) + ' must cover ' + JSON.stringify(ft));
-
-  // A degenerate box owns nothing, and the guard must come BEFORE rounding:
-  // outward-rounding a zero-width box at a fractional x would otherwise invent a
-  // 1px mark from no area. clampMasks cannot drop it — a zero-size rect inside
-  // the crop overlaps the crop and is a legal source rect.
-  for (const d of [{ x: 400, y: 400, w: 0, h: 0 },
-                   { x: 400, y: 400, w: 0, h: 20 },
-                   { x: 400, y: 400, w: 20, h: 0 },
-                   { x: 400, y: 400, w: -5, h: 20 }]) {
-    check('a degenerate box ' + JSON.stringify(d) + ' owns nothing',
-      F.maskToDestPixels(d, p) === null, JSON.stringify(F.maskToDestPixels(d, p)));
-  }
-  check('but one source pixel is enough to own an output pixel',
-    F.maskToDestPixels({ x: 400, y: 400, w: 1, h: 1 }, p) !== null);
 }
 
 console.log('EXIF orientation swaps width and height for 5 through 8');

@@ -1,7 +1,7 @@
 # Twitwa — social card renderer
 
-Share a screenshot in, drag a crop, cover any leftover chrome, get a padded PNG on a
-background matched to the screenshot. Android first, Expo, no network in v1.
+Share a screenshot in, drag a crop, get a padded PNG on a background matched to
+the screenshot. Android first, Expo, no network in v1.
 
 ## Read in this order
 
@@ -47,8 +47,7 @@ Treat the device figures as recorded measurements, not as reproducible ones.
 
 ## State
 
-Decided: screenshot input; Cover tool with a flat sampled fill; card background
-sampled from the crop's edges with a Paper/Ink fallback; no aspect presets (the crop
+Decided: screenshot input; card background sampled from the crop's edges with a Paper/Ink fallback; no aspect presets (the crop
 *is* the aspect); PNG **width-bounded** at `min(1080, crop + padding)` with height
 following the crop; sRGB SDR output; link input deferred to the appendix.
 
@@ -58,7 +57,10 @@ is the primary action**, with Save to Photos and Copy image in an overflow;
 **padding is three stops plus a drag** to fine-tune; **corner radius is in**,
 partly reversing the spec's own refusal of it, while the **drop shadow was wanted
 and dropped the same day** because it could not be platform elevation and a Skia
-one clips against the padding budget in the export; **auto-redaction is out**. The incoming image is still copied into app-owned storage at import,
+one clips against the padding budget in the export; **auto-redaction is out**.
+**Cover is out too, cut by the owner on 2026-09-22**: the app does no redaction,
+so on Instagram a card keeps the like count or loses the caption. BUILD-PLAN.md's
+Phase 3 keeps the design to return to. The incoming image is still copied into app-owned storage at import,
 because a `content://` URI from a share is a revocable grant and not a file — it
 is just session-scoped now. See `social-card-renderer.md` for the IA and
 `BUILD-PLAN.md` for the survey those decisions were taken against.
@@ -119,8 +121,8 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/skia.js` | The one `RGBA` colour shape and the one two-argument `readRect`. Both were written privately in `pipeline.js` AND `measure.js`, and App.js had neither — which is exactly why it called the three-argument `readSubRect` with two and crashed every import for a day. A function that binds the colour cannot be called without it |
 | `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
 | `src/plan.js` | The decision layer: final crop (status-bar trim), output size, frame colour. No Skia. Its `planCard` takes the background sampler as a *callback*, so the background cannot be sampled from the pre-trim rect |
-| `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, and Q1/Q2/Q3/Q4 were all re-measured after that merge and reproduce exactly |
-| `App.js` | The screen. Three states and at most three controls: choose a screenshot, cover something, make the card, share it. The eleven-button Phase 0 harness it used to be still exists, behind a long press on the caption |
+| `src/measure.js` | Every Skia call, with timings. **Run on device** — see `results/phase0-device.md`. Its readRect now comes from `src/read.js`, and Q1/Q2/Q3/Q4 were all re-measured after that merge and reproduce exactly. Q1's device read was removed with Cover on 2026-09-22, since a drawn Cover box was its only input |
+| `App.js` | The screen. Choose a screenshot, and it opens on a finished card; Crop and Style adjust it, Share sends it. The Phase 0 harness it used to be still exists, behind a long press on the caption |
 | `src/theme.js` | The token table, and the only place a colour is written down. Plain data with no react-native import, so `contrast.py` reads the shipped values out of this file rather than a second copy of them |
 | `src/copy.js` | Every user-facing word, as plain strings. A view that writes its own text is a gate failure, not a style preference |
 | `src/crop.js` | Phase 2's gesture arithmetic, separated from the gesture: fit, drag, resize, clamp, handle hit-testing, all in image-pixel space. Pure, so the arithmetic is testable without a finger — and every function carries `'worklet'`, an inert string in node, so the drag calls it on the UI thread |
@@ -266,17 +268,17 @@ Things the runs changed that no test could have:
   an sRGB card travels on a viewer's assumption rather than on its own bytes.
 - **A Cover box's edge was anti-aliased**, leaving one pixel of the covered
   content at up to 53/255 — a leak, since covering a handle is a redaction. The
-  rect is now snapped outward to whole pixels and drawn with AA off: 306 leaked
-  pixels became 0 on the device.
+  rect was then snapped outward to whole pixels and drawn with AA off: 306 leaked
+  pixels became 0 on the device. (History: Cover was cut on 2026-09-22.)
 - **The status-bar detector cost ~245ms**, 45% of the wall. Now ~110: the ink
   loop was allocating an array per pixel and scanning 4096 histogram buckets per
   row. What is left is mostly the lazy decode, which the first pixel read pays
   for and nothing can avoid.
 - **The card is byte-identical across a 2x density range** (320 / 476 / 640 dpi
   overrides on the one device), which is the Phase 1 density gate. The *Cover
-  box* is not — it comes from view coordinates, so the same on-screen rectangle
-  covers a different region at each density. A crop must be stored in image
-  pixels the moment it is committed.
+  box*, since cut, was not — it came from view coordinates, so the same
+  on-screen rectangle covered a different region at each density. A crop must be
+  stored in image pixels the moment it is committed.
 - **Light captures work, including the fallback.** An Instagram capture whose
   crop edges disagree falls back to the neutral frame and reaches the identical
   verdict the desktop predictor had printed before any phone was involved.
@@ -314,8 +316,9 @@ And two from a third review pass, both cases of a check that could not go red:
   box asked for the box's padded bounding rectangle and threw the interior away —
   82.2MiB of `readPixels` on a 1080x20000 source to use 165KiB of it. The same
   defect had already been found and fixed in the background fallback; this was the
-  second caller with the same shape, and it survived two passes. Now read as four
-  non-overlapping strips, held to a brute-force enumeration of the ring.
+  second caller with the same shape, and it survived two passes. It was then read
+  as four non-overlapping strips, held to a brute-force enumeration of the ring.
+  Cover was cut on 2026-09-22; `ringStrips` and its tests stay in `pixels.js`.
 - **The PNG colour validator reported malformed profiles as sound.** It tested one
   of the four failure flags its parser can set, so a truncated chunk, an
   18-byte profile and a header lying about its own length were all `tagged: true`.
@@ -338,8 +341,9 @@ should have caught it used the one input where both rules agree.
 
 Not started: the app itself. The spike is throwaway by design.
 
-**Q1 and Q3 are both answered** — `spike/results/phase0-q1-q3.md`. Four real
-captures, 58 Cover target rows, nothing above 2.09/255 and 50 of 58 below 1,
+**Q1 and Q3 are both answered** — `spike/results/phase0-q1-q3.md`. Q1 was Cover's
+question, and is history since Cover was cut on 2026-09-22. Four real captures,
+58 Cover target rows, nothing above 2.09/255 and 50 of 58 below 1,
 including pure-white Facebook chrome at 0.38. Q3's shape test now accepts real
 status bars and rejects app headers, verified in both directions.
 
@@ -377,15 +381,15 @@ python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 179 checks on the pixel math
 cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
-cd spike && node src/sizing.test.mjs     # 60 checks on the output sizing
-cd spike && node src/plan.test.mjs       # 112 checks on the decision layer
+cd spike && node src/sizing.test.mjs     # 62 checks on the output sizing
+cd spike && node src/plan.test.mjs       # 87 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
-cd spike && node src/shell.test.mjs      # 70 checks on the editor's tool sessions and Style controls
+cd spike && node src/shell.test.mjs      # 68 checks on the editor's tool sessions and Style controls
 cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 115 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 147 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 107 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 142 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
@@ -426,10 +430,15 @@ cd spike
 # back.
 for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
          plugins/withDebugSuffix.test.mjs tools/check-copy.mjs \
-         tools/check-style-members.mjs tools/check-call-arity.mjs \n         src/update.test.mjs; do
+         tools/check-style-members.mjs tools/check-call-arity.mjs \
+         src/update.test.mjs; do
   for b in $(node "$p" --list-mutants); do
-    BREAK=$b node "$p" >/dev/null 2>&1
-    [ $? -eq 1 ] || echo "NOT RED: $p $b"
+    # Exit 1 alone is not red: a mutant whose search string has rotted exits 1
+    # with NO LONGER APPLIES, and one that breaks the syntax exits 1 before any
+    # assertion runs. Both test nothing, and slice_from_debug sat here as the
+    # first kind, counted red, until 2026-09-22.
+    out=$(BREAK=$b node "$p" 2>&1); rc=$?
+    [ $rc -eq 1 ] && ! printf '%s' "$out" | grep -q -E 'NO LONGER APPLIES|SyntaxError' || echo "NOT RED: $p $b"
   done
 done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
@@ -441,7 +450,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 219 mutations
+done                                     # silence is the pass; 214 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -785,9 +794,9 @@ Every line of this app's own JavaScript -- `App.js`, `index.js` and all of
 minified bundle is 2,762,388, so the app's own code is a fraction of a bundle
 that is itself 8.4% of the APK. Deleting *all of it* would not reach half a
 percent of the download. `src/measure.js` and the Q1-Q5 probe blocks in
-`App.js` are a Phase 0 measurement rig that does ship, and Cover is a
-placeholder the owner has already questioned; those are reasons to remove them,
-but size is not one.
+`App.js` are a Phase 0 measurement rig that does ship; that is a reason to remove
+them, but size is not one. (Cover was on this list as a placeholder the owner had
+questioned; the owner cut it on 2026-09-22.)
 
 The three levers that are real, in order, and none of them is code:
 

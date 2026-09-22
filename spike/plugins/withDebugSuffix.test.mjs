@@ -50,7 +50,7 @@ const MUTANTS = {
   release_guard_dead: ["if (release.includes('applicationIdSuffix')) {", 'if (false) {'],
   // The release slice starts at the debug block instead, so the guard sees the
   // debug suffix and refuses every correct patch.
-  slice_from_debug: ["out.indexOf('        release {')", "out.indexOf('        debug {')"],
+  slice_from_debug: ["out.indexOf('        release {', types)", "out.indexOf('        debug {', types)"],
 };
 
 if (process.argv.includes('--list-mutants')) {

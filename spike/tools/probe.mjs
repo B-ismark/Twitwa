@@ -104,7 +104,7 @@ function report(path, opts) {
 
   console.log(`\n  Q1 Cover targets — thin ink rows on flat ground (<=${MAX_TARGET_H}px tall)`);
   if (!runs.length) {
-    console.log('     none found. Nothing here has the shape Cover handles.');
+    console.log('     none found. Nothing here has the shape Cover was for.');
   } else {
     const rows = [];
     for (const r of runs) {

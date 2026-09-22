@@ -37,7 +37,7 @@ re-measuring when something is suspected to have changed upstream.
 They cannot answer anything in Phase 0. Phase 0 is about screenshots — a crop,
 a sampled fill, and whether the seam shows. An OG image is the post's photo, not
 a capture of the post's interface, so it has none of the chrome the Cover tool
-exists to hide.
+existed to hide (Cover was cut on 2026-09-22).
 
 **Phase 0 needs screenshots**: a phone capture of an Instagram post showing the
 like-count row between image and caption, a dark-mode X post, and one with a

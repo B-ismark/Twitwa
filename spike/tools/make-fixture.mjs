@@ -18,7 +18,7 @@ const GLYPH_TOP = 26;    // status-bar glyphs start here, NOT at row 0
 const GLYPH_H = 20;      // so rows 0..25 are flat padding above them
 const HEADER_END = 200;  // dense ink
 const PHOTO_END = 1300;  // textured, so "roughest" has somewhere to be
-const LIKES_END = 1360;  // flat row Cover exists to hide
+const LIKES_END = 1360;  // the thin row on flat ground that Q1 measures
 const CAPTION_END = 1600;
 
 const CRC = (() => {
@@ -90,7 +90,7 @@ ink(40, HEADER_END - 90, 72, 72, 90);
 ink(130, HEADER_END - 85, 260, 18);
 ink(130, HEADER_END - 55, 180, 14, 120);
 
-// Like-count row: short text on flat white. This is the Cover target.
+// Like-count row: short text on flat white. This is the shape Q1 measures.
 ink(40, PHOTO_END + 18, 44, 22);
 ink(100, PHOTO_END + 20, 150, 16, 90);
 

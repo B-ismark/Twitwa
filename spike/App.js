@@ -10,9 +10,9 @@
 // PHASE 4.5 DELETED THE RENDER STEP. There used to be a "Make card" button and
 // a `showingResult` flag: the canvas showed the screenshot, you pressed the
 // button, and the canvas showed a card. Nothing surveyed works that way, the
-// spec never described it, and it caused a real bug — the Cover box was drawn
-// over one image and applied to another, because the same on-screen rectangle
-// points at different content in the two.
+// spec never described it, and it caused a real bug — a box was drawn over one
+// image and applied to another, because the same on-screen rectangle points at
+// different content in the two.
 //
 // So the canvas IS the card, composed at screen resolution and recomposed on
 // every change. The rules live in three modules and none of them are here:
@@ -67,7 +67,6 @@ import * as Sharing from 'expo-sharing';
 
 import {
   decodeFromUri,
-  measureRing,
   measureStatusBar,
   composeAndEncode,
   measureRoundTrip,
@@ -96,7 +95,7 @@ import {
 } from './src/shell';
 import { proposeFromImage } from './src/autocrop';
 import { readRect } from './src/skia';
-import { maskToDestPixels, planOutput } from './src/plan';
+import { planOutput } from './src/plan';
 import {
   dragCrop,
   edgeBand,
@@ -536,7 +535,6 @@ export default function App() {
       radius: ed.radius,
       frame: ed.background,
       trim: 'never',
-      masks: ed.masks,
       outputName: 'card.png',
     });
     return out;
@@ -603,7 +601,7 @@ export default function App() {
 
   // --- gestures on the raw layer ------------------------------------------
   //
-  // Both tools work in IMAGE pixels, so the rect that reaches `ed` is the rect
+  // The crop works in IMAGE pixels, so the rect that reaches `ed` is the rect
   // the renderer will use.
   //
   // THE CROP DRAG RUNS ON THE UI THREAD AND `ed` IS WRITTEN ONCE, ON RELEASE.
@@ -738,73 +736,13 @@ export default function App() {
     // the old drag rebuilt the Gesture object it was in the middle of.
   }, [view, imageBounds, commitCrop, liveCrop, grabbed, dragFrom, gridOn]);
 
-  // Cover, still one box. Phase 3 makes it several objects with a selection and
-  // a delete; this is the shipped behaviour moved onto the new state, not a new
-  // design, and the survey says plainly that one box is the wrong shape.
+  // --- the dev harness ----------------------------------------------------
   //
-  // Left on the JS thread on purpose. Cover draws nothing while the finger is
-  // down — it only appends the box on release — so there is no per-frame
-  // render to move off, and Phase 3's OPEN QUESTION may delete the whole tool.
-  // Its own ref rather than the crop's shared value: the two are different
-  // quantities that happened to share a variable, and that sharing only ever
-  // worked because a tool takes the whole screen.
-  const startRect = useRef(null);
-
-  const coverGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .onBegin((e) => {
-          if (!view || !ed) return;
-          const p = { x: (e.x - view.offsetX) / view.scale, y: (e.y - view.offsetY) / view.scale };
-          startRect.current = { x: Math.round(p.x), y: Math.round(p.y), w: 0, h: 0 };
-        })
-        .onChange((e) => {
-          if (!view || !startRect.current) return;
-          const d = toImageDelta(view, { dx: e.changeX, dy: e.changeY });
-          const r = startRect.current;
-          startRect.current = { ...r, w: Math.round(r.w + d.dx), h: Math.round(r.h + d.dy) };
-        })
-        .onEnd(() => {
-          const r = startRect.current;
-          startRect.current = null;
-          if (!r) return;
-          // Normalised here rather than during the drag: a box dragged up and
-          // to the left has a negative size, and every consumer downstream
-          // expects a positive one.
-          const box = {
-            x: Math.min(r.x, r.x + r.w),
-            y: Math.min(r.y, r.y + r.h),
-            w: Math.abs(r.w),
-            h: Math.abs(r.h),
-          };
-          if (box.w < 8 || box.h < 8) return;
-          setEd((s) => (s ? { ...s, masks: [...s.masks, box] } : s));
-        })
-        .runOnJS(true),
-    [view, ed],
-  );
-
-  // --- the dev harness, unchanged in what it measures ----------------------
-  const boxInImageSpace = useCallback(() => {
-    if (!ed || !ed.masks.length) return null;
-    return ed.masks[ed.masks.length - 1];
-  }, [ed]);
-
+  // Q1, the ring around a drawn box, is not here: it measured the Cover tool,
+  // which was cut on 2026-09-22 and was the only source of a box. Q2 through Q5
+  // measure what they always did.
   const measureCheap = useCallback(() => {
     if (!src) return;
-    const box = boxInImageSpace();
-    const r = measureRing(src.img, box);
-    emit('Q1.ring', {
-      box,
-      fill: r.ring && r.ring.hex,
-      spread: r.ring && r.ring.spread,
-      coverage: r.ring && r.ring.coverage,
-      meanFill: r.meanRing && r.meanRing.hex,
-      meanSd: r.meanRing && Math.max(...r.meanRing.stddev),
-      readMs: r.readMs,
-      bgMs: r.bgMs,
-      bytesRead: r.bytesRead,
-    });
     const sb = measureStatusBar(src.img, 400);
     emit('Q3.statusbar', {
       detected: sb.detected,
@@ -819,30 +757,16 @@ export default function App() {
       profileMs: sb.profileMs,
       head16: sb.profileHead ? sb.profileHead.slice(0, 16) : null,
     });
-  }, [src, boxInImageSpace, emit]);
+  }, [src, emit]);
 
   const compose = useCallback(
-    (colorSpace, withMask) => {
+    (colorSpace) => {
       if (!src) return;
-      const box = boxInImageSpace();
-      const r = measureRing(src.img, box);
-      if (!r.ring) {
-        emit('Q2.error', { reason: 'no ring background', r });
-        return;
-      }
       const crop = { x: 0, y: 0, w: src.width, h: src.height };
       const pad = Math.max(12, Math.round(crop.w * 0.06 / 2) * 2);
-      // Background is Paper here on purpose: Q1 is about the MASK fill, and
-      // edge-sampled backgrounds are Phase 1's job.
-      const out = composeAndEncode(
-        src.img,
-        crop,
-        pad,
-        withMask ? box : null,
-        // Modal colour, never the mean. See src/pixels.js ringBackground.
-        { background: PAPER, mask: r.ring.hex },
-        colorSpace,
-      );
+      // Background is Paper here on purpose: this times the composite and the
+      // encode, and edge-sampled backgrounds are Phase 1's job.
+      const out = composeAndEncode(src.img, crop, pad, PAPER, colorSpace);
       if (out.error) {
         emit('Q2.error', out);
         return;
@@ -850,14 +774,9 @@ export default function App() {
       setOverride(out.snapshot);
       emit('Q2.compose', {
         space: colorSpace ? 'DisplayP3' : 'sRGB',
-        withMask,
         out: out.outW + 'x' + out.outH,
         mp: out.outMegapixels,
         pad,
-        fill: r.ring.hex,
-        spread: r.ring.spread,
-        coverage: r.ring.coverage,
-        meanFillWouldHaveBeen: r.meanRing && r.meanRing.hex,
         pngKiB: +(out.pngBytes / 1024).toFixed(1),
         totalMs: out.totalMs,
         steps: out.steps,
@@ -870,11 +789,11 @@ export default function App() {
       };
       emit('Q4.roundtrip', measureRoundTrip(out.png, out.snapshot, region));
     },
-    [src, boxInImageSpace, emit],
+    [src, emit],
   );
 
   const render = useCallback(
-    async (withMask, space) => {
+    async (space) => {
       if (!src || !ed) return;
       setProblem(null);
       setBusy(true);
@@ -887,7 +806,6 @@ export default function App() {
           radius: ed.radius,
           frame: ed.background,
           trim: 'never',
-          masks: withMask ? ed.masks : [],
           colorSpace: space,
           // Distinct names so the two cards coexist on disk: Q4 is a comparison
           // of their iCCP chunks, and one overwriting the other leaves nothing
@@ -919,7 +837,6 @@ export default function App() {
           dest: out.dest,
           pad: out.pad,
           trimmed: out.trimmed,
-          masks: out.masks.map((m) => ({ fill: m.fill, coverage: m.coverage, clipped: m.clipped })),
           warnings: out.warnings,
           timings: out.timings,
           wallMs,
@@ -953,7 +870,6 @@ export default function App() {
   if (problem) caption = problem;
   else if (busy) caption = COPY.working;
   else if (ed && ed.tool === 'crop') caption = COPY.cropHint;
-  else if (ed && ed.tool === 'cover') caption = COPY.coverHint;
   else if (comp) caption = fill(COPY.cardSize, { width: comp.width, height: comp.height });
 
   const mode = ed ? barMode(ed) : 'main';
@@ -963,7 +879,7 @@ export default function App() {
   // second order. The ORDER comes from src/shell.js's TOOLS; this only says
   // what each one is called, and naming each key here is also what lets
   // tools/check-copy.mjs see that the string is used.
-  const toolLabel = { crop: COPY.crop, cover: COPY.cover, style: COPY.style };
+  const toolLabel = { crop: COPY.crop, style: COPY.style };
   const stopLabel = { snug: COPY.snug, standard: COPY.standard, roomy: COPY.roomy };
   const frameLabel = { match: COPY.matchFrame, paper: COPY.paperFrame, ink: COPY.inkFrame };
 
@@ -1029,24 +945,6 @@ export default function App() {
                     width={src.width * (shot.dest.w / ed.crop.w)}
                     height={src.height * (shot.dest.h / ed.crop.h)}
                   />
-                  {ed.masks.map((m, i) => {
-                    // maskToDestPixels, the renderer's own mapping, against a
-                    // plan whose crop and dest are the projected ones. One
-                    // implementation of "where does this box land", so a box
-                    // cannot sit in one place on screen and another in the PNG.
-                    const r = maskToDestPixels(m, { crop: ed.crop, dest: shot.dest });
-                    if (!r) return null;
-                    return (
-                      <Rect
-                        key={i}
-                        x={r.x}
-                        y={r.y}
-                        width={r.w}
-                        height={r.h}
-                        color={fillColour}
-                      />
-                    );
-                  })}
                 </Group>
               </Group>
             </Canvas>
@@ -1087,15 +985,6 @@ export default function App() {
                     handle={grabbed}
                     on={gridOn}
                   />
-                </View>
-              </GestureDetector>
-            ) : null}
-            {ed && ed.tool === 'cover' ? (
-              <GestureDetector gesture={coverGesture}>
-                <View style={StyleSheet.absoluteFill}>
-                  {ed.masks.map((m, i) => (
-                    <View key={i} style={[styles.maskBox, boxStyle(toViewportRect(view, m))]} />
-                  ))}
                 </View>
               </GestureDetector>
             ) : null}
@@ -1166,7 +1055,6 @@ export default function App() {
           palette={palette}
           log={log}
           src={src}
-          covered={Boolean(ed && ed.masks.length)}
           override={Boolean(override)}
           scheme={scheme}
           onMeasureCheap={measureCheap}
@@ -1229,11 +1117,6 @@ const LOUPE_ZOOM = 2;
 
 const BRACKET = 22;
 const BRACKET_W = 3;
-
-/** A viewport rect as absolute-position style. */
-function boxStyle(r) {
-  return { left: r.x, top: r.y, width: r.w, height: r.h };
-}
 
 /**
  * The four bands of darkness outside the crop.
@@ -1793,14 +1676,6 @@ const styles = StyleSheet.create({
   cornerNE: { borderRightWidth: BRACKET_W, borderTopWidth: BRACKET_W },
   cornerSW: { borderLeftWidth: BRACKET_W, borderBottomWidth: BRACKET_W },
   cornerSE: { borderRightWidth: BRACKET_W, borderBottomWidth: BRACKET_W },
-  maskBox: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    outlineWidth: 1,
-    outlineColor: 'rgba(0,0,0,0.6)',
-  },
 
   captionWrap: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.lg },
   caption: { ...TYPE.caption, textAlign: 'center' },

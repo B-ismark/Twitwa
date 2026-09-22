@@ -15,7 +15,6 @@
 //   - None of the usual AI-writing tells: no em dashes, no tracked-out capitals,
 //     no middle-dot-joined meta strings, no arrow glued to the end of a button.
 //   - An empty state is an invitation, not a description of emptiness.
-//   - The mask tool is named for its effect. "Cover", never "Inpaint".
 //
 // Placeholders are `{name}` and are filled by `fill` below, so every value here
 // stays a plain string that the gate can read. A template function would put
@@ -35,17 +34,16 @@ export const COPY = {
   // what a layout engine calls it.
   more: 'More',
 
-  // --- the three tools ----------------------------------------------------
+  // --- the two tools ------------------------------------------------------
   // There is no "Make card". The card is on the canvas from the moment a
   // screenshot arrives, so a button that makes one has nothing to do; see
   // BUILD-PLAN.md Phase 4.5. The string was removed rather than hidden,
   // because a dead string is the next reader's evidence that a step exists.
   crop: 'Crop',
-  cover: 'Cover',
   style: 'Style',
 
   // The triad a takeover tool returns through. Cancel undoes this session,
-  // Reset goes back to the proposed crop or to no boxes at all, Done keeps.
+  // Reset goes back to the proposed crop, Done keeps.
   cancel: 'Cancel',
   reset: 'Reset',
   done: 'Done',
@@ -71,13 +69,8 @@ export const COPY = {
   // screenshot arrives there is no moment at which it becomes ready. The
   // caption carries the card's size instead, which is a fact rather than an
   // announcement.
-  // Shown while a takeover tool is open. Each says what the thumb is for,
-  // which is otherwise guessable only by trying it.
-  //
-  // coverHint used to end "then make the card". It does not any more, and the
-  // sentence is the reason to check: the card is already made, and copy
-  // describing a deleted step is the next reader's source of truth.
-  coverHint: 'Drag the box over anything you want hidden.',
+  // Shown while a takeover tool is open. It says what the thumb is for, which
+  // is otherwise guessable only by trying it.
   cropHint: 'Drag the edges to choose what the card shows.',
   cardSize: '{width} by {height}',
 

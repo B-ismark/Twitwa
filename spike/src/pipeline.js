@@ -24,8 +24,6 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import {
   regionBackground,
-  ringBackground,
-  ringStrips,
   rowInkProfile,
   detectStatusBar,
   zoneInk,
@@ -36,7 +34,7 @@ import {
   collectPoints,
   modalOfPoints,
 } from './pixels';
-import { planCard, clampMasks, maskToDestPixels, orientedSize, needsOrientation } from './plan';
+import { planCard, orientedSize, needsOrientation } from './plan';
 import { readRect } from './skia';
 import { MAX_PX } from './sizing';
 import { radiusPx } from './compose';
@@ -99,9 +97,9 @@ function imageFromData(data) {
  *
  * An earlier version of this file applied the orientation as a canvas transform
  * inside composeCard, which was wrong in two ways at once: the transform also
- * moved the destination rect and the Cover boxes, and for a 90 degree rotation
- * the planned output size was still the un-rotated one, so the picture would have
- * been rotated inside a card shaped for the wrong aspect. Normalising first costs
+ * moved the destination rect, and for a 90 degree rotation the planned output
+ * size was still the un-rotated one, so the picture would have been rotated
+ * inside a card shaped for the wrong aspect. Normalising first costs
  * one extra surface and makes the rest of the pipeline unable to get it wrong.
  *
  * Skia's MakeImageFromEncoded does not apply the tag itself, so the caller passes
@@ -239,9 +237,8 @@ function sampleFallbackTiles(img, crop, tolerance = 16, tileOpts) {
  * whose whole point is the frame.
  */
 function composeCard(img, plan, opts = {}) {
-  const { colorSpace, masks = [], radius = 0 } = opts;
+  const { colorSpace, radius = 0 } = opts;
   const t0 = now();
-  let subpixel = 0;   // boxes that owned no whole output pixel
 
   const surface = Skia.Surface.MakeOffscreen(
     plan.width,
@@ -275,9 +272,8 @@ function composeCard(img, plan, opts = {}) {
   // one-line multiplication and a one-line multiplication written twice gets
   // rounded differently the second time.
   //
-  // Anti-aliasing ON here, unlike the Cover clip below, and for the opposite
-  // reason: a corner is a curve, so the stair-stepping AA removes is the whole
-  // defect, and there is no hidden content for a blended edge to leak.
+  // Anti-aliasing ON, because a corner is a curve and the stair-stepping AA
+  // removes is the whole defect.
   const rPx = radiusPx(plan.dest.w, radius);
   const rounded = rPx > 0;
   if (rounded) {
@@ -298,46 +294,6 @@ function composeCard(img, plan, opts = {}) {
     Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h),
     paint,
   );
-  // NOT restored before the Cover boxes, on purpose. A box overlapping a
-  // rounded corner has to be clipped to the SAME rounding the image is, or it
-  // paints a grey square into the corner where the frame shows through. That
-  // hides nothing: the image is clipped there too, so the corner carries no
-  // content for the missing part of the box to leak.
-  //
-  // Cover boxes. Already clamped to the crop by plan.clampMasks, so this clip is
-  // defence rather than the rule — but it is cheap, and the failure it prevents
-  // is a grey rectangle sitting on the frame, which is the most visible possible
-  // defect in a product whose entire output is a framed picture.
-  if (masks.length) {
-    canvas.save();
-    canvas.clipRect(
-      Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h),
-      1, // Intersect
-      false,
-    );
-    // One paint, anti-aliasing OFF. A Cover box is a redaction and its edges are
-    // axis-aligned integers, so there is nothing for AA to improve and one thing
-    // for it to break: a blended boundary row leaves part of the covered content
-    // visible. Measured at up to 53/255 before this was turned off.
-    const p = Skia.Paint();
-    p.setAntiAlias(false);
-    for (const m of masks) {
-      const r = maskToDestPixels(m, plan);
-      // Null means the box owns no whole output pixel. Skipping is right and the
-      // count is reported, because a box the user drew and cannot see is a bug
-      // upstream, not something to swallow here.
-      if (!r) {
-        subpixel += 1;
-        continue;
-      }
-      // Each box gets the modal colour of ITS OWN ring, not the card background.
-      // Those differ whenever a box sits on chrome that is not the card's edge
-      // colour, which is most of the time — see results/phase0-q1-q3.md.
-      p.setColor(Skia.Color(m.fill || plan.fill));
-      canvas.drawRect(Skia.XYWHRect(r.x, r.y, r.w, r.h), p);
-    }
-    canvas.restore();
-  }
   if (rounded) canvas.restore();
 
   const drawMs = +(now() - t0).toFixed(2);
@@ -351,54 +307,10 @@ function composeCard(img, plan, opts = {}) {
     width: plan.width,
     height: plan.height,
     bytes: png ? png.length : 0,
-    subpixelMasks: subpixel,
     drawMs,
     encodeMs,
     totalMs: +(drawMs + encodeMs).toFixed(2),
   };
-}
-
-/**
- * The modal colour of the ring around one Cover box, read as four strips.
- *
- * `coverage` comes back with it and is worth surfacing rather than hiding: a low
- * value means the ring is mostly not background, i.e. the box is misplaced, which
- * wants a different response from a rough background.
- *
- * Four reads, not one. This used to read the box's padded bounding rectangle in
- * a single `readPixels` and hand it to `ringBackground`, which scanned the ring
- * and skipped the interior — so the interior was read and thrown away. The cost
- * is the BOX's area, not the ring's: a Cover box over a whole 1080x20000 capture
- * asked for 82.4MiB to use about 150KiB of it, and a review found it still there
- * after the same defect had been fixed in the background fallback. Reading the
- * strips makes the request proportional to the ring, so a full-image box and a
- * thumbnail-sized one cost the same.
- *
- * `peakReadBytes` is returned so the bound is a measurement at the call site
- * rather than a claim in this comment.
- */
-function maskFill(img, box, thickness = 6, tolerance = 16) {
-  const strips = ringStrips(box, thickness, img.width(), img.height());
-  // No surround at all: the box covers the image. Not an error, and not black.
-  if (!strips.length) return null;
-
-  const pts = [];
-  let peakReadBytes = 0;
-  for (const strip of strips) {
-    const s = readRect(img, strip);
-    if (!s) continue;
-    peakReadBytes = Math.max(peakReadBytes, s.buf.length);
-    for (let yy = 0; yy < s.height; yy++) {
-      const row = yy * s.rowBytes;
-      for (let xx = 0; xx < s.width; xx++) {
-        const i = row + xx * 4;
-        pts.push(s.buf[i], s.buf[i + 1], s.buf[i + 2]);
-      }
-    }
-  }
-  if (!pts.length) return null;
-  const r = modalOfPoints(pts, tolerance);
-  return r && { ...r, peakReadBytes, strips: strips.length };
 }
 
 /**
@@ -411,7 +323,6 @@ function maskFill(img, box, thickness = 6, tolerance = 16) {
  * @param trim         'auto' | 'always' | 'never'
  * @param frame        'match' | 'paper' | 'ink' — the Style strip's Background
  * @param radius       corner radius as a fraction of the image's own width
- * @param masks        Cover boxes in source pixels
  * @param colorSpace   a Skia ColorSpace, or omit for sRGB
  * @param outputName   basename for the written file
  */
@@ -423,7 +334,6 @@ export async function renderCard({
   trim = 'auto',
   frame = 'match',
   radius = 0,
-  masks = [],
   colorSpace,
   orientation = 1,
   outputName,
@@ -495,27 +405,7 @@ export async function renderCard({
     warnings.push(`output exceeds MAX_PX after planning (${plan.width}x${plan.height})`);
   }
 
-  // Clamp Cover boxes to the FINAL crop, which may have moved under them if the
-  // status bar was trimmed after they were placed.
-  const clamped = clampMasks(masks, plan.crop);
-  if (clamped.dropped.length) {
-    warnings.push(`${clamped.dropped.length} Cover box(es) fell entirely outside the crop and were dropped`);
-  }
-  if (clamped.masks.some((m) => m.clipped)) {
-    warnings.push('a Cover box extended past the crop and was clipped to it');
-  }
-  // Each box's fill is the modal colour of its own ring, computed here because
-  // it needs pixels. A box with an explicit fill keeps it.
-  const filledMasks = clamped.masks.map((m) => {
-    if (m.fill) return m;
-    const r = maskFill(img, m);
-    if (r && r.coverage < 0.6) {
-      warnings.push(`a Cover box's ring is only ${Math.round(r.coverage * 100)}% background: the box looks misplaced`);
-    }
-    return { ...m, fill: r ? r.hex : plan.fill, coverage: r ? r.coverage : undefined };
-  });
-
-  const composed = composeCard(img, plan, { colorSpace, masks: filledMasks, radius });
+  const composed = composeCard(img, plan, { colorSpace, radius });
   if (composed.error) {
     return { error: composed.error, plan, statusBar, source, warnings, timings };
   }
@@ -555,7 +445,6 @@ export async function renderCard({
     trimmed: plan.trimmed,
     trimmedRows: plan.trimmedRows,
     orientation: { requested: orientation, applied: oriented.applied, error: oriented.error },
-    masks: filledMasks,
     statusBar,
     source,
     background: plan.background,
