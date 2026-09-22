@@ -86,6 +86,12 @@ export const COPY = {
   shareFailed: 'This phone has no way to share the card.',
   saveFailed: 'The card could not be saved to Photos. Try Share instead.',
   copyFailed: 'The card could not be copied. Try Share instead.',
+  // Receiving a share. Only the two a person can act on differently get their
+  // own sentence; see src/sharein.js.
+  sharedFailed: 'The shared picture could not be opened. Choose it here instead.',
+  sharedNotImage: 'Twitwa can only make a card from a picture.',
+  sharedTooBig: 'That picture is too large to open.',
+  sharedFirstOnly: 'Opened the first of {count} pictures. Twitwa makes one card at a time.',
   saved: 'Saved to Photos',
   copied: 'Copied',
   // The picker's launcher does not survive the activity being recreated, and a

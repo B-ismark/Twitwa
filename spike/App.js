@@ -33,9 +33,12 @@
 // through `exportCard`, so they hand over one composition. Save and Copy sit
 // in the overflow, as the IA puts them (Phase 5, 2026-09-22).
 //
-// NOT DONE HERE, and not done anywhere yet: receiving a share. The intent
-// filters register, but nothing reads an incoming EXTRA_STREAM, so the only
-// way in is the picker. See BUILD-PLAN.md, Phase 5.
+// The two ways in -- the picker and a share from another app -- both end in
+// `openImage`, so a shared screenshot gets the same proposal, the same
+// sampled frame and the same error handling as a picked one. The share is
+// read by a native module of our own, modules/twitwa-share-in, because
+// nothing else in the project exposes EXTRA_STREAM; src/sharein.js decides
+// what its answer means.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DevSettings,
@@ -123,6 +126,8 @@ import {
   resumeDecision,
 } from './src/recover';
 import { check as checkForUpdate, openDownload, installedVersionCode } from './src/update-io';
+import { shareOutcome } from './src/sharein';
+import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
 import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
 import DevPanel from './src/DevPanel';
@@ -363,6 +368,80 @@ export default function App() {
     [emit],
   );
 
+  // Which import is the newest. Two can overlap -- a second share arriving
+  // while the first is still decoding -- and without this the one that
+  // FINISHES last wins, which is not the one that arrived last. The older one
+  // is also the one whose file the native cleanup may already have deleted,
+  // because it was not yet on screen to be kept. Found in review, 2026-09-22.
+  const importGen = useRef(0);
+  // The URI the editor is showing, for the native module's cache cleanup: it
+  // deletes every earlier shared copy EXCEPT this one, because the export
+  // reads the source file again and a card whose source was deleted cannot be
+  // shared. Written in openImage, at the moment the editor commits to a file,
+  // not in an effect after the render: an effect lags, and a take() in that
+  // gap would be told to keep the previous file.
+  const shownUri = useRef(null);
+
+  /**
+   * Decode `uri`, propose a crop, and open the editor on it. Both ways in end
+   * here -- the picker and a share -- so they cannot drift into two imports
+   * with two sets of rules. Returns whether the editor opened.
+   */
+  const openImage = useCallback(async (uri, via) => {
+    const gen = ++importGen.current;
+    try {
+      const decoded = await decodeFromUri(uri);
+      // The editor opens on a proposal, not on the whole screenshot. This is
+      // the line that makes step 2 of the user flow true.
+      const t0 = Date.now();
+      const p = proposeFromImage(decoded.img, readRect);
+      const proposeMs = Date.now() - t0;
+      if (gen !== importGen.current) {
+        emit('import.superseded', { via });
+        return false;
+      }
+
+      // EVERYTHING ABOVE CAN THROW; EVERYTHING BELOW IS STATE. That order is
+      // the fix for a real crash and not a tidy-up. `setSrc` used to run
+      // first, so when the proposal threw the catch set `problem` and the
+      // render still went on to read `ed.tool` with `ed` null — the bottom bar
+      // keys off `src`, and `src` was now the only half of the pair that had
+      // been committed. The app died with "Cannot read property 'tool' of
+      // null", which names neither the throw nor the decode that caused it.
+      //
+      // Guarding the render with `ed &&` would have hidden that instead of
+      // fixing it. The invariant worth having is that src and ed are set
+      // together or not at all, so there is no state in which one exists
+      // without the other for a guard to paper over.
+      shownUri.current = uri;
+      setSrc({ ...decoded, uri });
+      setOverride(null);
+      setEd(editorState(p.crop));
+      setSampled(sampleCropBackground(decoded.img, p.crop));
+      emit('crop.propose', {
+        crop: p.crop,
+        trimmed: p.trimmed,
+        reasons: p.reasons,
+        ms: proposeMs,
+      });
+      emit('decode', {
+        w: decoded.width,
+        h: decoded.height,
+        mp: decoded.megapixels,
+        rgbaMiB: decoded.rgbaMiB,
+        decodeMs: decoded.decodeMs,
+      });
+      return true;
+    } catch (e) {
+      const superseded = gen !== importGen.current;
+      emit('decode.error', { via, superseded, message: String(e && e.message ? e.message : e) });
+      // A newer import has taken over, and this one's file may have been
+      // deleted under it. Its failure is not news to anyone.
+      if (!superseded) setProblem(via === 'share' ? COPY.sharedFailed : COPY.pickFailed);
+      return false;
+    }
+  }, [emit]);
+
   const pick = useCallback(async () => {
     setProblem(null);
     setMenu(false);
@@ -403,53 +482,71 @@ export default function App() {
       return;
     }
     if (res.canceled) return;
-    const asset = res.assets[0];
-    try {
-      const decoded = await decodeFromUri(asset.uri);
-      // The editor opens on a proposal, not on the whole screenshot. This is
-      // the line that makes step 2 of the user flow true.
-      const t0 = Date.now();
-      const p = proposeFromImage(decoded.img, readRect);
-      const proposeMs = Date.now() - t0;
-
-      // EVERYTHING ABOVE CAN THROW; EVERYTHING BELOW IS STATE. That order is
-      // the fix for a real crash and not a tidy-up. `setSrc` used to run
-      // first, so when the proposal threw the catch set `problem` and the
-      // render still went on to read `ed.tool` with `ed` null — the bottom bar
-      // keys off `src`, and `src` was now the only half of the pair that had
-      // been committed. The app died with "Cannot read property 'tool' of
-      // null", which names neither the throw nor the decode that caused it.
-      //
-      // Guarding the render with `ed &&` would have hidden that instead of
-      // fixing it. The invariant worth having is that src and ed are set
-      // together or not at all, so there is no state in which one exists
-      // without the other for a guard to paper over.
-      setSrc({ ...decoded, uri: asset.uri });
-      setOverride(null);
-      setEd(editorState(p.crop));
-      setSampled(sampleCropBackground(decoded.img, p.crop));
-      emit('crop.propose', {
-        crop: p.crop,
-        trimmed: p.trimmed,
-        reasons: p.reasons,
-        ms: proposeMs,
-      });
-      emit('decode', {
-        w: decoded.width,
-        h: decoded.height,
-        mp: decoded.megapixels,
-        rgbaMiB: decoded.rgbaMiB,
-        decodeMs: decoded.decodeMs,
-      });
-    } catch (e) {
-      emit('decode.error', { message: String(e && e.message ? e.message : e) });
-      setProblem(COPY.pickFailed);
-    }
+    await openImage(res.assets[0].uri, 'picker');
     // staleLauncher and recoverPicker belong here. With `[emit]` alone this
     // callback kept the first render's `staleLauncher: false` for the life of
     // the component, so the proactive branch above could never fire and every
     // recreation went the long way round: launch, reject, report, recover.
-  }, [emit, staleLauncher, recoverPicker]);
+  }, [emit, staleLauncher, recoverPicker, openImage]);
+
+  // --- receiving a share ---------------------------------------------------
+  //
+  // One receive at a time. Each take() deletes every shared copy but the one
+  // on screen, so a second take() running while the first import is still
+  // decoding would delete the file that import is about to show. Chaining them
+  // means a take() only ever runs once the previous picture is on screen, or
+  // has failed. Found in review, 2026-09-22.
+  const receiving = useRef(Promise.resolve());
+
+  const receiveOnce = useCallback(async (why) => {
+    let answer = null;
+    try {
+      answer = await takeShare(shownUri.current);
+    } catch (e) {
+      emit('share.error', { why, message: String(e && e.message ? e.message : e) });
+      setProblem(COPY.sharedFailed);
+      return;
+    }
+    const o = shareOutcome(answer, shareInAvailable);
+    emit('share.in', {
+      why,
+      action: o.action,
+      reason: o.reason ?? null,
+      count: answer && answer.count != null ? answer.count : null,
+      bytes: answer && answer.bytes != null ? answer.bytes : null,
+    });
+    if (o.action === 'ignore') return;
+    if (o.action === 'problem') {
+      setProblem(o.message);
+      return;
+    }
+    // A share replaces whatever is on screen, open tool and menus included:
+    // it is a deliberate act from another app, and there is nowhere to put it
+    // aside until the person is done.
+    setMenu(false);
+    setDevOpen(false);
+    setProblem(null);
+    setNotice(null);
+    const opened = await openImage(o.uri, 'share');
+    if (opened && o.notice) setNotice(o.notice);
+  }, [emit, openImage]);
+
+  const receive = useCallback((why) => {
+    // receiveOnce catches what it can throw, so the chain is not left
+    // rejected; this catch is for whatever it did not see coming.
+    receiving.current = receiving.current
+      .then(() => receiveOnce(why))
+      .catch((e) => emit('share.error', { why, message: String(e && e.message ? e.message : e) }));
+    return receiving.current;
+  }, [emit, receiveOnce]);
+
+  // Once at launch, for a share that started the app, and then on every
+  // share that arrives while it is running. The native module also catches a
+  // share that recreates a destroyed activity; see its header for all three.
+  useEffect(() => {
+    receive('launch');
+    return onShare(() => receive('event'));
+  }, [receive]);
 
   // Ask once per mount whether a newer APK exists. Deliberately fire-and-forget:
   // nothing waits on it, nothing is blocked by it, and a failure is a log line.
@@ -922,6 +1019,7 @@ export default function App() {
   const render = useCallback(
     async (space) => {
       if (!src || !ed) return;
+      const gen = importGen.current;
       setProblem(null);
       setBusy(true);
       try {
@@ -949,6 +1047,9 @@ export default function App() {
         // width here means the encode and the plan disagree; a throw means the
         // bytes on disk are not a PNG.
         const back = await decodeUri(out.path);
+        // Dev only, and the same race as openImage's: an import that landed
+        // during the await must not be covered by the previous image's card.
+        if (gen !== importGen.current) return;
         setOverride(back);
         emit('P1.render', {
           path: out.path,

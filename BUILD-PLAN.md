@@ -1024,12 +1024,39 @@ preview showed it and the app showed nothing, as intended. Share opened the
 chooser on the card, with P4 at `aspectOff` 0.00107 and `padFracOff` 0.00094.
 The test file was deleted afterwards.
 
-**Not built, and found by that run: receiving a share.** The empty state says
-"Share in a screenshot", and the intent filters register, but nothing in
-`App.js` reads an incoming `EXTRA_STREAM` (README, "Settled on the release
-APK"). An `ACTION_SEND` to the running app on 2026-09-22 left it on the empty
-state. This is the app's front door and it is still missing; see "What is still
-unverified".
+**Receiving a share — BUILT 2026-09-22, and NOT RUN ON A DEVICE.** That run
+found it missing: an `ACTION_SEND` to the running app left it on the empty
+state, because nothing read `EXTRA_STREAM`. It is now read by a native module
+of our own, `spike/modules/twitwa-share-in` (Kotlin, autolinked from
+`modules/`), because no module in the project exposes the incoming intent.
+
+- The module copies the ONE shared picture into `cache/shared-in/` and hands
+  JS a `file://` URI. This is the Phase 6 note below, "copy the incoming image
+  into app-owned storage at import", done: the export reads the source again,
+  and a `content://` grant can be gone by then.
+- It catches all three arrivals: the launch intent (cold start), `onNewIntent`
+  (running; `MainActivity` is `singleTask`), and a new activity in a live
+  process (Back, then share), through `OnActivityEntersForeground`. Each share
+  is read once: the Intent object is marked, so a resume or a dev reload does
+  not import it twice. Android also REPLAYS an old share with a fresh copy of
+  the intent, from Recents and on a restore after process death; the first is
+  refused by `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY` and the second marked read
+  by `ShareInPackage` when `savedInstanceState` is set (found in review).
+- `App.js` takes shares one at a time, and only the newest import may commit
+  to the editor. Each take deletes the shared copies not on screen, so two
+  overlapping would delete the file the first is about to show (found in
+  review).
+- It refuses non-`content://` URIs, non-image types, empty reads and anything
+  over 64 MiB. It keeps the copy the editor is showing and deletes the rest.
+- `src/sharein.js` decides what the answer means (open, a sentence, or
+  nothing), and `src/sharein.test.mjs` tests it. The same suite reads the
+  Kotlin source for the contract between the two: module name, event name,
+  the keys of each answer, and the exact set of refusal reasons. `App.js` routes the picker and
+  a share through one `openImage`.
+- A share of several pictures opens the first and says so.
+
+The release build compiles and links it. It has not received a real share:
+the phone was disconnected. See "What is still unverified".
 
 ## Phase 6 — Library — **CUT 2026-09-18**
 
@@ -1095,9 +1122,11 @@ measurement this repo can take on its own:
   [16256, 16384) is one driver's number.
 - **Other Android skins.** The status-bar shape test is verified both directions,
   but on a single stock-Android status bar.
-- **Receiving a share is not built** (2026-09-22). Everything below about the
-  share target is about delivery; the app has no code that reads what is
-  delivered. Until it does, the only way in is the picker.
+- **Receiving a share is built and has never run** (2026-09-22). The Kotlin
+  compiles into the release APK; no share has been sent to it on a phone. The
+  three arrival paths (cold start, running, recreated activity), a
+  `SEND_MULTIPLE`, a refused type, and the cache cleanup are each untested on
+  a device.
 - **Save's permission fallback below API 30.** Written, never run: the one test
   phone is on API 37.
 - **The share target's actual behaviour.** It registers and resolves correctly on

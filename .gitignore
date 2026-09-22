@@ -65,6 +65,8 @@ spike/dist/
 spike/web-build/
 spike/expo-env.d.ts
 spike/android/
+# Our own native module's Gradle output. Its sources are tracked; this is not.
+spike/modules/*/android/build/
 spike/ios/
 spike/.kotlin/
 spike/.metro-health-check*
