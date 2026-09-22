@@ -887,8 +887,8 @@ target, the rule-of-thirds grid, the loupe, and the excluded bands. The last
 three have not been seen on a device -- see the queue above, and do not read
 "written" as "works". Cover was cut on 2026-09-22 rather than rebuilt; see
 Phase 3.
-**Still Phase 5.** Save to Photos and Copy image. The overflow ships with Start
-over and the developer panel rather than with two disabled rows.
+**Built in Phase 5, 2026-09-22.** Save to Photos and Copy image are the first
+two rows of the overflow, above Start over and the developer panel.
 
 - **Delete the "Make card" step.** The canvas becomes the live card, composed at
   screen resolution, and re-composes on every change. `showingResult` and its
@@ -987,12 +987,49 @@ rather than pixels: same aspect, same padding as a fraction of crop width, same
 radius as a fraction of crop width. Break each of those three on purpose and
 watch the gate go red before trusting it.
 
-## Phase 5 — save and share
+## Phase 5 — save and share — **BUILT 2026-09-22**
 
-- MediaStore save, scoped-storage behaviour per API level
-- `FileProvider` content URI for `ACTION_SEND` — WhatsApp sharing depends on it
-- Photos permission denied falls back to the share sheet silently, no nag
-- Picker via the permissionless photo picker, not a full-gallery permission
+- MediaStore save, scoped-storage behaviour per API level. **Done.**
+  `Asset.create` from expo-media-library 57. On API 30 and later it asks for
+  nothing: an app may insert its own image into MediaStore without a
+  permission, and the card lands in `DCIM/` as `Twitwa-YYYYMMDD-HHMMSS.png`
+  (`savedName` in `src/plan.js`, local time, sortable as a string except
+  across a clock change). Below API 30
+  it asks for `WRITE_EXTERNAL_STORAGE`, which the manifest carries with
+  `maxSdkVersion` 32.
+- `FileProvider` content URI for `ACTION_SEND` — WhatsApp sharing depends on
+  it. **Done since Phase 4**, through expo-sharing.
+- Photos permission denied falls back to the share sheet silently, no nag.
+  **Written, not run**: it can only happen below API 30, and the one test phone
+  is on 37.
+- Picker via the permissionless photo picker, not a full-gallery permission.
+  **Done**, and now enforced: `android.blockedPermissions` strips `CAMERA`,
+  `RECORD_AUDIO`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, `READ_MEDIA_AUDIO`,
+  `READ_MEDIA_VISUAL_USER_SELECTED` and `ACCESS_MEDIA_LOCATION`, which the
+  image-picker and media-library manifests add on their own. Read back from the
+  built APK with `aapt2 dump permissions`: none of the seven is there.
+- Copy image, added to this phase with the overflow. `Clipboard.setImageAsync`
+  on the PNG's base64. The app says "Copied" only below API 33, because from 33
+  the system shows its own clipboard preview and two confirmations of one copy
+  read as two copies.
+
+Share, Save and Copy all render through one `exportCard` in `App.js`, so the P4
+same-composition check covers all three.
+
+**Run on the Pixel 6 Pro (API 37), 2026-09-22, on the R8 release APK.** Save
+wrote `DCIM/Twitwa-20260922-215520.png`, 1080×2229, owned by
+`dev.bismark.twitwa`, with no prompt, and the caption read "Saved to Photos"
+and then went back to the size. Copy put the card on the clipboard; the system
+preview showed it and the app showed nothing, as intended. Share opened the
+chooser on the card, with P4 at `aspectOff` 0.00107 and `padFracOff` 0.00094.
+The test file was deleted afterwards.
+
+**Not built, and found by that run: receiving a share.** The empty state says
+"Share in a screenshot", and the intent filters register, but nothing in
+`App.js` reads an incoming `EXTRA_STREAM` (README, "Settled on the release
+APK"). An `ACTION_SEND` to the running app on 2026-09-22 left it on the empty
+state. This is the app's front door and it is still missing; see "What is still
+unverified".
 
 ## Phase 6 — Library — **CUT 2026-09-18**
 
@@ -1058,6 +1095,11 @@ measurement this repo can take on its own:
   [16256, 16384) is one driver's number.
 - **Other Android skins.** The status-bar shape test is verified both directions,
   but on a single stock-Android status bar.
+- **Receiving a share is not built** (2026-09-22). Everything below about the
+  share target is about delivery; the app has no code that reads what is
+  delivered. Until it does, the only way in is the picker.
+- **Save's permission fallback below API 30.** Written, never run: the one test
+  phone is on API 37.
 - **The share target's actual behaviour.** It registers and resolves correctly on
   the installed package — both actions, three mime types, with `text/plain`
   correctly refused. But a real `ACTION_SEND` is **consumed by the dev launcher**

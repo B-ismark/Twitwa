@@ -56,6 +56,25 @@ if (BREAK === 'no_shape_gate') {
   // being broken rather than as the argument being dropped.
   F.planOutput = (a) => real.planOutput({ ...a, frame: 'match' });
   F.planCard = (a) => real.planCard({ ...a, frame: 'match' });
+} else if (BREAK === 'saved_month_zero') {
+  // getMonth() used as it comes: January saves as month 00.
+  const two = (n) => String(n).padStart(2, '0');
+  F.savedName = (d) => `Twitwa-${d.getFullYear()}${two(d.getMonth())}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}.png`;
+} else if (BREAK === 'saved_unpadded') {
+  // No zero-padding: 5 January at 07:08:09 becomes 202615-789, which sorts
+  // after 20261231.
+  F.savedName = (d) => `Twitwa-${d.getFullYear()}${d.getMonth() + 1}${d.getDate()}-${d.getHours()}${d.getMinutes()}${d.getSeconds()}.png`;
+} else if (BREAK === 'saved_utc') {
+  // UTC fields instead of local ones. Invisible on any machine whose zone is
+  // UTC, which is why the check below sets a zone rather than trusting the
+  // machine's.
+  const two = (n) => String(n).padStart(2, '0');
+  F.savedName = (d) => `Twitwa-${d.getUTCFullYear()}${two(d.getUTCMonth() + 1)}${two(d.getUTCDate())}-${two(d.getUTCHours())}${two(d.getUTCMinutes())}${two(d.getUTCSeconds())}.png`;
+} else if (BREAK === 'saved_unchecked') {
+  // An invalid Date is named instead of refused: Twitwa-NaNNaNNaN-NaNNaNNaN.png.
+  F.savedName = (d) => {
+    try { return real.savedName(d); } catch { return 'Twitwa-NaN.png'; }
+  };
 } else if (BREAK === 'frame_unvalidated') {
   // An unknown frame falls through to Match instead of throwing, so a typo in
   // one call site is a card with a colour nobody chose.
@@ -410,6 +429,42 @@ console.log('planCrop says when the crop had to be cut to the image');
   check('a crop that fits is not warned about',
     !fits.warnings.some((w) => /extended past the image/.test(w)), JSON.stringify(fits.warnings));
   check('and is unchanged', fits.crop.w === 300 && fits.crop.h === 400, JSON.stringify(fits.crop));
+}
+
+console.log('a saved card is named by its local time, sortable as a string');
+{
+  // Single-digit month, day, hour, minute and second, in January: the one
+  // input that shows both a zero-based month and a missing pad at once.
+  const jan = F.savedName(new Date(2026, 0, 5, 7, 8, 9));
+  check('5 Jan 2026 07:08:09 is Twitwa-20260105-070809.png', jan === 'Twitwa-20260105-070809.png', jan);
+  // And the other end, where a zero-based month would read 11 and padding
+  // does nothing: December is where "month + 1" is proven, not assumed.
+  const dec = F.savedName(new Date(2026, 11, 31, 23, 59, 59));
+  check('31 Dec 2026 23:59:59 is Twitwa-20261231-235959.png', dec === 'Twitwa-20261231-235959.png', dec);
+  const times = [
+    new Date(2026, 8, 9, 9, 5, 1),
+    new Date(2026, 8, 10, 0, 0, 0),
+    new Date(2026, 9, 1, 12, 0, 0),
+    new Date(2027, 0, 1, 0, 0, 0),
+  ];
+  const names = times.map((t) => F.savedName(t));
+  check('names sort in the same order as the times', JSON.stringify(names.slice().sort()) === JSON.stringify(names), names.join(' '));
+  let threw = null;
+  try { F.savedName(new Date(NaN)); } catch (e) { threw = e; }
+  check('an invalid Date is refused, not named', threw !== null, threw ? threw.message : 'no throw');
+  // Local time, pinned. Every Date above is built with the local constructor,
+  // so a UTC implementation passes all of them on a machine set to UTC. This
+  // one fixes an instant and a zone five and a half hours from UTC, where the
+  // two readings differ in the day as well as the hour.
+  const zone = process.env.TZ;
+  process.env.TZ = 'Asia/Kolkata';
+  try {
+    const at = new Date(Date.UTC(2026, 0, 5, 23, 30, 0));
+    const name = F.savedName(at);
+    check('named in local time: 23:30 UTC on 5 Jan is 05:00 on 6 Jan in Kolkata', name === 'Twitwa-20260106-050000.png', name);
+  } finally {
+    if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone;
+  }
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

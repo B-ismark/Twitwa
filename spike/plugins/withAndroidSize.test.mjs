@@ -30,10 +30,13 @@ const LIVE_PROPERTIES = 'android/gradle.properties';
 const MUTANTS = {
   // The two emulator ABIs come back: 61,374,008 bytes of uncompressed native
   // code that no phone can run. This is the whole point of the plugin.
-  x86_restored: ["value: 'arm64-v8a,armeabi-v7a'", "value: 'arm64-v8a,armeabi-v7a,x86,x86_64'"],
-  // 32-bit devices silently cannot install. Sideloading has no Play filter, so
-  // this one has no symptom at all until a person reports "App not installed".
-  v7a_dropped: ["value: 'arm64-v8a,armeabi-v7a'", "value: 'arm64-v8a'"],
+  x86_restored: ["value: 'arm64-v8a',", "value: 'arm64-v8a,x86,x86_64',"],
+  // The 32-bit ABI comes back: 9,255,669 bytes the owner chose to drop.
+  v7a_restored: ["value: 'arm64-v8a',", "value: 'arm64-v8a,armeabi-v7a',"],
+  // R8 stays off, and the build succeeds as though nothing were asked of it.
+  r8_off: ["key: 'android.enableMinifyInReleaseBuilds',\n    value: 'true'", "key: 'android.enableMinifyInReleaseBuilds',\n    value: 'false'"],
+  // The name every guide gives, which this template never reads.
+  r8_wrong_name: ["key: 'android.enableMinifyInReleaseBuilds',", "key: 'android.enableProguardInReleaseBuilds',"],
   // .so go back to Stored, which is where 110 MB of the original APK came from.
   packaging_not_legacy: ["key: 'expo.useLegacyPackaging',\n    value: 'true'", "key: 'expo.useLegacyPackaging',\n    value: 'false'"],
   gif_left_on: ["key: 'expo.gif.enabled',\n    value: 'false'", "key: 'expo.gif.enabled',\n    value: 'true'"],
@@ -55,7 +58,13 @@ if (process.argv.includes('--list-mutants')) {
 }
 
 const BREAK = process.env.BREAK || '';
-const realSource = readFileSync(PLUGIN_SRC_PATH, 'utf8');
+// Line endings normalised, because the mutants below are written with `\n`
+// and a Windows clone (core.autocrlf=true) checks the plugin out with CRLF.
+// Without this, every mutant spanning a line break reports NO LONGER APPLIES
+// on that clone and tests nothing. Found 2026-09-22 by gating a CRLF export:
+// six of them, in all three plugin suites. JS reads CRLF and LF alike, so the
+// mutated copy behaves as the real file does.
+const realSource = readFileSync(PLUGIN_SRC_PATH, 'utf8').replace(/\r\n/g, '\n');
 let plugin;
 
 if (BREAK && MUTANTS[BREAK]) {
@@ -76,7 +85,7 @@ if (BREAK && MUTANTS[BREAK]) {
   plugin = require('./withAndroidSize.js');
 }
 
-const { apply, PROPERTIES, NOT_SET_YET } = plugin;
+const { apply, PROPERTIES } = plugin;
 
 // The values this plugin is supposed to produce, written down HERE rather than
 // read from PROPERTIES. Reading them from the module is the mistake that let
@@ -88,9 +97,10 @@ const { apply, PROPERTIES, NOT_SET_YET } = plugin;
 // Changing the plugin deliberately means changing this table in the same
 // commit, after reading the diff.
 const EXPECTED = {
-  reactNativeArchitectures: 'arm64-v8a,armeabi-v7a',
+  reactNativeArchitectures: 'arm64-v8a',
   'expo.useLegacyPackaging': 'true',
   'expo.gif.enabled': 'false',
+  'android.enableMinifyInReleaseBuilds': 'true',
 };
 const EXPECTED_KEYS = Object.keys(EXPECTED);
 
@@ -139,14 +149,14 @@ const TEMPLATE_ITEMS = [
   { type: 'empty' },
 ];
 
-console.log('the three properties land with the intended values');
+console.log('the four properties land with the intended values');
 {
   const out = apply(template());
   for (const key of EXPECTED_KEYS) {
     check(`${key} == ${EXPECTED[key]}`, vals(out, key).join('|') === EXPECTED[key], vals(out, key).join('|'));
   }
   check(
-    'the plugin sets exactly these three keys and no others',
+    'the plugin sets exactly these four keys and no others',
     JSON.stringify(PROPERTIES.map((p) => p.key).sort()) === JSON.stringify(EXPECTED_KEYS.slice().sort()),
     PROPERTIES.map((p) => p.key).join(',')
   );
@@ -156,10 +166,10 @@ console.log('the ABI list, stated as facts about ABIs rather than as one string'
 {
   const abis = vals(apply(template()), 'reactNativeArchitectures')[0].split(',');
   check('arm64-v8a is present', abis.includes('arm64-v8a'), abis.join(','));
-  check('armeabi-v7a is present, so 32-bit devices can still install', abis.includes('armeabi-v7a'), abis.join(','));
+  check('armeabi-v7a is gone, as the owner decided on 2026-09-22', !abis.includes('armeabi-v7a'), abis.join(','));
   check('x86 is gone', !abis.includes('x86'), abis.join(','));
   check('x86_64 is gone', !abis.includes('x86_64'), abis.join(','));
-  check('exactly two ABIs ship', abis.length === 2, abis.join(','));
+  check('exactly one ABI ships', abis.length === 1, abis.join(','));
 }
 
 console.log('replacement, not accumulation');
@@ -168,10 +178,16 @@ console.log('replacement, not accumulation');
   for (const key of EXPECTED_KEYS) {
     check(`${key} appears exactly once`, vals(out, key).length === 1, vals(out, key).length);
   }
+  // Three keys are already in the template and get replaced; the R8 key is not
+  // (the template reads it with a `?: false` default) and gets appended. The
+  // count is derived, so a key that moves into or out of the template shows up
+  // here as a changed number rather than as a silent duplicate.
+  const absent = EXPECTED_KEYS.filter((key) => vals(template(), key).length === 0);
+  check('exactly one key is absent from the template, and it is R8', absent.join() === 'android.enableMinifyInReleaseBuilds', absent.join());
   check(
-    'the list grows by zero entries, because all three keys already existed',
-    out.length === template().length,
-    `${template().length} -> ${out.length}`
+    'the list grows by exactly the keys the template lacked',
+    out.length === template().length + absent.length,
+    `${template().length} -> ${out.length}, ${absent.length} absent`
   );
 }
 
@@ -213,7 +229,7 @@ console.log('a key that is absent gets appended rather than dropped');
   }
   check('the pre-existing entry is still there', vals(out, 'org.gradle.parallel')[0] === 'true');
   const empty = apply([]);
-  check('an empty list yields exactly the three properties', empty.length === EXPECTED_KEYS.length, empty.length);
+  check('an empty list yields exactly the properties the plugin sets', empty.length === EXPECTED_KEYS.length, empty.length);
 }
 
 console.log('it refuses rather than writing a file it cannot vouch for');
@@ -233,23 +249,22 @@ console.log('it refuses rather than writing a file it cannot vouch for');
   );
 }
 
-console.log('the deliberate exclusion is recorded, not forgotten');
+console.log('R8 is on, under the name this template reads');
 {
   const out = apply(template());
   check(
-    'R8 is not switched on here',
-    vals(out, 'android.enableMinifyInReleaseBuilds').length === 0,
+    'android.enableMinifyInReleaseBuilds is true',
+    vals(out, 'android.enableMinifyInReleaseBuilds').join('|') === 'true',
     vals(out, 'android.enableMinifyInReleaseBuilds').join('|')
   );
-  check('and the plugin says so by name', NOT_SET_YET.includes('android.enableMinifyInReleaseBuilds'), NOT_SET_YET.join(','));
   check(
-    'the property name is the one SDK 57 actually reads',
+    'and the name every guide gives is not what got set',
     // android/app/build.gradle:69 reads android.enableMinifyInReleaseBuilds.
-    // Nearly every guide names android.enableProguardInReleaseBuilds, which
-    // this template does not read at all, so setting it would look like R8 was
-    // on while R8 stayed off.
-    !NOT_SET_YET.includes('android.enableProguardInReleaseBuilds'),
-    NOT_SET_YET.join(',')
+    // android.enableProguardInReleaseBuilds is from the bare React Native
+    // template and is not read here, so setting it would look like R8 was on
+    // while R8 stayed off.
+    vals(out, 'android.enableProguardInReleaseBuilds').length === 0,
+    vals(out, 'android.enableProguardInReleaseBuilds').join('|')
   );
 }
 
@@ -273,7 +288,11 @@ if (!existsSync(LIVE_PROPERTIES)) {
   const { parsePropertiesFile } = require('@expo/config-plugins/build/android/Properties');
   const live = parsePropertiesFile(readFileSync(LIVE_PROPERTIES, 'utf8'));
   const liveKeys = live.filter((i) => i.type === 'property').map((i) => i.key).sort();
-  const mineKeys = template().filter((i) => i.type === 'property').map((i) => i.key).sort();
+  // The live file is what prebuild left AFTER this plugin ran, so it is
+  // compared with the template as this plugin leaves it, not the bare one.
+  // Comparing with the bare one went red the first time the plugin appended a
+  // key the template lacks (android.enableMinifyInReleaseBuilds, 2026-09-22).
+  const mineKeys = apply(template()).filter((i) => i.type === 'property').map((i) => i.key).sort();
   check(
     'TEMPLATE still matches android/gradle.properties',
     JSON.stringify(liveKeys) === JSON.stringify(mineKeys),

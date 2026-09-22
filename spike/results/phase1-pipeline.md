@@ -11,8 +11,8 @@ were claims about code. The ones the run touched are now claims about a result,
 and the two that the run contradicted are corrected in place and named as
 corrections.
 
-It is wired to **Render** and **Render + cover** in `App.js`, and both were
-pressed by driving the device over `adb shell input tap`.
+It was wired to **Render** and **Render + cover** in `App.js` (the second went
+with Cover on 2026-09-22), and both were pressed by driving the device over `adb shell input tap`.
 
 Two things the wiring changed in the code itself:
 

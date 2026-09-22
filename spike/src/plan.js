@@ -226,6 +226,34 @@ export function orientedSize(width, height, orientation = 1) {
     : { width, height, swapped: false };
 }
 
+/**
+ * The file name a card saved to Photos gets, from the moment it was saved.
+ *
+ * MediaStore takes the display name from the file, so this is the name a
+ * person reads in their gallery, and it is in LOCAL time for that reason.
+ * Every field is zero-padded and the order is most significant first, so a
+ * plain string sort of the names is a sort by time -- which is what a file
+ * manager does with them -- EXCEPT across a change of the clock itself. Local
+ * time repeats an hour when daylight saving ends and jumps when the phone
+ * changes timezone, so two saves either side of that can sort the wrong way
+ * round. Accepted: the name is for a person reading a gallery, and UTC would
+ * be wrong on every other day.
+ *
+ * Pure and in this module rather than inline in App.js because the two ways
+ * it goes wrong are both invisible on most days: `getMonth()` is zero-based,
+ * and an unpadded field only shows itself before the tenth of the month or
+ * the tenth hour.
+ */
+export function savedName(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    throw new Error(`plan: savedName needs a valid Date, got ${String(date)}`);
+  }
+  const two = (n) => String(n).padStart(2, '0');
+  const day = `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}`;
+  const time = `${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
+  return `Twitwa-${day}-${time}.png`;
+}
+
 /** Whether an orientation needs any work at all. 1 and anything unknown mean no. */
 export function needsOrientation(orientation) {
   return Number.isInteger(orientation) && orientation >= 2 && orientation <= 8;

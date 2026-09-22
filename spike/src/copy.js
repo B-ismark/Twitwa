@@ -27,6 +27,10 @@ export const COPY = {
   // --- actions ------------------------------------------------------------
   choose: 'Choose screenshot',
   share: 'Share',
+  // The two other ways out, in the More menu. "Save to Photos" confirms as
+  // "Saved to Photos", per the rule at the top: the verb survives the flow.
+  save: 'Save to Photos',
+  copyImage: 'Copy image',
   startOver: 'Start over',
   close: 'Close',
   // The overflow behind the three dots. Named for what it holds rather than
@@ -80,6 +84,10 @@ export const COPY = {
   pickFailed: 'That screenshot could not be opened. Pick another one.',
   renderFailed: 'The card could not be made. Try again.',
   shareFailed: 'This phone has no way to share the card.',
+  saveFailed: 'The card could not be saved to Photos. Try Share instead.',
+  copyFailed: 'The card could not be copied. Try Share instead.',
+  saved: 'Saved to Photos',
+  copied: 'Copied',
   // The picker's launcher does not survive the activity being recreated, and a
   // release build cannot reload itself to fix it. See src/recover.js.
   pickerStale: 'Close Twitwa and open it again to use the picker.',

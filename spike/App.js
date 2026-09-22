@@ -29,14 +29,17 @@
 // a question here has a right answer that does not depend on React, it belongs
 // in one of those three; that is what keeps them testable on a desktop.
 //
-// NOT DONE HERE, deliberately: Save to Photos and Copy image, which the IA
-// puts in the overflow. The first is MediaStore and scoped storage per API
-// level and the second needs a clipboard dependency this app does not have;
-// both are Phase 5. The overflow ships with what exists rather than with
-// disabled rows explaining themselves.
+// The three ways out -- Share, Save to Photos and Copy image -- all render
+// through `exportCard`, so they hand over one composition. Save and Copy sit
+// in the overflow, as the IA puts them (Phase 5, 2026-09-22).
+//
+// NOT DONE HERE, and not done anywhere yet: receiving a share. The intent
+// filters register, but nothing reads an incoming EXTRA_STREAM, so the only
+// way in is the picker. See BUILD-PLAN.md, Phase 5.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DevSettings,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -64,6 +67,8 @@ import {
 } from '@shopify/react-native-skia';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
+import * as Clipboard from 'expo-clipboard';
+import { Asset, requestPermissionsAsync } from 'expo-media-library';
 
 import {
   decodeFromUri,
@@ -95,7 +100,7 @@ import {
 } from './src/shell';
 import { proposeFromImage } from './src/autocrop';
 import { readRect } from './src/skia';
-import { planOutput } from './src/plan';
+import { planOutput, savedName } from './src/plan';
 import {
   dragCrop,
   edgeBand,
@@ -201,6 +206,11 @@ export default function App() {
 
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
+  // An outcome to confirm, such as "Saved to Photos". Separate from `problem`
+  // because it clears itself: a confirmation that stays up reads as the
+  // caption being stuck, and one that has to be dismissed is a second action
+  // for a thing that already happened.
+  const [notice, setNotice] = useState(null);
   const [menu, setMenu] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
   // Dev only, and not part of the editor. The Q2 and P1 buttons put a measured
@@ -526,7 +536,7 @@ export default function App() {
    * on here would let the export trim again under a crop the user chose, which
    * is the preview-disagrees-with-export failure this phase exists to remove.
    */
-  const build = useCallback(async () => {
+  const build = useCallback(async (outputName) => {
     if (!src || !ed) return null;
     const out = await renderCard({
       uri: src.uri,
@@ -535,17 +545,68 @@ export default function App() {
       radius: ed.radius,
       frame: ed.background,
       trim: 'never',
-      outputName: 'card.png',
+      outputName,
     });
     return out;
   }, [src, ed]);
 
-  // Hand the PNG to the system sheet. Not "Save to Photos": that is MediaStore
-  // and scoped storage per API level, which is Phase 5. This is the path the
-  // product exists for, and expo-sharing was already a dependency.
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  /**
+   * Render the card for one of the ways out of the app, and report it.
+   *
+   * Share, Save and Copy all come through here, so for one editor state they
+   * hand over one composition. Three copies of this would be three chances for
+   * one of them to export a card the preview never showed, and the P4 check
+   * below is what would notice.
+   */
+  const exportCard = useCallback(async (outputName) => {
+    const out = await build(outputName);
+    if (!out || out.error) {
+      emit('P1.render.error', { error: out && out.error });
+      setProblem(COPY.renderFailed);
+      return null;
+    }
+    emit('P1.render', {
+      out: out.width + 'x' + out.height,
+      kiB: +(out.bytes / 1024).toFixed(1),
+      frame: out.frame,
+      fill: out.fill,
+      fillSource: out.fillSource,
+      radius: out.radius,
+      radiusPx: out.radiusPx,
+      crop: out.crop,
+      dest: out.dest,
+      pad: out.pad,
+      warnings: out.warnings,
+      timings: out.timings,
+    });
+    // The claim Phase 4.5 rests on, checked on the device rather than only
+    // in src/compose.test.mjs: the card that was on screen and the card in
+    // the file are one composition. Compared as ratios, because the two are
+    // at different scales by design.
+    if (shot) {
+      emit('P4.sameComposition', {
+        preview: { w: shot.width, h: shot.height, pad: shot.pad, radius: shot.radius },
+        exported: { w: out.width, h: out.height, pad: out.pad, radius: out.radiusPx },
+        aspectOff: +Math.abs(out.height / out.width - shot.height / shot.width).toFixed(5),
+        padFracOff: +Math.abs(out.pad / out.width - shot.pad / shot.width).toFixed(5),
+      });
+    }
+    return out;
+  }, [build, shot, emit]);
+
+  // Hand the PNG to the system sheet. The path the product exists for: this is
+  // how a card reaches WhatsApp, and expo-sharing wraps the file in its own
+  // FileProvider content URI, which is what ACTION_SEND needs.
   const share = useCallback(async () => {
     if (!src || !ed) return;
     setProblem(null);
+    setNotice(null);
     setMenu(false);
     setBusy(true);
     try {
@@ -557,38 +618,8 @@ export default function App() {
         setProblem(COPY.shareFailed);
         return;
       }
-      const out = await build();
-      if (!out || out.error) {
-        emit('P1.render.error', { error: out && out.error });
-        setProblem(COPY.renderFailed);
-        return;
-      }
-      emit('P1.render', {
-        out: out.width + 'x' + out.height,
-        kiB: +(out.bytes / 1024).toFixed(1),
-        frame: out.frame,
-        fill: out.fill,
-        fillSource: out.fillSource,
-        radius: out.radius,
-        radiusPx: out.radiusPx,
-        crop: out.crop,
-        dest: out.dest,
-        pad: out.pad,
-        warnings: out.warnings,
-        timings: out.timings,
-      });
-      // The claim Phase 4.5 rests on, checked on the device rather than only
-      // in src/compose.test.mjs: the card that was on screen and the card in
-      // the file are one composition. Compared as ratios, because the two are
-      // at different scales by design.
-      if (shot) {
-        emit('P4.sameComposition', {
-          preview: { w: shot.width, h: shot.height, pad: shot.pad, radius: shot.radius },
-          exported: { w: out.width, h: out.height, pad: out.pad, radius: out.radiusPx },
-          aspectOff: +Math.abs(out.height / out.width - shot.height / shot.width).toFixed(5),
-          padFracOff: +Math.abs(out.pad / out.width - shot.pad / shot.width).toFixed(5),
-        });
-      }
+      const out = await exportCard('card.png');
+      if (!out) return;
       await Sharing.shareAsync(out.path, { mimeType: 'image/png', UTI: 'public.png' });
       emit('P1.share', { ok: true, path: out.path });
     } catch (e) {
@@ -597,7 +628,103 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [src, ed, shot, build, emit]);
+  }, [src, ed, exportCard, emit]);
+
+  /**
+   * Save the card to Photos, which on Android means a MediaStore row in DCIM.
+   *
+   * WHY IT ASKS FOR NOTHING ON ANDROID 11 AND LATER. From API 30 an app may
+   * insert its own image into MediaStore with no permission at all, and
+   * expo-media-library's modern path does exactly that. A prompt for access
+   * the app does not need is how a person learns to deny the one it does, so
+   * the prompt exists only where the platform requires it.
+   *
+   * Android 10 and earlier need WRITE_EXTERNAL_STORAGE. If that is refused
+   * the card goes to the share sheet instead, where the person can still save
+   * it, rather than to a message telling them to go and change a setting.
+   * That is Phase 5's "falls back to the share sheet silently".
+   *
+   * A file name per save, not `card.png`: MediaStore takes the display name
+   * from the file, and a gallery of identically named cards can be told apart
+   * by nothing but a thumbnail.
+   */
+  const save = useCallback(async () => {
+    if (!src || !ed) return;
+    setProblem(null);
+    setNotice(null);
+    setMenu(false);
+    setBusy(true);
+    let fallback = false;
+    try {
+      if (Platform.Version < 30) {
+        const perm = await requestPermissionsAsync(true);
+        // No `return` here. A return inside `try` runs `finally` and then
+        // leaves the function, so the share fallback after the try/finally
+        // never ran: the first version of this did exactly that, and logged
+        // `fallback: 'share'` for a sheet that never opened. Found in review
+        // on 2026-09-22; nothing had run it, since the test phone is API 37.
+        if (!perm.granted) {
+          emit('P5.save', { ok: false, reason: 'permission', api: Platform.Version, fallback: 'share' });
+          fallback = true;
+        }
+      }
+      if (!fallback) {
+        const out = await exportCard(savedName(new Date()));
+        if (!out) return;
+        const asset = await Asset.create(out.path);
+        // MediaStore holds its own copy now. The one in the cache has a name
+        // per save, so unlike Share's card.png nothing ever overwrites it, and
+        // without this every save left one behind. A failure here costs cache
+        // space only, never the save, so it is not reported as one.
+        try {
+          new File(out.path).delete();
+        } catch {
+          // Deliberately empty; see above.
+        }
+        emit('P5.save', { ok: true, api: Platform.Version, id: asset.id });
+        setNotice(COPY.saved);
+      }
+    } catch (e) {
+      emit('P5.save', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
+      setProblem(COPY.saveFailed);
+    } finally {
+      setBusy(false);
+    }
+    if (fallback) await share();
+  }, [src, ed, exportCard, share, emit]);
+
+  /**
+   * Put the card on the clipboard as an image.
+   *
+   * No "Copied" from the app on Android 13 and later, because the system shows
+   * its own clipboard preview there and two confirmations of one copy read as
+   * two copies. Below 13 nothing else says it happened, so the app does.
+   *
+   * `base64()` is the async one. expo-file-system has a sync twin, and calling
+   * an AsyncFunction as if it were sync is a mistake this codebase has already
+   * made once; tools/check-fs-sync.mjs is the gate for it.
+   */
+  const copyImage = useCallback(async () => {
+    if (!src || !ed) return;
+    setProblem(null);
+    setNotice(null);
+    setMenu(false);
+    setBusy(true);
+    try {
+      const out = await exportCard('card.png');
+      if (!out) return;
+      const png = new File(out.path);
+      const b64 = await png.base64();
+      await Clipboard.setImageAsync(b64);
+      emit('P5.copy', { ok: true, api: Platform.Version, kiB: +(out.bytes / 1024).toFixed(1) });
+      if (Platform.Version < 33) setNotice(COPY.copied);
+    } catch (e) {
+      emit('P5.copy', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
+      setProblem(COPY.copyFailed);
+    } finally {
+      setBusy(false);
+    }
+  }, [src, ed, exportCard, emit]);
 
   // --- gestures on the raw layer ------------------------------------------
   //
@@ -869,6 +996,7 @@ export default function App() {
   let caption = '';
   if (problem) caption = problem;
   else if (busy) caption = COPY.working;
+  else if (notice) caption = notice;
   else if (ed && ed.tool === 'crop') caption = COPY.cropHint;
   else if (comp) caption = fill(COPY.cardSize, { width: comp.width, height: comp.height });
 
@@ -997,7 +1125,15 @@ export default function App() {
           than a control, because a visible button would be the first thing to
           make this look like a tool again. Documented in the README. */}
       <Pressable onLongPress={() => setDevOpen(true)} delayLongPress={800} style={styles.captionWrap}>
-        <Text style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}>
+        {/* A live region, so TalkBack reads "Saved to Photos" and every problem
+            aloud. On Android 13 and later that caption is Save's only
+            confirmation, and before this nothing announced it. Only for those
+            two: the size also lives here and changes on every frame of a crop
+            drag, and a live region would read each one out. */}
+        <Text
+          style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}
+          accessibilityLiveRegion={problem || notice ? 'polite' : 'none'}
+        >
           {caption}
         </Text>
       </Pressable>
@@ -1015,6 +1151,12 @@ export default function App() {
 
       {menu ? (
         <View style={[styles.menu, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+          {src && ed && !busy ? (
+            <>
+              <MenuItem label={COPY.save} palette={palette} onPress={save} />
+              <MenuItem label={COPY.copyImage} palette={palette} onPress={copyImage} />
+            </>
+          ) : null}
           <MenuItem label={COPY.startOver} palette={palette} onPress={startOver} />
           <MenuItem label={COPY.devTitle} palette={palette} onPress={() => { setMenu(false); setDevOpen(true); }} />
         </View>
@@ -1045,7 +1187,10 @@ export default function App() {
           </View>
           <View style={styles.bar}>
             <Action label={COPY.share} palette={palette} primary wide disabled={busy} onPress={share} />
-            <Action label={COPY.more} palette={palette} selected={menu} onPress={() => setMenu((v) => !v)} />
+            {/* Disabled while busy, as Share is. Open during an export, the menu
+                lacked Save and Copy with no reason given, and Start over from it
+                let "Saved to Photos" land on the empty screen. */}
+            <Action label={COPY.more} palette={palette} selected={menu} disabled={busy} onPress={() => setMenu((v) => !v)} />
           </View>
         </>
       )}
@@ -1099,6 +1244,10 @@ const ZERO_RECT = { x: 0, y: 0, w: 0, h: 0 };
  * and nothing in this repo can make it.
  */
 const GRID_MS = 120;
+// How long an outcome such as "Saved to Photos" stays in the caption. Long
+// enough to read a three-word sentence twice, short enough that the card's
+// size is back before the next thing anyone does.
+const NOTICE_MS = 2500;
 
 /**
  * The loupe's size, its inset from the stage's corner, and how many POINTS

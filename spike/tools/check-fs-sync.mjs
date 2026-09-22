@@ -60,11 +60,68 @@ function syncNames(kotlin) {
  * Deliberately crude: a false positive costs someone thirty seconds of reading,
  * and a false negative costs a silent throttle that nobody notices for a month.
  */
+/**
+ * Whether the receiver ending just before `dot` is awaited: walk back over the
+ * whole member chain -- names, dots, and balanced (...) and [...] -- and a
+ * leading `new`, then look for `await` in front of what is left.
+ *
+ * This replaced a regex that allowed exactly ONE character between `await`
+ * and the dot. Its self-checks all used a receiver called `f`, so they passed,
+ * while `await png.base64()` was reported as unawaited: a gate whose tests
+ * shared its blind spot. Found on 2026-09-22 by the first multi-letter
+ * receiver anyone awaited.
+ */
+function isAwaited(line, dot) {
+  let j = dot - 1;
+  while (j >= 0) {
+    const c = line[j];
+    if (c === ')' || c === ']') {
+      const open = c === ')' ? '(' : '[';
+      let depth = 0;
+      for (; j >= 0; j -= 1) {
+        if (line[j] === c) depth += 1;
+        else if (line[j] === open) {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      j -= 1;
+      continue;
+    }
+    if (/[A-Za-z0-9_$.]/.test(c)) {
+      j -= 1;
+      continue;
+    }
+    break;
+  }
+  const before = line.slice(0, j + 1).replace(/\bnew\s+$/, '');
+  return /\bawait\s*$/.test(before);
+}
+
+/**
+ * Source lines with every leading-dot continuation joined onto the line it
+ * continues, each tagged with the number of its first line.
+ *
+ * Without the join, `file\n  .text()` has no receiver on the line holding the
+ * call, so the regex below finds nothing there -- a miss, and in exactly the
+ * shape Prettier gives a long `new File(...)` chain. Found in review on
+ * 2026-09-22. Split on CRLF too: a `\r` left on the receiver's line would sit
+ * between the name and the dot and hide the call the same way.
+ */
+function logicalLines(source) {
+  const out = [];
+  for (const [i, raw] of source.split(/\r?\n/).entries()) {
+    if (/^\s*\./.test(raw) && out.length) out[out.length - 1].text += raw.trim();
+    else out.push({ text: raw, line: i + 1 });
+  }
+  return out;
+}
+
 function unawaitedCalls(source, risky) {
   const out = [];
-  const lines = source.split('\n');
+  const lines = logicalLines(source);
   for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
+    const line = lines[i].text;
     if (line.trim().startsWith('//') || line.trim().startsWith('*')) continue;
     for (const name of risky) {
       // One fresh regex per line, and matchAll only. An earlier version called
@@ -72,12 +129,12 @@ function unawaitedCalls(source, risky) {
       // regex; matchAll copies lastIndex, so it then started past the only
       // match and found nothing. The self-check below caught it immediately,
       // which is the entire reason those self-checks are here.
-      const re = new RegExp(`(await\\s+)?[A-Za-z0-9_\\]\\)]\\.${name}\\s*\\(`, 'g');
+      const re = new RegExp(`[A-Za-z0-9_\\]\\)]\\.${name}\\s*\\(`, 'g');
       for (const m of line.matchAll(re)) {
-        if (m[1]) continue;
+        if (isAwaited(line, m.index + 1)) continue;
         const after = line.slice(m.index + m[0].length);
         if (/^\s*\)?\s*\.\s*then\b/.test(after)) continue;
-        out.push({ name, line: i + 1, text: line.trim() });
+        out.push({ name, line: lines[i].line, text: line.trim() });
       }
     }
   }
@@ -145,6 +202,21 @@ function main() {
   expect(unawaitedCalls('const v = f.text();', ['text']).length === 1, 'a bare .text() is caught');
   expect(unawaitedCalls('const v = await f.text();', ['text']).length === 0, 'an awaited .text() is not');
   expect(unawaitedCalls('f.text().then(g);', ['text']).length === 0, 'a .then() chain is not');
+  // Receivers longer than one character, which the first version got wrong in
+  // the false-alarm direction and no check here noticed.
+  expect(unawaitedCalls('const v = await file.text();', ['text']).length === 0, 'an awaited multi-letter receiver is not');
+  expect(unawaitedCalls('const v = await this.state.file.text();', ['text']).length === 0, 'an awaited member chain is not');
+  expect(unawaitedCalls('const v = await new File(dir, name).text();', ['text']).length === 0, 'an awaited new File(...) is not');
+  expect(unawaitedCalls('const v = new File(dir, name).text();', ['text']).length === 1, 'an unawaited new File(...) is caught');
+  expect(unawaitedCalls('const v = file.text();', ['text']).length === 1, 'an unawaited multi-letter receiver is caught');
+  expect(unawaitedCalls('await g(); const v = file.text();', ['text']).length === 1, 'an await earlier on the line does not excuse a later call');
+  // A chain broken before the dot, as Prettier breaks long ones.
+  expect(unawaitedCalls('const v = file\n  .text();', ['text']).length === 1, 'an unawaited call on its own line is caught');
+  expect(unawaitedCalls('const v = await file\n  .text();', ['text']).length === 0, 'an awaited one on its own line is not');
+  expect(unawaitedCalls('const v = file\r\n  .text();', ['text']).length === 1, 'and it is caught in a CRLF file too');
+  // A join BEFORE the call, so a count of joined lines and a count of real
+  // ones disagree: the call is on line 3, and it is the second logical line.
+  expect((unawaitedCalls('const a = x\n  .y;\nconst v = f.text();', ['text'])[0] || {}).line === 3, 'reported at its real line number after a join');
   expect(unawaitedCalls('const v = f.textSync();', ['text']).length === 0, 'textSync is not caught');
   expect(unawaitedCalls('// const v = f.text();', ['text']).length === 0, 'a commented call is not');
 

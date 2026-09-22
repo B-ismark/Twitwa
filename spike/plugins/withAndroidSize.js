@@ -33,12 +33,14 @@
 const PROPERTIES = [
   {
     key: 'reactNativeArchitectures',
-    value: 'arm64-v8a,armeabi-v7a',
+    value: 'arm64-v8a',
     why:
       'Drops lib/x86 and lib/x86_64 -- 61,374,008 bytes of native code that no ' +
-      'phone can execute. They exist for emulators. armeabi-v7a is kept so a ' +
-      '32-bit device still installs: sideloading has no Play filter, so the ' +
-      'failure mode there is a bare "App not installed" with no reason given.',
+      'phone can execute; they exist for emulators. Also drops armeabi-v7a ' +
+      '(9,255,669 bytes, 28.1% of the 32,940,585-byte rebuild), as the owner decided on ' +
+      '2026-09-22. The cost is known and accepted: a phone that can only run ' +
+      '32-bit code cannot install this APK, and because sideloading has no Play ' +
+      'filter it says a bare "App not installed" with no reason given.',
   },
   {
     key: 'expo.useLegacyPackaging',
@@ -58,14 +60,21 @@ const PROPERTIES = [
       'Removes libgifimage.so (318,992 bytes per ABI). The input to this app is ' +
       'a screenshot, which Android writes as PNG; nothing here decodes a GIF.',
   },
+  {
+    // The Expo SDK 57 template reads THIS name (android/app/build.gradle:69).
+    // `android.enableProguardInReleaseBuilds`, the name nearly every guide
+    // gives, is from the bare React Native template and is not read here: it
+    // would leave R8 off and look like it had been turned on.
+    key: 'android.enableMinifyInReleaseBuilds',
+    value: 'true',
+    why:
+      'Turns on R8 for the release build: dex was 7,810,455 bytes before it. ' +
+      'R8 rewrites and strips bytecode, so unlike everything above it can ' +
+      'change runtime behaviour -- the classic React Native symptom is a native ' +
+      'module that resolves by reflection at startup and is no longer there. ' +
+      'Every release built with it therefore gets launched on a phone first.',
+  },
 ];
-
-// Deliberately NOT in the list above, and the reason is worth keeping:
-// `android.enableMinifyInReleaseBuilds`. R8 rewrites and strips bytecode, so
-// unlike everything above it can change runtime behaviour -- the classic React
-// Native symptom is a native module that resolves by reflection at startup and
-// is no longer there. It is a separate change with a separate device test.
-const NOT_SET_YET = ['android.enableMinifyInReleaseBuilds'];
 
 function apply(items) {
   const out = items.slice();
@@ -100,4 +109,3 @@ module.exports = function withAndroidSize(config) {
 
 module.exports.apply = apply;
 module.exports.PROPERTIES = PROPERTIES;
-module.exports.NOT_SET_YET = NOT_SET_YET;

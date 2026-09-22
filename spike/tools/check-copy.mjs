@@ -59,6 +59,7 @@ const LABEL_KEYS = new Set([
   'snug', 'standard', 'roomy',
   'matchFrame', 'paperFrame', 'inkFrame',
   'updateGet', 'updateLater', 'devTitle',
+  'save', 'copyImage',
 ]);
 
 const BREAK = process.env.BREAK || '';

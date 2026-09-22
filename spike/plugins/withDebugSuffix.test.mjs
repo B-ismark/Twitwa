@@ -59,7 +59,13 @@ if (process.argv.includes('--list-mutants')) {
 }
 
 const BREAK = process.env.BREAK || '';
-const realSource = readFileSync(PLUGIN_SRC_PATH, 'utf8');
+// Line endings normalised, because the mutants below are written with `\n`
+// and a Windows clone (core.autocrlf=true) checks the plugin out with CRLF.
+// Without this, every mutant spanning a line break reports NO LONGER APPLIES
+// on that clone and tests nothing. Found 2026-09-22 by gating a CRLF export:
+// six of them, in all three plugin suites. JS reads CRLF and LF alike, so the
+// mutated copy behaves as the real file does.
+const realSource = readFileSync(PLUGIN_SRC_PATH, 'utf8').replace(/\r\n/g, '\n');
 let plugin;
 
 if (BREAK && MUTANTS[BREAK]) {

@@ -41,6 +41,15 @@
             }
           ]
         }
+      ],
+      "blockedPermissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION"
       ]
     },
     "web": {
@@ -48,6 +57,20 @@
     },
     "plugins": [
       "expo-sharing",
+      [
+        "expo-media-library",
+        {
+          "granularPermissions": [],
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
       "./plugins/withReleaseSigning",
       "./plugins/withAndroidSize",
       "./plugins/withDebugSuffix"

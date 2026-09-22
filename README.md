@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1471 of the 1487 checks run in a clone**, and the 16 that cannot say so
+true: **1450 of the 1466 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -91,9 +91,9 @@ What the extra recipients *do* change, none of it about policy:
   free.
 - **The APK has to be small enough to send.** The first signed build was
   **124,548,439 bytes**, which is not a thing anyone sends over a chat app. It
-  is now **32,886,397 bytes**. See "Making the APK small enough to send" below —
-  the whole of the problem was in `lib/`, and the whole of the fix was two
-  Gradle properties.
+  was **32,886,397 bytes** after two Gradle properties, and is **19,211,087**
+  since 2026-09-22, when the owner dropped 32-bit and R8 went on. See "Making the
+  APK small enough to send" below — the whole of the problem was in `lib/`.
 - **Nothing tells a recipient that a new version exists.** There is no store, so
   there is no update notification unless the app makes one. See "Telling people
   there is an update" below.
@@ -147,8 +147,8 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 **Phase 1: run on the device.** `src/pipeline.js` assembles the whole path —
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
-those carry 379 checks and 65 mutations between them while the renderer carries
-none (**1487 checks and 219 mutations** counting the two PNG tools, all three
+those carry 394 checks and 71 mutations between them while the renderer carries
+none (**1466 checks and 218 mutations** counting the two PNG tools, all three
 config plugins, the update module and the seven rule-checking gates). Seven of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -161,18 +161,18 @@ editor opens on.
 Those two numbers have a convention, because without one they are not
 comparable between readings: every check each gate prints as run, on a tree
 where `android/` exists, summed; and every mutant the loops below enumerate.
-They were re-derived by running all of it on 2026-09-18, not by adding to the
+They were re-derived by running all of it on 2026-09-22, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1471 of those 1487 and reports 16 skipped**, and it runs all 219
-mutations with none surviving. Measured 2026-09-19 from `git write-tree` over
-the staged tree of this commit, so the thing gated is the commit and not the
+**A clone runs 1450 of those 1466 and reports 16 skipped**, and it runs all 218
+mutations with none surviving. Measured 2026-09-22 from `git write-tree` over
+the tree of this commit, extracted with CRLF line endings as a Windows clone gets it, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1487 − 1471 = 16, which is the skip count, so the
+That pairing is the check: 1466 − 1450 = 16, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -382,23 +382,23 @@ cd spike && node src/pixels.test.mjs     # 179 checks on the pixel math
 cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 62 checks on the output sizing
-cd spike && node src/plan.test.mjs       # 87 checks on the decision layer
+cd spike && node src/plan.test.mjs       # 92 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 68 checks on the editor's tool sessions and Style controls
 cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
-cd spike && node tools/check-imports.mjs # 107 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 142 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 108 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 143 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 46 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
-cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 11 self-checks on its own rule
+cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 21 self-checks on its own rule
 cd spike && node tools/check-style-members.mjs  # 58 checks; fails on a StyleSheet member RN does not define
 cd spike && node tools/check-call-arity.mjs     # 14 checks; fails on a call with the wrong argument count
 cd spike && node tools/check-release-manifest.mjs     # 6 checks on release/latest.json
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
-cd spike && node plugins/withAndroidSize.test.mjs     # 37 checks on the APK-size properties (39 after a prebuild)
+cd spike && node plugins/withAndroidSize.test.mjs     # 42 checks on the APK-size properties (44 after a prebuild)
 cd spike && node plugins/withDebugSuffix.test.mjs     # 15 checks on the debug application id (18 after a prebuild)
 cd spike && bash tools/verify-apk.sh     # which key actually signed the APK
 cd spike && npx expo export --platform android --output-dir %TEMP%\pf0
@@ -432,13 +432,18 @@ for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
          plugins/withDebugSuffix.test.mjs tools/check-copy.mjs \
          tools/check-style-members.mjs tools/check-call-arity.mjs \
          src/update.test.mjs; do
+  # The suite must be green unmutated first. A file that cannot load exits 1
+  # under every BREAK, and without this line the loop read that as every
+  # mutant red and printed nothing. Shown on 2026-09-22 with a syntax error, a
+  # missing import and a missing export: silence all three times.
+  node "$p" >/dev/null 2>&1 || echo "NOT GREEN: $p"
   for b in $(node "$p" --list-mutants); do
     # Exit 1 alone is not red: a mutant whose search string has rotted exits 1
-    # with NO LONGER APPLIES, and one that breaks the syntax exits 1 before any
-    # assertion runs. Both test nothing, and slice_from_debug sat here as the
-    # first kind, counted red, until 2026-09-22.
+    # with NO LONGER APPLIES, and one that breaks the syntax or an import exits
+    # 1 before any assertion runs. None of them tests anything, and
+    # slice_from_debug sat here as the first kind, counted red, until 2026-09-22.
     out=$(BREAK=$b node "$p" 2>&1); rc=$?
-    [ $rc -eq 1 ] && ! printf '%s' "$out" | grep -q -E 'NO LONGER APPLIES|SyntaxError' || echo "NOT RED: $p $b"
+    [ $rc -eq 1 ] && ! printf '%s' "$out" | grep -q -E 'NO LONGER APPLIES|SyntaxError|ERR_MODULE_NOT_FOUND' || echo "NOT RED: $p $b"
   done
 done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
@@ -447,10 +452,11 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
+  node "$t" >/dev/null 2>&1 || echo "NOT GREEN: $t"   # as above
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 214 mutations
+done                                     # silence is the pass; 218 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -711,8 +717,9 @@ Two more things a review established about this path, both counter-intuitive:
   `build.gradle` on failure, so the leftover cannot be built. Failing closed
   beats failing loudly.
 - **The APK was 124,548,439 bytes**, and 61,374,008 of that was `x86` /
-  `x86_64` native libraries that no phone can use. **Fixed 2026-09-18**: it is
-  32,886,397 bytes. (Byte counts throughout, not MB — an earlier version of
+  `x86_64` native libraries that no phone can use. **Fixed 2026-09-18**: it was
+  32,886,397 bytes, and since 2026-09-22 (64-bit only, R8 on) it is
+  19,211,087. (Byte counts throughout, not MB — an earlier version of
   this bullet quoted MiB while the section below quoted bytes, so the same file
   appeared in this file as both 31.3 and 32.9.) See
   "Making the APK small enough to send" above for the measurements. Note that
@@ -723,8 +730,10 @@ Two more things a review established about this path, both counter-intuitive:
 
 The first signed build was **124,548,439 bytes**. There is no store here, so that
 number is not an abstraction: it is the size of a file a person has to receive
-over a chat app before they can use this at all. It is now **32,886,397 bytes**,
-a 73.6% cut, with no change to what the app does. (The build the size work was
+over a chat app before they can use this at all. After the packaging work below
+it was **32,886,397 bytes**, a 73.6% cut, with no change to what the app does;
+after dropping 32-bit and turning on R8 on 2026-09-22 it is **19,211,087**, 84.6%
+below the first build (measured section at the end). (The build the size work was
 measured against was 32,886,141; the shipped artifact is 256 bytes larger
 because two later bug fixes changed the JS bundle. The reduction is the
 measurement, the larger number is the file people receive, and quoting either
@@ -752,12 +761,11 @@ Two readings, both of which point at a fix:
   for emulators. That is 61,374,008 bytes, at full size, in every copy sent to
   everyone.
 
-So: `reactNativeArchitectures=arm64-v8a,armeabi-v7a` and
-`expo.useLegacyPackaging=true`, both written by `spike/plugins/withAndroidSize.js`,
-which re-reads what it wrote and throws if any value is not what it intended.
-`armeabi-v7a` is kept deliberately: sideloading has no Play filter, so a 32-bit
-device that cannot install says only "App not installed", with no reason. It
-costs 9,255,669 bytes of the 32.9 MB and buys a failure mode that never happens.
+So: `reactNativeArchitectures` and `expo.useLegacyPackaging=true`, both written
+by `spike/plugins/withAndroidSize.js`, which re-reads what it wrote and throws if
+any value is not what it intended. The ABI list was `arm64-v8a,armeabi-v7a` until
+2026-09-22 and is now `arm64-v8a` alone, the owner's decision; see the end of
+this section for what that costs.
 
 Two traps here, and both fail by doing nothing rather than by erroring:
 
@@ -800,11 +808,9 @@ questioned; the owner cut it on 2026-09-22.)
 
 The three levers that are real, in order, and none of them is code:
 
-1. **Drop `armeabi-v7a`: 9,255,669 bytes, 28.1%.** Already a written decision --
-   sideloading has no Play filter, so a 32-bit device that cannot install says
-   only "App not installed". It is the owner's call whether anyone being handed
-   this has a 32-bit phone.
-2. **R8, on the 7,810,455-byte dex.** Still off for the reason below.
+1. **Drop `armeabi-v7a`: 9,255,669 bytes, 28.1%.** Done 2026-09-22, the
+   owner's decision.
+2. **R8, on the 7,810,455-byte dex.** Done 2026-09-22; see below.
 3. **Neither of these:** `libzstd-kmp.so` is 276,362 per ABI and nothing here
    was traced to it, and Fresco's four libraries (`imagepipeline`,
    `static-webp`, `native-imagetranscoder`, `native-filters`) are ~450,000 per
@@ -818,12 +824,44 @@ one: the dev client does not leak into release. `libbarhopper_v3.so`, the ML
 Kit barcode scanner behind expo-dev-launcher's QR reader, is 4,946,720 bytes
 per ABI in the debug APK and **absent from the release APK**.
 
-**R8 is deliberately still off.** Every lever above is packaging: the bytes move,
-the program does not. R8 rewrites and strips bytecode, and the classic React
-Native failure is a module resolved by reflection at startup that is no longer
-there. The dex is 21,380,964 bytes uncompressed and 7,800,880 in the APK, so the
-upside is real — but it is a separate change with a device test attached, and it
-has not been made.
+#### 64-bit only, and R8 on -- measured 2026-09-22
+
+The owner took both levers. `app-release.apk` is **19,211,087 bytes**, down
+13,729,498 (41.7%) from the 32,940,585 above:
+
+| | in the APK | uncompressed | share |
+| --- | ---: | ---: | ---: |
+| `lib/arm64-v8a` | 10,722,649 | 29,149,672 | 55.8% |
+| `classes*.dex` | 3,302,734 | 8,065,172 | 17.2% |
+| `assets/` | 2,801,261 | 2,802,090 | 14.6% |
+| everything else | 1,396,421 | 1,590,473 | 7.3% |
+| `res/` | 829,548 | 1,146,998 | 4.3% |
+| zip headers and central directory | 158,474 | | 0.8% |
+
+`lib/arm64-v8a` is byte-identical in size to the build above, so nearly all of
+the change is the two levers: the `armeabi-v7a` directory is gone, and R8 took
+the dex from 7,810,455 to 3,302,734 in the APK (21.4 MB to 8.1 MB uncompressed).
+`assets/` grew by 35,414 bytes over the same period, which is the JS bundle
+gaining Save, Copy and the Phase 2 work. (The table above it has the same
+shape of gap -- its rows are zip entries, and 160,883 bytes of that file were
+the zip's own headers.)
+`aapt2 dump badging` reports `native-code: 'arm64-v8a'` and nothing else. That
+APK was built from the working tree at versionCode 2, before the version bump,
+so a 1.0.2 build, when one is cut, differs by its version and manifest. The
+same tree after the review fixes to `App.js` built to 19,211,235, 148 bytes
+more; the table is of the first.
+
+**What 64-bit only costs.** A phone that can only run 32-bit code cannot install
+this, and sideloading has no Play filter, so it says only "App not installed",
+with no reason. Anyone already on 1.0.1 with such a phone cannot update either.
+
+**What R8 risks, and what was checked.** R8 rewrites and strips bytecode, and the
+classic React Native failure is a module resolved by reflection at startup that
+is no longer there. The minified APK was installed on the Pixel 6 Pro and
+exercised: a cold start with no crash in `logcat -b crash`, the picker, the
+editor, Share, Save to Photos and Copy image. That covers the modules this app
+reaches. It does not prove every path R8 touched; a crash in a path not
+exercised there would show on first use.
 
 ### Telling people there is an update
 
