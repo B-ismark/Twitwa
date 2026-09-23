@@ -384,7 +384,17 @@ console.log('the whole flow, with the network injected');
     const re = new RegExp(`AsyncFunction\\("${fn}"\\) Coroutine \\{[^}]*withContext\\(Dispatchers\\.IO\\)`);
     check(`Kotlin ${fn} runs on Dispatchers.IO, off the shared async queue`, re.test(kt));
   }
-  check('Kotlin checks the hash again before installing', /private fun install[\s\S]*?hashFile\(apk\) != sha256/.test(kt));
+  check('Kotlin checks the hash again before installing',
+    /private fun install[\s\S]*?val sum = try \{ hashFile\(apk\) \}[\s\S]*?if \(sum != sha256\)/.test(kt));
+  // readTimeout bounds one read; only this bounds the whole file.
+  check('Kotlin gives up on a download that outlives its deadline',
+    /if \(System\.nanoTime\(\) > deadline\) \{ late = true; break \}/.test(kt) && /late -> \{ part\.delete\(\); rejected\("slow"\) \}/.test(kt));
+  // Each of these used to escape install() as a thrown error, which the JS
+  // side could only call "threw".
+  for (const [ex, reason] of [['ActivityNotFoundException', 'no-installer'], ['IllegalArgumentException', 'provider'], ['SecurityException', 'refused']]) {
+    check(`Kotlin install reports ${ex} as "${reason}"`,
+      new RegExp(`private fun install[\\s\\S]*?catch \\(e: ${ex}\\) \\{\\s*(//[^\\n]*\\s*)?rejected\\("${reason}"\\)`).test(kt));
+  }
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

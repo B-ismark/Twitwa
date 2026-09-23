@@ -109,6 +109,10 @@ class UpdaterModule : Module() {
       val digest = MessageDigest.getInstance("SHA-256")
       var bytes = 0L
       var reported = 0L
+      // readTimeout bounds one silent read, not the whole file: a link that
+      // trickles a byte every 29 s would never end. This does.
+      val deadline = System.nanoTime() + DEADLINE_MS * 1_000_000
+      var late = false
       conn.inputStream.use { src ->
         part.outputStream().use { dst ->
           val buf = ByteArray(64 * 1024)
@@ -117,6 +121,7 @@ class UpdaterModule : Module() {
             if (n < 0) break
             bytes += n
             if (bytes > MAX_BYTES) break
+            if (System.nanoTime() > deadline) { late = true; break }
             digest.update(buf, 0, n)
             dst.write(buf, 0, n)
             if (bytes - reported >= PROGRESS_STEP) {
@@ -128,6 +133,7 @@ class UpdaterModule : Module() {
       }
       when {
         bytes > MAX_BYTES -> { part.delete(); rejected("too-big") }
+        late -> { part.delete(); rejected("slow") }
         total >= 0 && bytes != total -> { part.delete(); rejected("short") }
         hex(digest.digest()) != sha256 -> { part.delete(); rejected("digest") }
         !part.renameTo(apk) -> { part.delete(); rejected("rename") }
@@ -151,19 +157,27 @@ class UpdaterModule : Module() {
     // Again, because the file has sat in the cache since download() and the
     // cost is a fraction of a second. What is handed to the installer is what
     // was checked, not what was checked a while ago.
-    if (hashFile(apk) != sha256) {
+    val sum = try { hashFile(apk) } catch (e: Exception) { return rejected("unreadable") }
+    if (sum != sha256) {
       apk.delete()
       return rejected("digest")
     }
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.$AUTHORITY_SUFFIX", apk)
-    val intent = Intent(Intent.ACTION_VIEW)
-      .setDataAndType(uri, APK_MIME)
-      .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    // "ok" means the installer opened, not that anything was installed: that
+    // happens in Android's own screen, and the new Twitwa replaces this one.
     return try {
+      val uri = FileProvider.getUriForFile(context, "${context.packageName}.$AUTHORITY_SUFFIX", apk)
+      val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, APK_MIME)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
       (appContext.currentActivity ?: context).startActivity(intent)
       mapOf("status" to "ok")
     } catch (e: ActivityNotFoundException) {
       rejected("no-installer")
+    } catch (e: IllegalArgumentException) {
+      // getUriForFile: the path is outside every <paths> entry.
+      rejected("provider")
+    } catch (e: SecurityException) {
+      rejected("refused")
     }
   }
 
@@ -199,5 +213,8 @@ class UpdaterModule : Module() {
     private const val PROGRESS_STEP = 256L * 1024
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 30_000
+    // Ten minutes for 19 MB is 32 KB/s. Slower than that, "try again later"
+    // is the honest answer.
+    private const val DEADLINE_MS = 10L * 60 * 1000
   }
 }

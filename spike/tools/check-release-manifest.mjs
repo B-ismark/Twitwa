@@ -23,7 +23,7 @@
 // editing this file, and this gate is why that order is worth following rather
 // than merely stated.
 import { readFileSync } from 'node:fs';
-import { parseManifest, DOWNLOAD_PREFIX } from '../src/update.js';
+import { parseManifest, DOWNLOAD_PREFIX, isSha256 } from '../src/update.js';
 
 const MANIFEST = '../../release/latest.json';
 
@@ -76,12 +76,10 @@ check(
 );
 check('the filename ends .apk', /\.apk$/.test(file[0] ?? ''), file[0]);
 
-// Not required by the schema, but worth saying out loud when it is missing:
-// nothing downstream verifies it, so its only value is letting a person compare
-// by hand.
-if (m.sha256 === undefined) {
-  console.log('  note  no sha256 recorded. Optional: Android verifies the signature, not this digest.');
-}
+// Optional to the schema, required to publish. From 1.0.4 the app downloads
+// the APK itself and installs it only if it hashes to this; without one it
+// falls back to the browser, whose download stalled on the owner's Pixel.
+check('the manifest records the APK\'s sha256', isSha256(m.sha256), m.sha256);
 
 console.log(`\n${ran - fails}/${ran} checks passed`);
 process.exit(fails ? 1 : 0);

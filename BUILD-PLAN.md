@@ -1136,11 +1136,11 @@ measurement this repo can take on its own:
   [16256, 16384) is one driver's number.
 - **Other Android skins.** The status-bar shape test is verified both directions,
   but on a single stock-Android status bar.
-- **Receiving a share is built and has never run** (2026-09-22). The Kotlin
-  compiles into the release APK; no share has been sent to it on a phone. The
-  three arrival paths (cold start, running, recreated activity), a
-  `SEND_MULTIPLE`, a refused type, and the cache cleanup are each untested on
-  a device.
+- **Receiving a share: the cache cleanup.** Everything else ran on the owner's
+  Pixel on 2026-09-23 (cold start, running, after Back, `SEND_MULTIPLE`, a
+  refused type, Recents). The first process-death replay re-imported, which is
+  what withShareInRestore fixed; that fix ran on the device before 1.0.4 went
+  out. The cleanup cannot be seen from outside a release build: no `run-as`.
 - **Save's permission fallback below API 30.** Written, never run: the one test
   phone is on API 37.
 - **The share target's actual behaviour.** It registers and resolves correctly on

@@ -235,8 +235,8 @@ export default function App() {
 
   // A newer APK, if there is one. Twitwa is handed out as a file, so nothing
   // tells a person that a new version exists unless the app does. See
-  // src/update.js for the whole design, including why this is the app's only
-  // network call and what that costs in privacy.
+  // src/update.js for the whole design, including why the check is the app's
+  // only unasked network call and what that costs in privacy.
   const [update, setUpdate] = useState(null);
   // What the banner says while Twitwa fetches the update itself: `{percent}`
   // while downloading (null until the size is known), `{problem}` after a
@@ -1363,6 +1363,10 @@ export default function App() {
           </View>
           <View style={styles.bar}>
             <Action label={COPY.share} palette={palette} primary wide disabled={busy} onPress={share} />
+            {/* Save beside Share, and still in More. The owner asked for it on
+                the share sheet itself; Android lets an app add its own action
+                there only from 14 on, and expo-sharing cannot, so it is here. */}
+            <Action label={COPY.save} palette={palette} disabled={busy} onPress={save} />
             {/* Disabled while busy, as Share is. Open during an export, the menu
                 lacked Save and Copy with no reason given, and Start over from it
                 let "Saved to Photos" land on the empty screen. */}

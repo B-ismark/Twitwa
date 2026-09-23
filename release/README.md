@@ -3,8 +3,10 @@
 Twitwa is not on any store. It is an APK, sent to people. `latest.json` in this
 directory is how an installed copy finds out that a newer one exists: the app
 fetches it over HTTPS, compares `versionCode` against its own, and if the
-manifest is newer it offers to open the download link in the browser. Android's
-own package manager does the install and the signature check.
+manifest is newer it offers the update. From 1.0.4 it downloads the APK itself,
+keeps it only if it hashes to the manifest's `sha256`, and opens Android's
+installer; a build older than that opens the link in the browser. Android's own
+package manager does the install and the signature check.
 
 `src/update.js` is the reader, and it is the specification: the schema, the
 allowlisted download prefix and the refusal rules all live there, with the
@@ -53,7 +55,9 @@ a download that 404s.
    between, the upload fails with a bare `HTTP 404` naming a release id that no
    longer exists, which reads like a permissions problem and is not.
 4. **Now** edit `latest.json` to match, and run
-   `cd spike && node tools/check-release-manifest.mjs`.
+   `cd spike && node tools/check-release-manifest.mjs`. Its `sha256` is the
+   APK's, and it is not optional: the app installs nothing that does not hash
+   to it, and the gate refuses a manifest without one.
 5. Commit. The app reads the raw file from the default branch, so the commit is
    the publish.
 
@@ -71,8 +75,8 @@ a download that 404s.
    records a digest for every asset, which makes this free.
 
 7. **Watch the banner on a phone holding the previous build**, once per release.
-   Nothing else exercises the manifest, the reader, the banner and the browser
-   hand-off together.
+   Nothing else exercises the manifest, the reader, the banner, the download
+   and the installer together.
 
    The throttle will get in the way, and that is correct behaviour: if the day's
    check already ran, the launch logs `"action":"skipped"` and no banner appears.

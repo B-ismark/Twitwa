@@ -120,7 +120,10 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/recover.js` | When the photo picker's launcher has died and what to do about it: detect the recreation, recognise the rejection, bound the resume flag, and reload at most once. Pure, so the policy is testable without a phone |
 | `src/sharein.js` | What the native share-in module's answer means: open a `file://` copy, show a sentence, or do nothing. Pure, and it tells "no share" apart from "the module is not in this build", which look the same on screen |
 | `src/sharein-io.js` | The JS face of `modules/twitwa-share-in`. Optional, so a build without the module reads as no share rather than a crash |
-| `modules/twitwa-share-in/` | The one native module of our own. Kotlin: holds the newest unread `ACTION_SEND` or `ACTION_SEND_MULTIPLE`, copies the picture into `cache/shared-in/`, and emits `onShare` when one arrives while running. Autolinked from `modules/`. Never run on a device |
+| `modules/twitwa-share-in/` | Native module of our own. Kotlin: holds the newest unread `ACTION_SEND` or `ACTION_SEND_MULTIPLE`, copies the picture into `cache/shared-in/`, and emits `onShare` when one arrives while running. Autolinked from `modules/`. Run on the owner's Pixel on 2026-09-23: cold, warm, after Back, two pictures, a refused file, from Recents |
+| `plugins/withShareInRestore.js` | Patches the generated `MainActivity.kt` so a share replayed after process death is not imported twice. The Expo template calls `super.onCreate(null)`, which hides the saved state from every lifecycle listener; the call goes in just before that line |
+| `src/update-io.js` | The JS face of `modules/twitwa-updater`. Optional like share-in: without the module, Get it falls back to the browser |
+| `modules/twitwa-updater/` | Native module of our own. Kotlin: downloads the release APK into `cache/update/`, checks its sha256 against the manifest, checks it again, and opens Android's installer through a FileProvider. Adds `REQUEST_INSTALL_PACKAGES` |
 | `src/read.js` | One clamped sub-rect read, shared by the pipeline and the measurement harness. Was two copies returning the same values under different field names — `{width, height}` in one, `{w, h}` in the other. Pure: the colour constants arrive as an argument, so it loads in node and has a test |
 | `src/skia.js` | The one `RGBA` colour shape and the one two-argument `readRect`. Both were written privately in `pipeline.js` AND `measure.js`, and App.js had neither — which is exactly why it called the three-argument `readSubRect` with two and crashed every import for a day. A function that binds the colour cannot be called without it |
 | `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
@@ -636,7 +639,7 @@ of `EXTRA_STREAM`. Earlier wording here said only that "delivery needs a
 release-style build", which read as though the code were waiting on a build.
 It had not been written. See `spike/results/phase0-device.md`.
 
-**Written on 2026-09-22, and not yet run on a phone.** `spike/modules/twitwa-share-in`
+**Written on 2026-09-22, and run on the owner's Pixel on 2026-09-23** (1.0.3). `spike/modules/twitwa-share-in`
 reads the intent (`ACTION_SEND` and `ACTION_SEND_MULTIPLE`) and copies the
 picture into the cache; `spike/src/sharein.js` decides what to do with it.
 BUILD-PLAN.md, Phase 5, has the design.
@@ -885,15 +888,19 @@ download. `release/README.md` is the publishing procedure and the order in it
 matters: publish the release asset first, edit the manifest second, or every
 installed copy points at a 404.
 
-Three decisions worth stating, because each one is a thing deliberately *not*
-done:
+Three decisions worth stating:
 
-- **The app does not download or install anything.** It hands the URL to the
-  system browser. That means no `REQUEST_INSTALL_PACKAGES` permission — which is
-  a meaningfully scarier thing to be handed by a friend, and the permission
-  prompt says so — and it means Android's own package manager performs the
-  signature check. An APK signed by another key is refused by the OS, not by code
-  written here.
+- **From 1.0.4 the app downloads the update itself, and opens the installer.**
+  Until 1.0.3 it handed the URL to the browser and stopped. On the owner's Pixel
+  Chrome fetched every byte of the 1.0.3 APK and then left it as a `.pending-`
+  file at 100%, never openable. So `modules/twitwa-updater` fetches it, keeps it
+  only if its sha256 is the one `latest.json` names, hashes it again, and hands it
+  to Android's installer. The cost is `REQUEST_INSTALL_PACKAGES`: the first time,
+  Android asks to allow "Install unknown apps" for Twitwa. The owner chose that
+  on 2026-09-23. Android's package manager still does the signature check; an
+  APK signed by another key is refused by the OS, not by code written here. A
+  build without the module, or a manifest without a sha256, falls back to the
+  browser.
 - **The download URL is confined to one literal prefix.**
   `https://github.com/B-ismark/Twitwa/releases/download/`. A full URL's authority
   ends at the first `/` after `//`, and that slash is inside the prefix, so one
@@ -902,8 +909,9 @@ done:
   someone to install an arbitrary APK under Twitwa's own prompt. Fourteen hostile
   URLs are enumerated individually in `src/update.test.mjs`, because a single
   "rejects a bad URL" check would pass while thirteen still got through.
-- **This is the app's first and only network call, and that has a cost.** One
-  HTTPS GET to `raw.githubusercontent.com`, no identifier, no query string. But
+- **The check is the app's one unasked network call, and that has a cost.** One
+  HTTPS GET to `raw.githubusercontent.com`, no identifier, no query string. (The
+  download happens only when the person taps Get it.) But
   GitHub sees the IP and the time, and a check happens when the app is used, so
   anyone watching that traffic learns roughly when this person opens Twitwa.
   Hence once a day, never before the app is opened — though see below: the
