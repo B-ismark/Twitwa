@@ -214,7 +214,7 @@ export function canReset(state) {
   if (!state.tool) return false;
   const base = RESET_TO[state.tool](state);
   for (const [field, value] of Object.entries(base)) {
-    if (JSON.stringify(state[field]) !== JSON.stringify(value)) return true;
+    if (!sameValue(state[field], value)) return true;
   }
   return false;
 }
@@ -250,9 +250,10 @@ export function cardOf(state) {
   return out;
 }
 
-// Field by field rather than JSON.stringify of the whole: a crop from
-// dragCrop and one from editorState can carry the same four numbers in a
-// different key order, and a string compare would call that a change.
+// Field by field rather than JSON.stringify: a string compare calls the same
+// four numbers in another key order a change. Every crop producer builds
+// {x, y, w, h} in that order today, so this is insurance, not a fix; it is
+// here so that canReset, unsaved and toolChanged answer by one rule.
 function sameValue(a, b) {
   if (a && b && typeof a === 'object' && typeof b === 'object') {
     const keys = Object.keys(a);

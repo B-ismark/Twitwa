@@ -54,7 +54,8 @@ following the crop; sRGB SDR output; link input deferred to the appendix.
 
 Settled 2026-09-18, and they changed the shape of the app: **one screen and no
 navigation**, so there is no Library and nothing persists past a session; **Share
-is the primary action**, with Save to Photos and Copy image in an overflow;
+is the primary action**, with Save to Photos and Copy image in an overflow
+(Save moved to the bar beside Share on 2026-09-23);
 **padding is three stops plus a drag** to fine-tune; **corner radius is in**,
 partly reversing the spec's own refusal of it, while the **drop shadow was wanted
 and dropped the same day** because it could not be platform elevation and a Skia

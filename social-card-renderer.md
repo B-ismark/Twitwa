@@ -328,6 +328,12 @@ Editor — the only screen
             └── About
 ```
 
+**Revised 2026-09-23, the owner's UX pass** (BUILD-PLAN.md, "UX pass"). The bar
+is Share | Save | More: Save to Photos left the overflow for the bar, as "Save".
+The overflow holds Copy image and **New screenshot**, which replaced Start over;
+Back now returns to the empty screen, asking first when the card has unsaved
+changes. Style gained Reset and Done. Settings is not built.
+
 **Two tools, and they are not peers of each other in kind.** Crop is direct
 manipulation on the image and needs the whole surface, so it takes the bar over
 and returns with Done — the pattern X, Apple Photos and CapCut all
@@ -390,7 +396,9 @@ edge midpoints both grabbable, **everything outside it dimmed** — the scrim is
 what makes the rect read as a frame rather than as a sticker, and it was in every
 surveyed surface without exception. **Corner brackets, not dots**, because dots
 are the vocabulary for an object and this is a frame; Apple Photos uses exactly
-this split between its Crop and its Markup. A rule-of-thirds grid appears while a
+this split between its Crop and its Markup. (Overruled by the owner on
+2026-09-23: the brackets read as boxy, and Crop now draws eight round dots on a
+hairline frame.) A rule-of-thirds grid appears while a
 finger is down and not at rest. A **loupe** follows the dragged corner, because at
 six image pixels per screen pixel the finger covers the thing being aligned. The
 bar becomes Cancel / Reset / Done.

@@ -84,6 +84,9 @@ const MUTANTS = {
   later_forever: ['return now - later.at < LATER_MS;', 'return true;'],
   // A clock set back hides the banner until it catches up.
   later_clock_back: ['if (later.at > now) return false;', ''],
+  // The clock-back guard widened to the same instant, so Later tapped and
+  // checked in one millisecond shows the banner straight back.
+  later_same_instant: ['if (later.at > now) return false;', 'if (later.at >= now) return false;'],
 };
 
 if (process.argv.includes('--list-mutants')) {
@@ -409,6 +412,7 @@ console.log('\n"Later" puts off one version for three days');
   const u = { action: 'update', latestVersionCode: 6 };
   const t = 1_000 * DAY;
   const later = { versionCode: 6, at: t };
+  check('Later hides from the very moment it is tapped', laterHides(u, later, t) === true);
   check('the day after Later, the banner stays hidden', laterHides(u, later, t + DAY) === true);
   check('two days and 23 hours after, still hidden', laterHides(u, later, t + 3 * DAY - 60_000) === true);
   check('three days after, it shows again', laterHides(u, later, t + 3 * DAY) === false);

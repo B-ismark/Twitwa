@@ -30,8 +30,8 @@
 // in one of those three; that is what keeps them testable on a desktop.
 //
 // The three ways out -- Share, Save to Photos and Copy image -- all render
-// through `exportCard`, so they hand over one composition. Save and Copy sit
-// in the overflow, as the IA puts them (Phase 5, 2026-09-22).
+// through `exportCard`, so they hand over one composition. Save sits on the
+// bar beside Share and Copy in the overflow (the owner's calls, 2026-09-23).
 //
 // The two ways in -- the picker and a share from another app -- both end in
 // `openImage`, so a shared screenshot gets the same proposal, the same
@@ -533,8 +533,13 @@ export default function App() {
   // has failed. Found in review, 2026-09-22.
   const receiving = useRef(Promise.resolve());
 
+  // Counts take()s. A take deletes every shared copy but the one on screen, so
+  // a Replace answered after a later take would open a file that is gone.
+  const shareGen = useRef(0);
+
   const receiveOnce = useCallback(async (why) => {
     let answer = null;
+    const gen = ++shareGen.current;
     try {
       answer = await takeShare(shownUri.current);
     } catch (e) {
@@ -555,33 +560,51 @@ export default function App() {
       setProblem(o.message);
       return;
     }
-    // A share over a card with unsaved changes asks first, by the same rule
-    // Back and New screenshot use. Keep editing drops the share: its copy is
-    // not on screen, so the next take cleans it up like any other.
-    if (unsaved(edRef.current, kept.current)) {
-      const replace = await new Promise((resolve) => {
-        Alert.alert(
-          COPY.replaceCardTitle,
-          COPY.replaceCardBody,
-          [
-            { text: COPY.keepEditing, style: 'cancel', onPress: () => resolve(false) },
-            { text: COPY.replace, style: 'destructive', onPress: () => resolve(true) },
-          ],
-          { cancelable: true, onDismiss: () => resolve(false) },
-        );
-      });
-      emit('share.in.ask', { why, replace });
-      if (!replace) return;
-    }
     // A share replaces whatever is on screen, open tool and menus included:
     // it is a deliberate act from another app, and there is nowhere to put it
     // aside until the person is done.
-    setMenu(false);
-    setDevOpen(false);
-    setProblem(null);
-    setNotice(null);
-    const opened = await openImage(o.uri, 'share');
-    if (opened && o.notice) setNotice(o.notice);
+    const apply = async () => {
+      setMenu(false);
+      setDevOpen(false);
+      setProblem(null);
+      setNotice(null);
+      const opened = await openImage(o.uri, 'share');
+      if (opened && o.notice) setNotice(o.notice);
+    };
+    if (!unsaved(edRef.current, kept.current)) {
+      await apply();
+      return;
+    }
+    // Over a card with unsaved changes it asks first, by the same rule Back
+    // and New screenshot use. Keep editing drops the share: its copy is not on
+    // screen, so the next take cleans it up like any other.
+    //
+    // The ask does NOT hold the chain. It used to be awaited here, and a
+    // dialog that never calls back (Android drops it when the activity is
+    // recreated, say by a Display size change, and MainActivity restores no
+    // state) left every later share queued behind it, silently, until the
+    // app was killed. Found in review, 2026-09-23. Replace goes back on the
+    // chain, so its import still never overlaps a take(); and it applies only
+    // if no share has been taken since, because that take deleted this copy.
+    Alert.alert(
+      COPY.replaceCardTitle,
+      COPY.replaceCardBody,
+      [
+        { text: COPY.keepEditing, style: 'cancel', onPress: () => emit('share.in.ask', { why, replace: false }) },
+        {
+          text: COPY.replace,
+          style: 'destructive',
+          onPress: () => {
+            receiving.current = receiving.current.then(() => {
+              const stale = gen !== shareGen.current;
+              emit('share.in.ask', { why, replace: true, stale });
+              return stale ? undefined : apply();
+            }).catch((e) => emit('share.error', { why, message: String(e && e.message ? e.message : e) }));
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: () => emit('share.in.ask', { why, replace: false }) },
+    );
   }, [emit, openImage]);
 
   const receive = useCallback((why) => {
@@ -1196,17 +1219,30 @@ export default function App() {
   // Keep editing is the cancel button, so tapping outside the dialog or
   // pressing Back on it keeps the card too. Only the button that names the
   // loss can cause it.
+  //
+  // And only for the card it asked about. A share can arrive while this is
+  // open and replace the card from its own dialog on top; Discard tapped on
+  // this one afterwards would then wipe the card just shared (or, from New
+  // screenshot, open the picker over it). Found in review, 2026-09-23.
   const confirmDiscard = useCallback((title, body, onDiscard) => {
+    const asked = shownUri.current;
     Alert.alert(
       title,
       body,
       [
         { text: COPY.keepEditing, style: 'cancel' },
-        { text: COPY.discard, style: 'destructive', onPress: onDiscard },
+        {
+          text: COPY.discard,
+          style: 'destructive',
+          onPress: () => {
+            if (shownUri.current === asked) onDiscard();
+            else emit('discard.stale', {});
+          },
+        },
       ],
       { cancelable: true },
     );
-  }, []);
+  }, [emit]);
 
   // Another screenshot, from the editor, in one tap. It asks before the
   // picker rather than after it: a picker cancelled after Discard leaves the
@@ -1371,7 +1407,7 @@ export default function App() {
                   <Scrim crop={liveCrop} view={view} stage={stage} />
                   <CropBands crop={liveCrop} view={view} bounds={imageBounds} on={gridOn} />
                   <CropGrid crop={liveCrop} view={view} on={gridOn} />
-                  <CropFrame crop={liveCrop} view={view} />
+                  <CropFrame crop={liveCrop} view={view} stage={stage} />
                   <CropLoupe
                     crop={liveCrop}
                     view={view}
@@ -1391,12 +1427,20 @@ export default function App() {
           screen that is not for a person using the app. A long press rather
           than a control, because a visible button would be the first thing to
           make this look like a tool again. Documented in the README. */}
-      <Pressable onLongPress={() => setDevOpen(true)} delayLongPress={800} style={styles.captionWrap}>
+      {/* Not a TalkBack stop while it says nothing: at rest the caption is
+          empty, and an empty stop reads as a control with no name. The long
+          press still works for a sighted developer either way. */}
+      <Pressable
+        onLongPress={() => setDevOpen(true)}
+        delayLongPress={800}
+        style={styles.captionWrap}
+        accessible={caption !== ''}
+      >
         {/* A live region, so TalkBack reads "Saved to Photos" and every problem
             aloud. On Android 13 and later that caption is Save's only
             confirmation, and before this nothing announced it. Only for those
-            two: the size also lives here and changes on every frame of a crop
-            drag, and a live region would read each one out. */}
+            two: the crop hint also lives here, and a live region would read it
+            out every time Crop opens. */}
         <Text
           style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}
           accessibilityLiveRegion={problem || notice ? 'polite' : 'none'}
@@ -1461,7 +1505,7 @@ export default function App() {
                 there only from 14 on, and expo-sharing cannot, so it is here. */}
             <Action label={COPY.saveShort} palette={palette} disabled={busy} onPress={save} />
             {/* Disabled while busy, as Share is. Open during an export, the menu
-                lacked Save and Copy with no reason given, and Start over (since replaced by New screenshot) from it
+                lacked Copy with no reason given, and leaving the card from it
                 let "Saved to Photos" land on the empty screen. */}
             <Action label={COPY.more} palette={palette} selected={menu} disabled={busy} onPress={() => setMenu((v) => !v)} />
           </View>
@@ -1598,7 +1642,7 @@ function Scrim({ crop, view, stage }) {
  * be dragged at all. BUILD-PLAN.md recorded the survey's case for brackets
  * (a frame, not a selected object); the owner weighed it and chose the dots.
  */
-function CropFrame({ crop, view }) {
+function CropFrame({ crop, view, stage }) {
   // Only position follows the finger, as in Scrim; each dot is its own
   // component so each has exactly one hook.
   const edge = useAnimatedStyle(() => {
@@ -1610,7 +1654,7 @@ function CropFrame({ crop, view }) {
     <>
       <Animated.View style={[styles.cropEdge, edge]} />
       {HANDLE_DOTS.map(([fx, fy]) => (
-        <CropDot key={`${fx},${fy}`} crop={crop} view={view} fx={fx} fy={fy} />
+        <CropDot key={`${fx},${fy}`} crop={crop} view={view} stage={stage} fx={fx} fy={fy} />
       ))}
     </>
   );
@@ -1628,12 +1672,21 @@ const HANDLE_DOTS = [
   [0, 1], [0, 0.5],
 ];
 
-function CropDot({ crop, view, fx, fy }) {
+function CropDot({ crop, view, stage, fx, fy }) {
   const size = fx === 0.5 || fy === 0.5 ? EDGE_DOT : CORNER_DOT;
+  const maxX = stage.w - size;
+  const maxY = stage.h - size;
   const at = useAnimatedStyle(() => {
     'worklet';
     const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
-    return { left: r.x + r.w * fx - size / 2, top: r.y + r.h * fy - size / 2 };
+    // Centred on the handle, but never past the stage: the stage clips (it
+    // has rounded corners), and a screenshot that fills it puts a crop at
+    // the image edge on the stage edge, where a centred dot is cut in half.
+    // Found in review, 2026-09-23. The brackets never had this, because they
+    // were drawn inside the frame.
+    const x = Math.min(Math.max(r.x + r.w * fx - size / 2, 0), maxX);
+    const y = Math.min(Math.max(r.y + r.h * fy - size / 2, 0), maxY);
+    return { left: x, top: y };
   });
   return (
     <Animated.View
@@ -1854,12 +1907,14 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset
   return (
     <View style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
       {/* Reset to a new card's style, and a way out that is not "tap Style
-          again". Before these the strip had neither. */}
+          again". Before these the strip had neither. They share the Padding
+          label's row rather than taking one of their own: a whole row cost
+          the stage 48dp more, which a 640dp-tall phone cannot spare. */}
       <View style={styles.stripHead}>
-        <Chip label={COPY.reset} palette={palette} on={false} disabled={!resettable} onPress={onReset} />
-        <Chip label={COPY.done} palette={palette} on onPress={onDone} />
+        <Text style={[styles.stripLabel, styles.stripHeadLabel, { color: palette.graphite }]}>{COPY.padding}</Text>
+        <Chip label={COPY.reset} palette={palette} on={false} toggle={false} disabled={!resettable} onPress={onReset} />
+        <Chip label={COPY.done} palette={palette} on toggle={false} onPress={onDone} />
       </View>
-      <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.padding}</Text>
       <View style={styles.chips}>
         {stops.map((s) => (
           <Chip
@@ -1947,14 +2002,17 @@ function Slider({ value, min, max, onChange, palette }) {
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /** A small selectable label. On state is shown by fill AND border, not colour alone. */
-function Chip({ label, on, onPress, palette, disabled = false }) {
+// `toggle` false is for a chip that is an action, not a choice, such as the
+// Style strip's Done: filled to mark it as the way out, but TalkBack must
+// not read it as "selected".
+function Chip({ label, on, onPress, palette, disabled = false, toggle = true }) {
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected: on, disabled }}
+      accessibilityState={toggle ? { selected: on, disabled } : { disabled }}
       style={[
         styles.chip,
         {
@@ -2121,7 +2179,8 @@ const styles = StyleSheet.create({
     marginBottom: SPACE.sm,
   },
   stripLabel: { ...TYPE.caption, marginTop: SPACE.xs },
-  stripHead: { flexDirection: 'row', justifyContent: 'space-between' },
+  stripHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  stripHeadLabel: { flex: 1, marginTop: 0 },
   chips: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.xs },
   chip: {
     minHeight: TOUCH,

@@ -5,7 +5,8 @@
 //            radius_unclamped reopen_allowed canreset_blind stops_typed \
 //            snap_constant unsaved_never unsaved_tool kept_ignored \
 //            back_crop_silent back_never_asks back_exits_editor back_menu_last \
-//            back_ignores_busy style_reset_noop style_reset_partial; do
+//            back_ignores_busy style_reset_noop style_reset_partial \
+//            unsaved_no_radius style_reset_crop; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -131,6 +132,19 @@ if (BREAK === 'snapshot_shallow') {
     const r = real.resetTool(state);
     return state.tool === 'style' ? { ...r, background: state.background } : r;
   };
+} else if (BREAK === 'style_reset_crop') {
+  // Style's Reset puts the crop back to the proposal as well, undoing a crop
+  // that was kept with Done. Found in review, 2026-09-23: the old check ran on
+  // a card whose crop already was the proposal, so it could not see this.
+  F.resetTool = (state) => {
+    const r = real.resetTool(state);
+    return state.tool === 'style' ? { ...r, crop: { ...state.proposed } } : r;
+  };
+} else if (BREAK === 'unsaved_no_radius') {
+  // The corners left out of the compared fields, so a corner drag followed by
+  // Back leaves without asking. Found in review, 2026-09-23.
+  F.unsaved = (state, kept) =>
+    real.unsaved(state && kept ? { ...state, radius: kept.radius } : state, kept);
 } else if (BREAK === 'unsaved_never') {
   // Nothing is ever unsaved, which is the app before this check: Back left
   // with the card and said nothing.
@@ -438,7 +452,10 @@ console.log('\nthe corner slider cannot leave the card behind');
 
 console.log('\nStyle Reset goes back to the card the editor opened on');
 {
-  const opened = fresh();
+  // The crop is moved off the proposal first, as Crop and Done would leave
+  // it, so a Reset that also put the crop back would show.
+  const proposal = fresh();
+  const opened = { ...proposal, crop: { ...proposal.crop, y: proposal.crop.y + 40, h: proposal.crop.h - 40 } };
   const styled = { ...F.openTool(opened, 'style'), padding: PADDING.roomy, radius: 0, background: 'ink' };
   check('Reset is live once the style has changed', F.canReset(styled) === true);
   const back = F.resetTool(styled);
@@ -461,6 +478,8 @@ console.log('\nleaving asks only when there is work to lose');
   const moved = { ...s, crop: { ...s.crop, y: s.crop.y + 40 } };
   check('a moved crop is unsaved', F.unsaved(moved, kept) === true);
   check('so is a changed background', F.unsaved({ ...s, background: 'ink' }, kept) === true);
+  check('and changed corners', F.unsaved({ ...s, radius: s.radius + 8 }, kept) === true);
+  check('and changed padding', F.unsaved({ ...s, padding: PADDING.roomy }, kept) === true);
   const reordered = { ...s, crop: { h: s.crop.h, w: s.crop.w, y: s.crop.y, x: s.crop.x } };
   check('the same crop in another key order is not a change', F.unsaved(reordered, kept) === false);
   const toured = F.doneTool(F.openTool(s, 'style'));
