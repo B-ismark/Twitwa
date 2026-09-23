@@ -28,7 +28,7 @@
 // no suite loads a component. Logic that needs a Skia image is still logic.
 
 import { MIN_CROP } from './crop.js';
-import { rowInkProfile, colInkProfile, detectStatusBar } from './pixels.js';
+import { rowInkProfile, colInkProfile, detectStatusBar, judgeStatusBar } from './pixels.js';
 
 /**
  * Ink coverage at or below this counts as flat.
@@ -96,7 +96,9 @@ export function flatBand(profile, flat = FLAT) {
  *                       image was too large to profile them (see
  *                       `canProfileColumns`), in which case nothing is
  *                       trimmed horizontally and the reason says so
- * @param statusBar      `detectStatusBar`'s result, or null
+ * @param statusBar      `judgeStatusBar`'s result, or null. Its cut is taken
+ *                       only when `likely` is true; a bare `detectStatusBar`
+ *                       result has no `likely` and so trims nothing
  * @param min            the smallest crop a person could have dragged
  *
  * @returns {{crop, trimmed, reasons}} `reasons` is never empty: a proposal
@@ -147,9 +149,20 @@ export function proposeCrop({ width, height, rows, cols, statusBar = null, flat 
   // Only ever a floor: a screenshot already cropped below the status bar has a
   // larger flat lead than the cut, and taking the cut there would put the top
   // of the card back into empty space.
+  //
+  // And only when the boundary passed the shape test. A screenshot with no
+  // status bar still has a first ink-then-flat edge, and on a post that edge is
+  // the avatar-and-name row: taking it as the floor opens the editor with the
+  // author cut off. That shipped in 1.0.2 and the owner found it on a tweet.
+  // `likely` has to be true, not merely present, so a caller that skipped the
+  // test gets no trim rather than the old behaviour.
   if (statusBar && statusBar.detected && statusBar.cut > top) {
-    reasons.push(`the status bar is inked, so the top was cut at row ${statusBar.cut} instead of ${top}`);
-    top = statusBar.cut;
+    if (statusBar.likely === true) {
+      reasons.push(`the status bar is inked, so the top was cut at row ${statusBar.cut} instead of ${top}`);
+      top = statusBar.cut;
+    } else {
+      reasons.push(`the edge at row ${statusBar.cut} does not look like a status bar, so the top was left at row ${top}`);
+    }
   }
 
   // Per axis, not per proposal. A screenshot with a wide flat gutter and a
@@ -255,7 +268,7 @@ export function proposeFromImage(
 
   const h = Math.min(band, height);
   const bandRows = rowInkProfile(full.buf, full.rowBytes, width, h, h, 2);
-  const statusBar = detectStatusBar(bandRows);
+  const statusBar = judgeStatusBar(detectStatusBar(bandRows), full.buf, full.rowBytes, width, height);
 
   return proposeCrop({ width, height, rows, cols, statusBar });
 }

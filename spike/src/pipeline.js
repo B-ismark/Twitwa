@@ -26,8 +26,7 @@ import {
   regionBackground,
   rowInkProfile,
   detectStatusBar,
-  zoneInk,
-  looksLikeStatusBar,
+  judgeStatusBar,
   cropEdgeStrips,
   decideCropBackground,
   tileGrid,
@@ -160,17 +159,16 @@ function findStatusBar(img, rows = STATUS_BAND_ROWS) {
   }
 
   const t2 = now();
-  const zones = zoneInk(band.buf, band.rowBytes, band.width, sb.inkAt, sb.cut);
+  const judged = judgeStatusBar(sb, band.buf, band.rowBytes, band.width, img.height());
   const zonesMs = +(now() - t2).toFixed(2);
 
-  const shape = looksLikeStatusBar(zones, sb.cut, img.height());
   return {
     detected: true,
     cut: sb.cut,
     inkAt: sb.inkAt,
-    zones,
-    likely: shape.likely,
-    shapeReasons: shape.reasons,
+    zones: judged.zones,
+    likely: judged.likely,
+    shapeReasons: judged.shapeReasons,
     readMs,
     profileMs,
     zonesMs,

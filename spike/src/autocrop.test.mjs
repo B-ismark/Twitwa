@@ -21,7 +21,7 @@ import * as real from './autocrop.js';
 import { MIN_CROP } from './crop.js';
 // For the proposeFromImage mutants at the bottom of the BREAK chain, which
 // reimplement the body rather than wrapping it.
-import { rowInkProfile, colInkProfile, detectStatusBar } from './pixels.js';
+import { rowInkProfile, colInkProfile, detectStatusBar, judgeStatusBar } from './pixels.js';
 
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
@@ -75,6 +75,20 @@ if (BREAK === 'band_symmetric') {
     const top = args.statusBar.cut;
     return { ...r, trimmed: { ...r.trimmed, top }, crop: { ...r.crop, y: top, h: args.height - top - r.trimmed.bottom } };
   };
+} else if (BREAK === 'shape_ignored') {
+  // The 1.0.2 bug: any detected edge taken as the status bar, so a screenshot
+  // with none loses the author's avatar-and-name row.
+  F.proposeCrop = (args) => real.proposeCrop({
+    ...args,
+    statusBar: args.statusBar && { ...args.statusBar, likely: args.statusBar.detected },
+  });
+} else if (BREAK === 'likely_truthy') {
+  // A missing verdict read as a pass. Correct for every judged result and
+  // wrong for the one caller that forgot to judge.
+  F.proposeCrop = (args) => real.proposeCrop({
+    ...args,
+    statusBar: args.statusBar && { ...args.statusBar, likely: args.statusBar.likely ?? true },
+  });
 } else if (BREAK === 'statusbar_ignored') {
   // The flat-band trim alone, which walks straight past a status bar because
   // a clock is ink.
@@ -149,6 +163,10 @@ if (BREAK === 'band_symmetric') {
   // times the bandwidth — and on a 1440x3120 screenshot that is 54MiB of
   // avoidable copying on the JS thread at import.
   F.proposeFromImage = (img, read, opts) => body(img, read, opts, { readsPerProfile: true });
+} else if (BREAK === 'unjudged') {
+  // proposeFromImage handing the proposal a bare detectStatusBar answer with
+  // the verdict faked as a pass: the path the editor actually took in 1.0.2.
+  F.proposeFromImage = (img, read, opts) => body(img, read, opts, { unjudged: true });
 } else if (BREAK === 'budget_whole') {
   // Over the column budget gives up on BOTH axes rather than on the one it
   // could not measure. The vertical trim was fine and is thrown away.
@@ -190,7 +208,11 @@ function body(img, read, { step = real.PROFILE_STEP, band = real.STATUS_BAND, bu
   const c = src();
   const h = Math.min(band, height);
   const bandRows = rowInkProfile(c.buf, c.rowBytes, width, h, h, 2);
-  return real.proposeCrop({ width, height, rows, cols, statusBar: detectStatusBar(bandRows) });
+  const sb = detectStatusBar(bandRows);
+  const statusBar = how.unjudged
+    ? { ...sb, likely: sb.detected }
+    : judgeStatusBar(sb, c.buf, c.rowBytes, width, height);
+  return real.proposeCrop({ width, height, rows, cols, statusBar });
 }
 
 let fails = 0;
@@ -278,7 +300,7 @@ console.log('\nthe status bar is ink, so the band trim walks past it');
   // A real screenshot: a few flat rows of padding, then the clock and the
   // battery, then the post. The flat band finds the padding and stops.
   const rows = profile(H, 6, BOTTOM);
-  const args = { ...base(), rows, statusBar: { detected: true, cut: 96 } };
+  const args = { ...base(), rows, statusBar: { detected: true, cut: 96, likely: true } };
 
   const without = F.proposeCrop({ ...args, statusBar: null });
   check('without the cut the top stops at the padding above the clock',
@@ -293,13 +315,33 @@ console.log('\nthe status bar is ink, so the band trim walks past it');
   // Only ever a floor. Someone who already cropped below their status bar has
   // a flat lead LARGER than the cut, and taking the cut puts the top of the
   // card back up into empty space.
-  const already = F.proposeCrop({ ...base(), rows: profile(H, 210, BOTTOM), statusBar: { detected: true, cut: 96 } });
+  const already = F.proposeCrop({ ...base(), rows: profile(H, 210, BOTTOM), statusBar: { detected: true, cut: 96, likely: true } });
   check('a larger flat lead is not pulled back up to the cut',
     already.trimmed.top === 210, String(already.trimmed.top));
 
   const undetected = F.proposeCrop({ ...args, statusBar: { detected: false, cut: 0, reason: 'no ink' } });
   check('an undetected status bar changes nothing', undetected.trimmed.top === 6,
     String(undetected.trimmed.top));
+
+  // THE BYLINE. On a screenshot with no status bar the first ink-then-flat
+  // edge is the author's avatar-and-name row, and the detector reports it as
+  // confidently as a clock. 1.0.2 took that as the floor and opened the
+  // editor with the author cut off; the owner found it on a tweet.
+  const header = F.proposeCrop({ ...args, statusBar: { detected: true, cut: 96, likely: false } });
+  check('an edge that failed the shape test does not move the top',
+    header.trimmed.top === 6, String(header.trimmed.top));
+  check('so the crop starts above the byline', header.crop.y === 6, String(header.crop.y));
+  check('and the height keeps it', header.crop.h === H - 6 - BOTTOM, String(header.crop.h));
+  check('and it says the edge was not a status bar',
+    header.reasons.some((s) => s.includes('does not look like a status bar')),
+    JSON.stringify(header.reasons));
+
+  // A bare detectStatusBar answer has no `likely` at all. That is a caller
+  // that skipped the shape test, which is exactly how the bug was written, so
+  // it must get no trim rather than the old one.
+  const unjudged = F.proposeCrop({ ...args, statusBar: { detected: true, cut: 96 } });
+  check('a result that never went through the shape test trims nothing',
+    unjudged.trimmed.top === 6, String(unjudged.trimmed.top));
 }
 
 console.log('\nnothing to trim is an outcome, not a zero');
@@ -555,6 +597,50 @@ console.log('\nproposeFromImage: the whole path, from pixels to a crop');
     nulled !== null, 'a null read was treated as an answer');
   check('and the message carries the size, so the log says which image',
     !!nulled && nulled.includes(`${W}x${H}`), String(nulled));
+
+  // End to end through the shape test, on two pages that differ only in what
+  // sits above the gap. Both have a flat lead of TOP rows, then an inked band,
+  // then a GAP-row flat gap, then the post down to BOTTOM. The detector finds
+  // the same kind of edge on both; only the shape test tells them apart.
+  const GAP = 12;
+  function topped(bandEnd, paint) {
+    const buf = new Uint8Array(W * H * 4).fill(255);
+    const ink = (x, y) => {
+      const i = (y * W + x) * 4;
+      buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0;
+    };
+    for (let y = TOP; y < bandEnd; y++) for (let x = 0; x < W; x++) if (paint(x, y)) ink(x, y);
+    for (let y = bandEnd + GAP; y < H - BOTTOM; y++) for (let x = LEFT; x < W - RIGHT; x++) ink(x, y);
+    return buf;
+  }
+
+  // A byline: an avatar at the left and a name running into the middle, in a
+  // band far taller than a status bar. The real one this stands for is
+  // fixtures/screenshots/x-quote-dark.png, rows 13 to 133.
+  const BYLINE_END = 110;
+  const byline = topped(BYLINE_END, (x, y) =>
+    (x >= 16 && x < 80) || (x >= 96 && x < 260 && y >= 30 && y < 70));
+  const by = fake(W, H, { buf: byline });
+  const byGot = F.proposeFromImage(by, by.read);
+  check('a page with a byline and no status bar keeps the byline',
+    byGot.crop.y === TOP, `crop.y ${byGot.crop.y}, byline starts at ${TOP}`);
+  check('and says the edge it found was not a status bar',
+    byGot.reasons.some((s) => s.includes('does not look like a status bar')),
+    JSON.stringify(byGot.reasons));
+
+  // A status bar: a clock at the left, icons at the right, empty middle, and
+  // thin. The same code must still cut this one, or the fix is just "never
+  // trim", which the band trim would also survive.
+  const BAR_END = 30;
+  const bar = topped(BAR_END, (x) => (x >= 16 && x < 60) || (x >= W - 70 && x < W - 20));
+  const sb = fake(W, H, { buf: bar });
+  const sbGot = F.proposeFromImage(sb, sb.read);
+  check('a page with a real status bar still has it cut',
+    sbGot.crop.y >= BAR_END && sbGot.crop.y <= BAR_END + GAP,
+    `crop.y ${sbGot.crop.y}, bar ends at ${BAR_END}, post at ${BAR_END + GAP}`);
+  check('and says it was the status bar',
+    sbGot.reasons.some((s) => s.includes('the status bar is inked')),
+    JSON.stringify(sbGot.reasons));
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

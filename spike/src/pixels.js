@@ -672,6 +672,27 @@ export function looksLikeStatusBar(zones, bandHeight, imageHeight, opts = {}) {
   };
 }
 
+/**
+ * `detectStatusBar`'s answer with the shape test applied to it.
+ *
+ * One function because a caller that gets the first half without the second
+ * cuts the byline: on a screenshot whose status bar was already cropped away,
+ * the first ink-then-flat edge is the author's avatar-and-name row, and the
+ * detector reports it as confidently as a real status bar. That is exactly how
+ * the editor's crop proposal shipped, having been written beside two copies of
+ * this pairing rather than calling one.
+ *
+ * `buf` must cover rows 0..sb.cut of the image at full width; `imageHeight` is
+ * the whole image's, since "too tall for a status bar" is a fraction of it.
+ * `likely` is false whenever nothing was detected, so a caller can test it alone.
+ */
+export function judgeStatusBar(sb, buf, rowBytes, width, imageHeight) {
+  if (!sb.detected) return { ...sb, likely: false, zones: null, shapeReasons: [] };
+  const zones = zoneInk(buf, rowBytes, width, sb.inkAt, sb.cut);
+  const shape = looksLikeStatusBar(zones, sb.cut, imageHeight);
+  return { ...sb, zones, likely: shape.likely, shapeReasons: shape.reasons };
+}
+
 /** Max per-channel delta between two same-shaped RGBA buffers, over a region. */
 export function maxChannelDelta(a, b, rowBytes, region) {
   const { x, y, w, h } = region;
