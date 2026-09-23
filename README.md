@@ -1,7 +1,8 @@
 # Twitwa — social card renderer
 
 Share a screenshot in, drag a crop, get a padded PNG on a background matched to
-the screenshot. Android first, Expo, no network in v1.
+the screenshot. Android first, Expo. Its only network use is the update check and,
+when asked, the update download.
 
 ## Read in this order
 
