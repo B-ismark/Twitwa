@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- The permission this module exists to use. It is what lets Twitwa hand
+       Android's installer an APK at all; the person still allows "Install
+       unknown apps" for Twitwa once, and Android still checks the signing key.
+       See UpdaterModule.kt. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <application>
+    <provider
+        android:name=".UpdateFileProvider"
+        android:authorities="${applicationId}.TwitwaUpdateProvider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+      <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/twitwa_update_paths" />
+    </provider>
+  </application>
+</manifest>

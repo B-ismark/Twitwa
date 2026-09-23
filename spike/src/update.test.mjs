@@ -56,6 +56,27 @@ const MUTANTS = {
   clock_back_never_checks: ['if (lastCheckedAt > now) return true;', 'if (lastCheckedAt > now) return false;'],
   // The HTTP status is ignored, so a 404 page gets parsed as a manifest.
   http_status_ignored: ['if (!res || res.ok !== true) {', 'if (!res) {'],
+  // The banner is handed no sha256, so every update falls back to the browser
+  // that stalled on the Pixel -- silently, since the browser still opens.
+  sha_not_passed: ['    sha256: manifest.sha256,\n', ''],
+  // Any string passes as a sha256, so the updater is asked to check a file
+  // against something that is not a hash.
+  sha_any_string: ["return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);", "return typeof v === 'string';"],
+  // The in-app route is taken without a hash to check against.
+  route_ignores_sha: ["if (updaterAvailable === true && isSha256(update.sha256)) return 'app';", "if (updaterAvailable === true) return 'app';"],
+  // The in-app route is taken on a build whose updater did not link.
+  route_ignores_module: ["if (updaterAvailable === true && isSha256(update.sha256)) return 'app';", "if (isSha256(update.sha256)) return 'app';"],
+  // A URL outside the allowlist falls through to the browser instead of nowhere.
+  route_url_unchecked: ["if (!update || !isAllowedDownloadUrl(update.url)) return 'none';", "if (!update) return 'none';"],
+  // Rounded instead of floored: 100% shows while bytes are still arriving.
+  percent_rounds: ['Math.floor((bytes / total) * 100)', 'Math.round((bytes / total) * 100)'],
+  // An unknown size (-1 from HttpURLConnection) reads as a negative percent.
+  percent_unknown_total: ['total <= 0 || bytes < 0', 'bytes < 0'],
+  // A download that did not match reads as "try again later", which will
+  // fail the same way every time.
+  mismatch_generic: ["if (reason === 'digest') return COPY.updateMismatch;", ''],
+  // A phone with no installer is told to try again later, forever.
+  no_installer_generic: ["if (reason === 'no-installer') return COPY.updateNoInstaller;", ''],
 };
 
 if (process.argv.includes('--list-mutants')) {
@@ -64,7 +85,9 @@ if (process.argv.includes('--list-mutants')) {
 }
 
 const BREAK = process.env.BREAK || '';
-const realSource = readFileSync(SRC_PATH, 'utf8');
+// Line endings normalised, as in the plugin suites: a CRLF checkout would
+// otherwise make every mutant that spans a line break NO LONGER APPLY.
+const realSource = readFileSync(SRC_PATH, 'utf8').replace(/\r\n/g, '\n');
 let mod;
 
 if (BREAK && MUTANTS[BREAK]) {
@@ -76,7 +99,11 @@ if (BREAK && MUTANTS[BREAK]) {
   }
   const dir = mkdtempSync(join(tmpdir(), 'twitwa-update-mutant-'));
   const f = join(dir, 'update.js');
-  writeFileSync(f, realSource.split(find).join(replace));
+  // The copy lives in a temp directory, so its one relative import is pointed
+  // back at the real src/copy.js. Without that, every mutant dies of
+  // ERR_MODULE_NOT_FOUND and reads as red while testing nothing.
+  const copyUrl = pathToFileURL(join(process.cwd(), 'src', 'copy.js')).href;
+  writeFileSync(f, realSource.split(find).join(replace).replace("from './copy.js'", `from '${copyUrl}'`));
   mod = await import(pathToFileURL(f).href);
 } else if (BREAK) {
   console.log(`unknown BREAK=${BREAK}. Known: ${Object.keys(MUTANTS).join(', ')}`);
@@ -88,6 +115,7 @@ if (BREAK && MUTANTS[BREAK]) {
 const {
   parseManifest, decide, shouldCheck, checkForUpdate, isAllowedDownloadUrl,
   isVersionCode, MANIFEST_URL, DOWNLOAD_PREFIX, CHECK_INTERVAL_MS, MAX_NOTES,
+  isSha256, installRoute, downloadPercent, updateProblem,
 } = mod;
 
 let fails = 0;
@@ -289,6 +317,68 @@ console.log('the whole flow, with the network injected');
 
   const r8 = await checkForUpdate({ fetchImpl: fakeFetch(manifestText()), installedVersionCode: 1, now });
   check('a result records when it happened, so the throttle can be stored', r8.checkedAt === now, r8.checkedAt);
+}
+
+// --- getting the update onto the phone -------------------------------------
+{
+  const SHA = 'b17266dd291e9ff18bdde9f33577358a882ae91a3dc7631d3c97c1f79a4682fd';
+  const m = parseManifest(manifestText({ sha256: SHA })).manifest;
+  const u = decide(m, 1);
+  check('decide hands the banner the sha256', u.sha256 === SHA, u.sha256);
+  check('decide with no sha256 in the manifest hands none', decide(parseManifest(manifestText()).manifest, 1).sha256 === undefined);
+
+  check('a 64-char lowercase hex string is a sha256', isSha256(SHA));
+  check('uppercase is not', !isSha256(SHA.toUpperCase()));
+  check('63 characters is not', !isSha256(SHA.slice(1)));
+  check('a non-string is not', !isSha256(12345) && !isSha256(undefined));
+
+  check('updater present, sha256 present: app', installRoute(u, true) === 'app', installRoute(u, true));
+  check('no updater module: browser', installRoute(u, false) === 'browser', installRoute(u, false));
+  check('updater present but no sha256: browser', installRoute({ ...u, sha256: undefined }, true) === 'browser');
+  check('a truthy non-true updater flag is not the updater', installRoute(u, 'yes') === 'browser');
+  check('a URL off the allowlist: none, not browser', installRoute({ ...u, url: 'https://evil.invalid/x.apk' }, true) === 'none');
+  check('no update at all: none', installRoute(null, true) === 'none');
+
+  check('0 of 100 is 0%', downloadPercent(0, 100) === 0);
+  check('half is 50%', downloadPercent(50, 100) === 50);
+  check('99.6% is 99, not 100', downloadPercent(996, 1000) === 99, downloadPercent(996, 1000));
+  check('every byte is 100%', downloadPercent(19220639, 19220639) === 100);
+  check('more bytes than the size says is still 100%', downloadPercent(120, 100) === 100);
+  check('an unknown size (-1) is null, not a negative percent', downloadPercent(10, -1) === null, downloadPercent(10, -1));
+  check('a zero size is null', downloadPercent(10, 0) === null);
+  check('NaN bytes is null', downloadPercent(Number.NaN, 100) === null);
+
+  // The sentences themselves are recorded here, so a mutation that swaps which
+  // key a reason maps to is seen.
+  check('digest: the file did not match', updateProblem('digest') === 'The download did not match the release, so it was not installed.', updateProblem('digest'));
+  check('no-installer: this phone cannot', updateProblem('no-installer') === 'This phone could not open the installer.', updateProblem('no-installer'));
+  for (const r of ['network', 'http-404', 'short', 'too-big', 'rename', 'missing', undefined]) {
+    check(`${String(r)}: try again later`, updateProblem(r) === 'The update did not download. Try again later.', updateProblem(r));
+  }
+}
+
+// --- the Kotlin side agrees with this one ----------------------------------
+// Read as text, because Kotlin does not run here. Each of these is a place the
+// two languages must say the same thing, and a disagreement is found otherwise
+// only on a phone, as a banner that does nothing.
+{
+  const here = new URL('.', import.meta.url);
+  const kt = readFileSync(new URL('../modules/twitwa-updater/android/src/main/java/dev/bismark/twitwa/updater/UpdaterModule.kt', here), 'utf8');
+  const io = readFileSync(new URL('./update-io.js', here), 'utf8');
+  const manifest = readFileSync(new URL('../modules/twitwa-updater/android/src/main/AndroidManifest.xml', here), 'utf8');
+  const paths = readFileSync(new URL('../modules/twitwa-updater/android/src/main/res/xml/twitwa_update_paths.xml', here), 'utf8');
+  const ktPrefix = (kt.match(/DOWNLOAD_PREFIX = "([^"]+)"/) || [])[1];
+  check('the Kotlin download prefix is the JS one', ktPrefix === DOWNLOAD_PREFIX, ktPrefix);
+  check('the Kotlin module is named TwitwaUpdater', /Name\("TwitwaUpdater"\)/.test(kt));
+  check('...and that is the name the JS asks for', /requireOptionalNativeModule\('TwitwaUpdater'\)/.test(io));
+  check('the progress event is the one the JS listens to', /PROGRESS = "onProgress"/.test(kt) && /addListener\('onProgress'/.test(io));
+  const suffix = (kt.match(/AUTHORITY_SUFFIX = "([^"]+)"/) || [])[1];
+  check('the provider authority in Kotlin is the manifest one', suffix !== undefined && manifest.includes(`android:authorities="\${applicationId}.${suffix}"`), suffix);
+  const ktDir = (kt.match(/DIR = "([^"]+)"/) || [])[1];
+  check('the provider shares exactly the directory Kotlin downloads into', ktDir !== undefined && paths.includes(`path="${ktDir}/"`) && (paths.match(/-path /g) || []).length === 1, ktDir);
+  check('the manifest asks for REQUEST_INSTALL_PACKAGES', manifest.includes('android.permission.REQUEST_INSTALL_PACKAGES'));
+  check('the provider is not exported', /android:exported="false"/.test(manifest));
+  check('Kotlin checks the hash again before installing', /private fun install[\s\S]*?hashFile\(apk\) != sha256/.test(kt));
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

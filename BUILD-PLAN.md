@@ -1051,7 +1051,11 @@ of our own, `spike/modules/twitwa-share-in` (Kotlin, autolinked from
   not import it twice. Android also REPLAYS an old share with a fresh copy of
   the intent, from Recents and on a restore after process death; the first is
   refused by `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY` and the second marked read
-  by `ShareInPackage` when `savedInstanceState` is set (found in review).
+  by `ShareInRestore` when `savedInstanceState` is set. The first version of
+  that read the state in a `ShareInPackage` lifecycle listener, which is always
+  handed null because the template `MainActivity` calls `super.onCreate(null)`;
+  the Pixel showed the replay on 2026-09-23, and `plugins/withShareInRestore.js`
+  now calls it from `MainActivity.onCreate` before the null is passed on.
 - `App.js` takes shares one at a time, and only the newest import may commit
   to the editor. Each take deletes the shared copies not on screen, so two
   overlapping would delete the file the first is about to show (found in

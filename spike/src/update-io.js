@@ -1,5 +1,6 @@
 // The effects src/update.js deliberately does not have: the network, the clock,
-// a place to remember the last check, and a way to hand a URL to the browser.
+// a place to remember the last check, a way to hand a URL to the browser, and
+// the native updater that downloads and installs an APK itself.
 //
 // Everything here is a thin adapter. The decisions all live in src/update.js,
 // which is pure and has a test.
@@ -24,10 +25,18 @@
 // dev client, makes them disagree, and the failure would be an update prompt
 // that is wrong in whichever direction nobody expects.
 import * as Application from 'expo-application';
+import { requireOptionalNativeModule } from 'expo';
 import { Linking, Platform } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 
-import { checkForUpdate, CHECK_TIMEOUT_MS, isAllowedDownloadUrl } from './update';
+import { checkForUpdate, CHECK_TIMEOUT_MS, isAllowedDownloadUrl, isSha256 } from './update';
+
+// modules/twitwa-updater. Optional for the same reason as src/sharein-io.js: a
+// build without it should fall back to the browser, not crash on import.
+const Updater = requireOptionalNativeModule('TwitwaUpdater');
+
+/** Whether this build can download and install an update itself. */
+export const updaterAvailable = Updater != null;
 
 const STATE_FILE = 'update-check.json';
 
@@ -119,5 +128,48 @@ export async function openDownload(url) {
     return true;
   } catch (e) {
     return false;
+  }
+}
+
+/**
+ * Download `update`'s APK into the cache and keep it only if its sha256 is the
+ * manifest's. `onProgress({bytes, total})` is called as it arrives. Resolves to
+ * the native answer, `{status: 'ok'}` or `{status: 'rejected', reason}`; never
+ * throws. See modules/twitwa-updater/.../UpdaterModule.kt.
+ */
+export async function downloadUpdate(update, onProgress) {
+  if (!Updater) return { status: 'rejected', reason: 'no-module' };
+  if (!isAllowedDownloadUrl(update.url) || !isSha256(update.sha256)) {
+    return { status: 'rejected', reason: 'refused' };
+  }
+  const sub = onProgress ? Updater.addListener('onProgress', onProgress) : null;
+  try {
+    return await Updater.download(update.url, update.sha256);
+  } catch (e) {
+    return { status: 'rejected', reason: 'threw' };
+  } finally {
+    if (sub) sub.remove();
+  }
+}
+
+/** Check the downloaded APK again and open Android's installer on it. */
+export async function installUpdate(update) {
+  if (!Updater) return { status: 'rejected', reason: 'no-module' };
+  try {
+    return await Updater.install(update.sha256);
+  } catch (e) {
+    return { status: 'rejected', reason: 'threw' };
+  }
+}
+
+/** Delete any downloaded APK. Called once the app is running a build that no
+ *  longer needs it, so a 19 MB file does not sit in the cache for good. */
+export async function clearUpdate() {
+  if (!Updater) return;
+  try {
+    await Updater.clear();
+  } catch (e) {
+    // The cache is the system's to clear as well; a failure here costs space,
+    // not correctness.
   }
 }

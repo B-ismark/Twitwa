@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'dev.bismark.twitwa'
+version = '1.0.0'
+
+android {
+  namespace "dev.bismark.twitwa.updater"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  // For androidx.core's FileProvider, which react-android already brings.
+  // Named the way expo-sharing names it, for the same provider.
+  implementation 'com.facebook.react:react-android'
+}

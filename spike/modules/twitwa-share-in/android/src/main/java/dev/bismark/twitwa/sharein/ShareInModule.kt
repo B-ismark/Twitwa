@@ -36,7 +36,7 @@
 // because this module is recreated with the JS runtime and the activity is
 // not. Android can also REPLAY an old share with a fresh, unmarked copy of the
 // intent: from Recents (absorb() refuses FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)
-// and on a restore after process death (ShareInPackage marks it).
+// and on a restore after process death (ShareInRestore marks it).
 package dev.bismark.twitwa.sharein
 
 import android.app.Activity
@@ -82,7 +82,7 @@ class ShareInModule : Module() {
     // Reopened from Recents. Android relaunches a finished task with its
     // original intent -- on API 31 and later, Back finishes a task whose root
     // was a share rather than the launcher -- so this is an old share
-    // delivered a second time, never a new one. ShareInPackage covers the
+    // delivered a second time, never a new one. ShareInRestore covers the
     // other replay, a restore after the process was killed.
     if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return false
     return hold(intent)

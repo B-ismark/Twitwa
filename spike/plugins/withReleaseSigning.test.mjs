@@ -434,7 +434,10 @@ if (!existsSync(LIVE)) {
     if (typeof name !== 'string' || !name.startsWith('./plugins/')) continue;
     if (name.endsWith('withReleaseSigning')) { chain.push(['withReleaseSigning', patch]); continue; }
     const mod = require('.' + name.slice('./plugins'.length) + '.js');
-    if (typeof mod.patch === 'function') chain.push([name, mod.patch]);
+    // A plugin that edits some other file says so with `target`, and is not
+    // part of this chain: withShareInRestore patches MainActivity.kt, and
+    // feeding it build.gradle made this check refuse a correct build.
+    if (typeof mod.patch === 'function' && (mod.target ?? 'build.gradle') === 'build.gradle') chain.push([name, mod.patch]);
   }
   check(LIVE_CHECKS.chain,
     chain.some(([n]) => n === 'withReleaseSigning'), chain.map(([n]) => n).join(' -> '));

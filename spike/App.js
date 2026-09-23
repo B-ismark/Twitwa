@@ -125,7 +125,16 @@ import {
   recoveryPlan,
   resumeDecision,
 } from './src/recover';
-import { check as checkForUpdate, openDownload, installedVersionCode } from './src/update-io';
+import {
+  check as checkForUpdate,
+  openDownload,
+  installedVersionCode,
+  updaterAvailable,
+  downloadUpdate,
+  installUpdate,
+  clearUpdate,
+} from './src/update-io';
+import { installRoute, downloadPercent, updateProblem } from './src/update';
 import { shareOutcome } from './src/sharein';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
@@ -229,6 +238,11 @@ export default function App() {
   // src/update.js for the whole design, including why this is the app's only
   // network call and what that costs in privacy.
   const [update, setUpdate] = useState(null);
+  // What the banner says while Twitwa fetches the update itself: `{percent}`
+  // while downloading (null until the size is known), `{problem}` after a
+  // failure, null otherwise.
+  const [updateStep, setUpdateStep] = useState(null);
+  const updateBusy = useRef(false);
 
   // The picker launcher is dead until this runtime is replaced. See
   // src/recover.js for the measurement behind that claim.
@@ -554,6 +568,10 @@ export default function App() {
     if (updateAsked.current) return;
     updateAsked.current = true;
     let live = true;
+    // An APK downloaded by an earlier run is of no use to this one: it was
+    // either installed, which is why this run exists, or abandoned. Clearing
+    // it here is what stops 19 MB sitting in the cache for good.
+    clearUpdate();
     (async () => {
       const r = await checkForUpdate();
       if (!live) return;
@@ -561,6 +579,40 @@ export default function App() {
       if (r.action === 'update') setUpdate(r);
     })();
     return () => { live = false; };
+  }, [emit]);
+
+  // "Get it". In-app when this build has the updater and the manifest names a
+  // sha256, otherwise the browser, as every release before 1.0.4 did; see
+  // installRoute in src/update.js for why. Installing first is not a typo:
+  // after the person backs out of Android's installer and taps again, the
+  // checked APK is still in the cache, and a second 19 MB download would be
+  // the only reason to wait.
+  const getUpdate = useCallback(async (u) => {
+    if (updateBusy.current) return;
+    updateBusy.current = true;
+    try {
+      const route = installRoute(u, updaterAvailable);
+      if (route !== 'app') {
+        const ok = await openDownload(u.url);
+        emit('P0.update', { route, opened: ok, url: ok ? u.url : 'refused' });
+        return;
+      }
+      let installed = await installUpdate(u);
+      if (installed.status !== 'ok' && (installed.reason === 'missing' || installed.reason === 'digest')) {
+        setUpdateStep({ percent: null });
+        const got = await downloadUpdate(u, ({ bytes, total }) => setUpdateStep({ percent: downloadPercent(bytes, total) }));
+        emit('P0.update', { route, download: got.status, reason: got.reason ?? null });
+        if (got.status !== 'ok') {
+          setUpdateStep({ problem: updateProblem(got.reason) });
+          return;
+        }
+        installed = await installUpdate(u);
+      }
+      emit('P0.updateInstall', { status: installed.status, reason: installed.reason ?? null });
+      setUpdateStep(installed.status === 'ok' ? null : { problem: updateProblem(installed.reason) });
+    } finally {
+      updateBusy.current = false;
+    }
   }, [emit]);
 
   // fontScale and density are the two configuration values MainActivity's
@@ -1122,15 +1174,24 @@ export default function App() {
           {update.notes ? (
             <Text style={[styles.updateNotes, { color: palette.graphite }]}>{update.notes}</Text>
           ) : null}
+          {updateStep ? (
+            <Text
+              style={[styles.updateNotes, { color: palette.text }]}
+              accessibilityLiveRegion="polite"
+            >
+              {updateStep.problem
+                ?? (updateStep.percent === null
+                  ? COPY.updateStarting
+                  : fill(COPY.updateDownloading, { percent: updateStep.percent }))}
+            </Text>
+          ) : null}
           <View style={styles.updateRow}>
             <Action
               label={COPY.updateGet}
               palette={palette}
               primary
-              onPress={async () => {
-                const ok = await openDownload(update.url);
-                emit('P0.update', { opened: ok, url: ok ? update.url : 'refused' });
-              }}
+              disabled={Boolean(updateStep && !updateStep.problem)}
+              onPress={() => getUpdate(update)}
             />
             <Action label={COPY.updateLater} palette={palette} onPress={() => setUpdate(null)} />
           </View>

@@ -1,6 +1,6 @@
 // Knowing that a newer Twitwa exists. Pure: no react-native, no fetch of its
 // own, no clock of its own -- everything comes in as an argument, so this loads
-// in node and has a test. The I/O lives in App.js.
+// in node and has a test. The I/O lives in src/update-io.js and App.js.
 //
 // WHY THIS IS NOT expo-updates. expo-updates ships new JavaScript over the air.
 // Twitwa's next several releases change native code (the ABI list below is one
@@ -9,18 +9,32 @@
 // has to change is the APK, and the only job here is to notice that a newer one
 // was published and say so.
 //
-// WHY THE APP DOES NOT DOWNLOAD OR INSTALL ANYTHING. It hands the URL to the
-// system browser and stops. That is a deliberate limit, and it buys three
-// things:
+// HOW THE UPDATE GETS ONTO THE PHONE. Until 1.0.3 the app handed the URL to
+// the system browser and stopped, to avoid holding REQUEST_INSTALL_PACKAGES.
+// On the owner's Pixel on 2026-09-23 Chrome then fetched every byte of the
+// 1.0.3 APK, the bytes matched its sha256, and the download sat at 100% as a
+// `.pending-` file and never finished -- in the custom tab and the full browser
+// alike. A friend would have been stuck there with no way to tell why.
 //
-//   - No REQUEST_INSTALL_PACKAGES permission. An app that can install packages
-//     is a meaningfully more dangerous app to be handed by a friend, and the
-//     permission prompt says so in those words.
-//   - Android's package manager does the signature check. An APK signed by a
-//     different key is refused by the OS, not by code written here. That is the
-//     real protection, and it is one we cannot weaken by accident.
-//   - No partial downloads, no resume logic, no storage permission, no
-//     integrity check of our own to get wrong.
+// So from 1.0.4 the app downloads the APK itself (modules/twitwa-updater),
+// keeps it only if its sha256 is the one the manifest names, and hands it to
+// Android's installer. The owner chose that over a no-permission system
+// download that cannot check the file. What it costs and what still protects
+// the person:
+//
+//   - REQUEST_INSTALL_PACKAGES. The first time, Android asks the person to
+//     allow "Install unknown apps" for Twitwa, in words that say it is a more
+//     powerful app. That is the trade, taken on purpose.
+//   - Android's package manager still does the signature check. An APK signed
+//     by a different key is refused by the OS, not by code written here, and
+//     nothing in the updater can weaken that.
+//   - The sha256 is a second, weaker line. Manifest and APK both come from
+//     this project's GitHub, so it catches a corrupt or truncated download,
+//     not a compromised account.
+//
+// The browser stays as the fallback: a manifest with no sha256, or a build
+// without the native module, still opens the download in the browser. See
+// `installRoute`.
 //
 // WHAT THIS COSTS IN PRIVACY, stated plainly because it is the first network
 // call this app has ever made. Checking means one HTTPS GET to
@@ -36,6 +50,8 @@
 // know about it. Said here rather than left implied, because "the user can turn
 // it off" is the kind of claim a comment makes on a feature's behalf before
 // anyone writes it.
+
+import { COPY } from './copy.js';
 
 /** Where the manifest lives. A raw file on the default branch, so publishing a
  *  release is one commit and needs no server. */
@@ -129,7 +145,7 @@ export function parseManifest(text) {
   if (!isAllowedDownloadUrl(raw.url)) {
     return { ok: false, reason: `url is not under ${DOWNLOAD_PREFIX}` };
   }
-  if (raw.sha256 !== undefined && !/^[0-9a-f]{64}$/.test(raw.sha256)) {
+  if (raw.sha256 !== undefined && !isSha256(raw.sha256)) {
     return { ok: false, reason: 'sha256 is present but is not 64 lowercase hex characters' };
   }
   if (raw.notes !== undefined && (typeof raw.notes !== 'string' || raw.notes.length > MAX_NOTES)) {
@@ -169,6 +185,7 @@ export function decide(manifest, installedVersionCode) {
     latestVersionCode: manifest.versionCode,
     versionName: manifest.versionName,
     url: manifest.url,
+    sha256: manifest.sha256,
     notes: manifest.notes,
   };
 }
@@ -232,4 +249,52 @@ export async function checkForUpdate({
   const parsed = parseManifest(text);
   if (!parsed.ok) return { action: 'failed', reason: parsed.reason, checkedAt: now };
   return { ...decide(parsed.manifest, installedVersionCode), checkedAt: now };
+}
+
+/** 64 lowercase hex characters: the only sha256 the updater will act on. */
+export function isSha256(v) {
+  return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+}
+
+/**
+ * How to get `update` onto the phone.
+ *
+ *   'app'      download it here, check its sha256, open the installer
+ *   'browser'  hand the URL to the browser, as every release before 1.0.4 did
+ *   'none'     the URL is not one we will send anyone to
+ *
+ * The browser is the fallback, not the default, and it is only ever chosen for
+ * a reason that is not the updater's fault: a manifest that names no sha256
+ * (there is then nothing to check the file against), or a build whose native
+ * updater module did not link.
+ */
+export function installRoute(update, updaterAvailable) {
+  if (!update || !isAllowedDownloadUrl(update.url)) return 'none';
+  if (updaterAvailable === true && isSha256(update.sha256)) return 'app';
+  return 'browser';
+}
+
+/**
+ * Whole percent downloaded, 0..100, or null when the size is not known.
+ *
+ * Floored, so 100 means every byte is here: a rounded 99.6 would say 100 while
+ * the check has not run.
+ */
+export function downloadPercent(bytes, total) {
+  if (typeof bytes !== 'number' || typeof total !== 'number') return null;
+  if (!Number.isFinite(bytes) || !Number.isFinite(total) || total <= 0 || bytes < 0) return null;
+  return Math.min(100, Math.floor((bytes / total) * 100));
+}
+
+/**
+ * The sentence for an updater answer that was not 'ok'. Only the reasons a
+ * person can act on differently get their own words: a file that did not
+ * match is not fixed by trying again in a minute, and a phone with no
+ * installer is not fixed at all. Everything else -- network, http-NNN, short,
+ * too-big, rename, missing -- is "try again later".
+ */
+export function updateProblem(reason) {
+  if (reason === 'digest') return COPY.updateMismatch;
+  if (reason === 'no-installer') return COPY.updateNoInstaller;
+  return COPY.updateFailed;
 }

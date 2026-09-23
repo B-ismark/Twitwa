@@ -105,6 +105,12 @@ export const COPY = {
   updateTitle: 'Twitwa {version} is available',
   updateGet: 'Get it',
   updateLater: 'Later',
+  // While Twitwa downloads the update itself. See src/update.js.
+  updateDownloading: 'Downloading {percent}%',
+  updateStarting: 'Downloading',
+  updateFailed: 'The update did not download. Try again later.',
+  updateMismatch: 'The download did not match the release, so it was not installed.',
+  updateNoInstaller: 'This phone could not open the installer.',
 
   // --- the developer panel ------------------------------------------------
   // Kept, because every measured number in this repository came out of these

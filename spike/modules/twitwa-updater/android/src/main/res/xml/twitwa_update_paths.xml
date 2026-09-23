@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the one directory UpdaterModule downloads into. Nothing else in the
+     cache, and nothing outside it, can be handed out through this provider. -->
+<paths>
+  <cache-path name="twitwa_update" path="update/" />
+</paths>
