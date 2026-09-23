@@ -1,7 +1,7 @@
 {
-  "versionCode": 5,
-  "versionName": "1.0.4",
-  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.4/twitwa-1.0.4.apk",
-  "sha256": "c3e1258590049a48e2a78085d562c42bc16fc50eeed6ef24d44247d8ad9f765e",
-  "notes": "Save is now next to Share. Sharing a screenshot into Twitwa has been tried on a phone and works. From this version on, updates download and install from inside Twitwa instead of the browser; the first time, Android asks you to allow Twitwa to install apps. Needs a 64-bit phone. Installs over 1.0.1, 1.0.2 and 1.0.3."
+  "versionCode": 6,
+  "versionName": "1.0.5",
+  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.5/twitwa-1.0.5.apk",
+  "sha256": "4c8446fc72af304b2cb03ef3a189555cfab5d66745129607d08fb7e95958b3d3",
+  "notes": "Back no longer throws your card away: it closes one thing at a time and asks before losing changes. Round crop handles. New screenshot in the More menu, Reset and Done in Style, and Later hides this banner for three days. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.4."
 }
