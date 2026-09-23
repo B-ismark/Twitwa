@@ -40,7 +40,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1686 of the 1704 checks run in a clone**, and the 18 that cannot say so
+true: **1689 of the 1707 checks run in a clone**, and the 18 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -95,7 +95,7 @@ What the extra recipients *do* change, none of it about policy:
   **124,548,439 bytes**, which is not a thing anyone sends over a chat app. It
   was **32,886,397 bytes** after two Gradle properties, and is **19,211,087**
   since 2026-09-22, when the owner dropped 32-bit and R8 went on; 1.0.2, with
-  the share-in module, is **19,220,311**, 1.0.3 is **19,220,639**, and 1.0.4 is **19,230,939**. See "Making the
+  the share-in module, is **19,220,311**, 1.0.3 is **19,220,639**, 1.0.4 is **19,230,939**, and 1.0.5 is **19,235,763**. See "Making the
   APK small enough to send" below — the whole of the problem was in `lib/`.
 - **Nothing tells a recipient that a new version exists.** There is no store, so
   there is no update notification unless the app makes one. See "Telling people
@@ -157,7 +157,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1704 checks and 275 mutations** counting the two PNG tools, all four
+none (**1707 checks and 278 mutations** counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -174,14 +174,14 @@ They were re-derived by running all of it on 2026-09-23, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1686 of those 1704 and reports 18 skipped**, and it runs all 275
+**A clone runs 1689 of those 1707 and reports 18 skipped**, and it runs all 278
 mutations with none surviving. Measured 2026-09-23 from `git archive` of
-the UX-pass commit, extracted with CRLF line endings as a Windows clone gets it, so the thing gated is the commit and not the
+the 1.0.5 release commit, extracted with CRLF line endings as a Windows clone gets it, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1704 − 1686 = 18, which is the skip count, so the
+That pairing is the check: 1707 − 1689 = 18, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -394,12 +394,12 @@ cd spike && node src/sizing.test.mjs     # 62 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 92 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
-cd spike && node src/shell.test.mjs      # 96 checks on the editor's tool sessions, Style controls and Back
+cd spike && node src/shell.test.mjs      # 98 checks on the editor's tool sessions, Style controls and Back
 cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
-cd spike && node src/update.test.mjs     # 135 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
+cd spike && node src/update.test.mjs     # 136 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
 cd spike && node src/sharein.test.mjs    # 60 checks on what a received share means, and its contract with the Kotlin
-cd spike && node tools/check-imports.mjs # 135 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 174 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 128 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 167 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 48 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
@@ -467,7 +467,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 275 mutations
+done                                     # silence is the pass; 278 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
