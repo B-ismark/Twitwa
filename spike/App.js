@@ -41,6 +41,8 @@
 // what its answer means.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  BackHandler,
   DevSettings,
   Platform,
   Pressable,
@@ -85,8 +87,10 @@ import { composition, project, MIN_PROJECT, MAX_RADIUS } from './src/compose';
 import {
   TOOL,
   TOOLS,
+  backAction,
   barMode,
   canReset,
+  cardOf,
   cancelTool,
   canvasShows,
   doneTool,
@@ -97,6 +101,7 @@ import {
   setBackground,
   setPadding,
   setRadius,
+  unsaved,
   BACKGROUNDS,
   PAD_MAX,
   PAD_MIN,
@@ -398,6 +403,10 @@ export default function App() {
   // not in an effect after the render: an effect lags, and a take() in that
   // gap would be told to keep the previous file.
   const shownUri = useRef(null);
+  // The card as it was last kept: at import, and after every Share, Save and
+  // Copy. Back and Start over ask before discarding only a card that differs
+  // from it; see unsaved in src/shell.js for why Share counts as kept.
+  const kept = useRef(null);
 
   /**
    * Decode `uri`, propose a crop, and open the editor on it. Both ways in end
@@ -433,7 +442,9 @@ export default function App() {
       shownUri.current = uri;
       setSrc({ ...decoded, uri });
       setOverride(null);
-      setEd(editorState(p.crop));
+      const opened = editorState(p.crop);
+      setEd(opened);
+      kept.current = cardOf(opened);
       setSampled(sampleCropBackground(decoded.img, p.crop));
       emit('crop.propose', {
         crop: p.crop,
@@ -777,6 +788,7 @@ export default function App() {
       const out = await exportCard('card.png');
       if (!out) return;
       await Sharing.shareAsync(out.path, { mimeType: 'image/png', UTI: 'public.png' });
+      kept.current = cardOf(ed);
       emit('P1.share', { ok: true, path: out.path });
     } catch (e) {
       emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
@@ -837,6 +849,7 @@ export default function App() {
         } catch {
           // Deliberately empty; see above.
         }
+        kept.current = cardOf(ed);
         emit('P5.save', { ok: true, api: Platform.Version, id: asset.id });
         setNotice(COPY.saved);
       }
@@ -872,6 +885,7 @@ export default function App() {
       const png = new File(out.path);
       const b64 = await png.base64();
       await Clipboard.setImageAsync(b64);
+      kept.current = cardOf(ed);
       emit('P5.copy', { ok: true, api: Platform.Version, kiB: +(out.bytes / 1024).toFixed(1) });
       if (Platform.Version < 33) setNotice(COPY.copied);
     } catch (e) {
@@ -1143,7 +1157,7 @@ export default function App() {
     emit('Q5.fullread', stressFullRead(src.img));
   }, [src, emit]);
 
-  const startOver = useCallback(() => {
+  const clearEditor = useCallback(() => {
     setSrc(null);
     setEd(null);
     setSampled(null);
@@ -1151,6 +1165,48 @@ export default function App() {
     setProblem(null);
     setMenu(false);
   }, []);
+
+  // Keep editing is the cancel button, so tapping outside the dialog or
+  // pressing Back on it keeps the card too. Only the button that names the
+  // loss can cause it.
+  const confirmDiscard = useCallback((title, body, onDiscard) => {
+    Alert.alert(
+      title,
+      body,
+      [
+        { text: COPY.keepEditing, style: 'cancel' },
+        { text: COPY.discard, style: 'destructive', onPress: onDiscard },
+      ],
+      { cancelable: true },
+    );
+  }, []);
+
+  const startOver = useCallback(() => {
+    setMenu(false);
+    if (unsaved(ed, kept.current)) confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
+    else clearEditor();
+  }, [ed, confirmDiscard, clearEditor]);
+
+  // Android's Back, one layer at a time. Before this there was no handler, so
+  // Back closed the activity and the card went with it, unasked. The order
+  // and the reasons are backAction's, in src/shell.js; this only carries
+  // them out. Returning false is the one case Android should handle itself.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      const a = backAction(ed, { menu, dev: devOpen, busy, kept: kept.current });
+      emit('back', { action: a });
+      if (a === 'exit') return false;
+      if (a === 'close-dev') setDevOpen(false);
+      else if (a === 'close-menu') setMenu(false);
+      else if (a === 'cancel-tool') cancel();
+      else if (a === 'ask-tool') confirmDiscard(COPY.discardCropTitle, COPY.discardCropBody, cancel);
+      else if (a === 'close-tool') setEd((s) => (s ? doneTool(s) : s));
+      else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
+      else if (a === 'leave') clearEditor();
+      return true;
+    });
+    return () => sub.remove();
+  }, [ed, menu, devOpen, busy, cancel, clearEditor, confirmDiscard, emit]);
 
   // --- what the caption says ----------------------------------------------
   let caption = '';
@@ -1407,7 +1463,6 @@ export default function App() {
  */
 const ZERO_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
-/** Corner bracket: the arm's length, and the thickness of the two sides drawn. */
 /**
  * How long the rule-of-thirds grid takes to appear and go again.
  *
@@ -1444,8 +1499,14 @@ const LOUPE = 112;
 const LOUPE_GAP = 12;
 const LOUPE_ZOOM = 2;
 
-const BRACKET = 22;
-const BRACKET_W = 3;
+/**
+ * The drag handles' diameters. Corners are bigger than edge midpoints because
+ * a corner moves two edges and is the handle most people reach for; both sit
+ * inside the TOUCH-sized hit target pickHandle uses, so the dot is what the
+ * handle looks like, not how big it is to a thumb.
+ */
+const CORNER_DOT = 18;
+const EDGE_DOT = 12;
 
 /**
  * The four bands of darkness outside the crop.
@@ -1493,54 +1554,54 @@ function Scrim({ crop, view, stage }) {
 }
 
 /**
- * The crop rectangle: a hairline and four corner brackets.
+ * The crop rectangle: a hairline, a dot on each corner and one on each edge.
  *
- * Brackets rather than dots, because the survey is unambiguous about what the
- * two mean: brackets say "this is a frame and the picture is behind it", dots
- * say "this is an object you have selected". A crop is a frame. Phase 2 adds
- * the rest of the list, including the rule-of-thirds grid on touch and the
- * loupe at the dragged corner.
+ * Dots, and at all eight handles, at the owner's request (2026-09-23): the
+ * corner brackets read as boxy, and gave no sign that the edge midpoints can
+ * be dragged at all. BUILD-PLAN.md recorded the survey's case for brackets
+ * (a frame, not a selected object); the owner weighed it and chose the dots.
  */
 function CropFrame({ crop, view }) {
-  const len = BRACKET;
-  // One hook per element, for the same reason as Scrim: these five must follow
-  // the finger on the UI thread. Only position is animated — the border widths
-  // that make a corner an L are static, and live in the style objects below,
-  // so each worklet returns two numbers rather than a whole style.
+  // Only position follows the finger, as in Scrim; each dot is its own
+  // component so each has exactly one hook.
   const edge = useAnimatedStyle(() => {
     'worklet';
     const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
     return { left: r.x, top: r.y, width: r.w, height: r.h };
   });
-  const nw = useAnimatedStyle(() => {
-    'worklet';
-    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
-    return { left: r.x, top: r.y };
-  });
-  const ne = useAnimatedStyle(() => {
-    'worklet';
-    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
-    return { left: r.x + r.w - len, top: r.y };
-  });
-  const sw = useAnimatedStyle(() => {
-    'worklet';
-    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
-    return { left: r.x, top: r.y + r.h - len };
-  });
-  const se = useAnimatedStyle(() => {
-    'worklet';
-    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
-    return { left: r.x + r.w - len, top: r.y + r.h - len };
-  });
-  const box = { width: len, height: len };
   return (
     <>
       <Animated.View style={[styles.cropEdge, edge]} />
-      <Animated.View style={[styles.cropCorner, box, styles.cornerNW, nw]} />
-      <Animated.View style={[styles.cropCorner, box, styles.cornerNE, ne]} />
-      <Animated.View style={[styles.cropCorner, box, styles.cornerSW, sw]} />
-      <Animated.View style={[styles.cropCorner, box, styles.cornerSE, se]} />
+      {HANDLE_DOTS.map(([fx, fy]) => (
+        <CropDot key={`${fx},${fy}`} crop={crop} view={view} fx={fx} fy={fy} />
+      ))}
     </>
+  );
+}
+
+/**
+ * Where each dot sits, as a fraction of the crop's width and height. Corners
+ * are the pairs of 0 and 1; a 0.5 is an edge midpoint. Eight, one per
+ * resizing handle in src/crop.js's HANDLES (`move` has no dot: it is the
+ * whole inside).
+ */
+const HANDLE_DOTS = [
+  [0, 0], [0.5, 0], [1, 0],
+  [1, 0.5], [1, 1], [0.5, 1],
+  [0, 1], [0, 0.5],
+];
+
+function CropDot({ crop, view, fx, fy }) {
+  const size = fx === 0.5 || fy === 0.5 ? EDGE_DOT : CORNER_DOT;
+  const at = useAnimatedStyle(() => {
+    'worklet';
+    const r = crop.value ? toViewportRect(view, crop.value) : ZERO_RECT;
+    return { left: r.x + r.w * fx - size / 2, top: r.y + r.h * fy - size / 2 };
+  });
+  return (
+    <Animated.View
+      style={[styles.cropDot, { width: size, height: size, borderRadius: size / 2 }, at]}
+    />
   );
 }
 
@@ -1548,8 +1609,8 @@ function CropFrame({ crop, view }) {
  * Rule of thirds, while a finger is down and not at rest.
  *
  * Every surveyed crop surface that has a grid shows it this way (X, Binance),
- * and the ones that do not show a grid show brackets when idle -- which is
- * what this already does. A grid drawn at rest turns the frame into a
+ * and the ones that do not show a grid show only the frame when idle -- which
+ * is what this already does. A grid drawn at rest turns the frame into a
  * viewfinder and competes with the screenshot underneath it, which is the
  * thing being judged.
  *
@@ -1557,8 +1618,8 @@ function CropFrame({ crop, view }) {
  * the same reason `crop` is one. Four hooks rather than a loop because hooks
  * cannot be called in one.
  *
- * The lines carry the corner brackets' treatment -- white with a dark outline
- * -- for the reason written on `cropCorner`: a single-colour hairline over
+ * The lines carry the handle dots' treatment -- white with a dark outline
+ * -- for the reason written on `cropDot`: a single-colour hairline over
  * arbitrary screenshot pixels is invisible against some of them, and a grid
  * that vanishes on a pale screenshot is worse than no grid, because the user
  * cannot tell it from a grid that never appeared.
@@ -1933,15 +1994,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.9)',
   },
-  cropCorner: {
+  // White with a dark ring, legible over a white screenshot and a black one;
+  // a single colour over arbitrary pixels is invisible against some of them.
+  cropDot: {
     position: 'absolute',
-    borderColor: '#FFFFFF',
-    outlineWidth: 1,
-    outlineColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,0,0,0.6)',
   },
-  // Which two sides of each bracket are drawn. Static, so they stay out of the
-  // animated styles that follow the finger — a worklet returning `left` and
-  // `top` is two numbers a frame, one returning the whole style is nine.
   // One device pixel of line with a dark outline around it, so the grid is
   // legible over a white screenshot and a black one. Thinner than cropEdge
   // because the frame is the statement and the thirds are a guide.
@@ -2001,10 +2061,6 @@ const styles = StyleSheet.create({
     outlineWidth: 1,
     outlineColor: 'rgba(0,0,0,0.35)',
   },
-  cornerNW: { borderLeftWidth: BRACKET_W, borderTopWidth: BRACKET_W },
-  cornerNE: { borderRightWidth: BRACKET_W, borderTopWidth: BRACKET_W },
-  cornerSW: { borderLeftWidth: BRACKET_W, borderBottomWidth: BRACKET_W },
-  cornerSE: { borderRightWidth: BRACKET_W, borderBottomWidth: BRACKET_W },
 
   captionWrap: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.lg },
   caption: { ...TYPE.caption, textAlign: 'center' },

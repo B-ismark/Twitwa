@@ -56,6 +56,18 @@ export const COPY = {
   reset: 'Reset',
   done: 'Done',
 
+  // --- leaving with work on screen -----------------------------------------
+  // Asked by Back and by Start over, and only when the card changed since it
+  // was opened or last shared, saved or copied; see backAction in src/shell.js.
+  // The destructive button says what it destroys, and the safe one is the
+  // way back to what the person was doing.
+  discardCardTitle: 'Discard this card?',
+  discardCardBody: 'Your crop and style changes will be lost.',
+  discardCropTitle: 'Discard this crop?',
+  discardCropBody: 'The crop goes back to how it was when you opened it.',
+  discard: 'Discard',
+  keepEditing: 'Keep editing',
+
   // --- the Style strip ----------------------------------------------------
   padding: 'Padding',
   corners: 'Corners',

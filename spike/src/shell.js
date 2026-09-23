@@ -222,6 +222,81 @@ export function barMode(state) {
 }
 
 /**
+ * The fields that ARE the card. Everything else in the state -- which tool is
+ * open, its session, the proposal Reset returns to -- is about the editor, and
+ * leaving can only lose work that lives in these four.
+ */
+const CARD_FIELDS = ['crop', 'padding', 'radius', 'background'];
+
+/** The card alone, as a copy, for remembering what was last kept. */
+export function cardOf(state) {
+  const out = {};
+  for (const field of CARD_FIELDS) out[field] = copy(state[field]);
+  return out;
+}
+
+// Field by field rather than JSON.stringify of the whole: a crop from
+// dragCrop and one from editorState can carry the same four numbers in a
+// different key order, and a string compare would call that a change.
+function sameValue(a, b) {
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+  }
+  return a === b;
+}
+
+/**
+ * Would leaving now lose work?
+ *
+ * @param kept  `cardOf` the card as it was last kept: at import, which is a
+ *              card the person has not touched and can get back by opening
+ *              the same screenshot, and after every Share, Save and Copy.
+ *              Share counts although Android cannot say whether the sheet
+ *              sent anything: asking "discard?" after every successful send
+ *              teaches the person to tap Discard without reading it.
+ */
+export function unsaved(state, kept) {
+  if (!state) return false;
+  if (!kept) return true;
+  return CARD_FIELDS.some((f) => !sameValue(state[f], kept[f]));
+}
+
+/** Has the open takeover tool changed anything since it opened? */
+export function toolChanged(state) {
+  if (!state || !state.session) return false;
+  return Object.keys(state.session).some((f) => !sameValue(state[f], state.session[f]));
+}
+
+/**
+ * What Android's Back does, one layer at a time, first match wins.
+ *
+ *   'close-dev' | 'close-menu'    whatever is floating over the editor
+ *   'wait'                         a card is being made; leaving now would land
+ *                                  its "Saved to Photos" on the empty screen
+ *   'ask-tool'                     Crop is open and was moved: confirm, then Cancel
+ *   'cancel-tool'                  Crop is open and unchanged: Cancel
+ *   'close-tool'                   Style's strip is open; it keeps as it goes
+ *   'ask'                          the card changed since it was kept: confirm, then leave
+ *   'leave'                        back to the empty screen, nothing lost
+ *   'exit'                         the empty screen: let Android close the app
+ *
+ * Back from the editor lands on the empty screen rather than closing the app,
+ * because the editor is the one place a second Back can still be undone from.
+ */
+export function backAction(state, { menu = false, dev = false, busy = false, kept = null } = {}) {
+  if (dev) return 'close-dev';
+  if (menu) return 'close-menu';
+  if (!state) return 'exit';
+  if (busy) return 'wait';
+  if (state.tool) {
+    if (!TOOL[state.tool].takeover) return 'close-tool';
+    return toolChanged(state) ? 'ask-tool' : 'cancel-tool';
+  }
+  return unsaved(state, kept) ? 'ask' : 'leave';
+}
+
+/**
  * Set the padding from a drag, snapping onto a named stop when it lands near
  * one and clamping to the range the stops describe.
  *

@@ -3,7 +3,9 @@
 //   for b in snapshot_shallow cancel_keeps done_restores reset_to_session \
 //            style_takeover canvas_flag no_snap pad_unclamped bg_unvalidated \
 //            radius_unclamped reopen_allowed canreset_blind stops_typed \
-//            snap_constant; do
+//            snap_constant unsaved_never unsaved_tool kept_ignored \
+//            back_crop_silent back_never_asks back_exits_editor back_menu_last \
+//            back_ignores_busy; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -117,6 +119,40 @@ if (BREAK === 'snapshot_shallow') {
   F.setBackground = (name) => name;
 } else if (BREAK === 'canreset_blind') {
   F.canReset = (state) => Boolean(state.tool);
+} else if (BREAK === 'unsaved_never') {
+  // Nothing is ever unsaved, which is the app before this check: Back left
+  // with the card and said nothing.
+  F.unsaved = () => false;
+} else if (BREAK === 'unsaved_tool') {
+  // The whole state compared, so opening a tool and closing it again reads as
+  // work, and Back asks about a card nobody changed.
+  F.unsaved = (state, kept) => Boolean(state) && (Boolean(state.tool) || real.unsaved(state, kept));
+} else if (BREAK === 'kept_ignored') {
+  // Compared with the proposal rather than with what was last kept, so a card
+  // that was just saved still asks to be discarded.
+  F.unsaved = (state) => real.unsaved(state, state && real.cardOf(real.editorState(state.proposed)));
+} else if (BREAK === 'back_crop_silent') {
+  // Back in Crop always cancels, and a crop dragged for a minute goes with it.
+  F.toolChanged = () => false;
+} else if (BREAK === 'back_never_asks') {
+  F.backAction = (state, o) => {
+    const a = real.backAction(state, o);
+    return a === 'ask' ? 'leave' : a === 'ask-tool' ? 'cancel-tool' : a;
+  };
+} else if (BREAK === 'back_exits_editor') {
+  // The editor closes the app outright when nothing is unsaved, so a Back
+  // meant for the menu that had just closed takes the screenshot with it.
+  F.backAction = (state, o) => {
+    const a = real.backAction(state, o);
+    return a === 'leave' ? 'exit' : a;
+  };
+} else if (BREAK === 'back_ignores_busy') {
+  // Back during an export: the editor goes, the export finishes, and its
+  // confirmation lands on the empty screen.
+  F.backAction = (state, o = {}) => real.backAction(state, { ...o, busy: false });
+} else if (BREAK === 'back_menu_last') {
+  // The editor answered before what floats over it.
+  F.backAction = (state, o = {}) => real.backAction(state, { ...o, menu: false, dev: false });
 } else if (BREAK === 'stops_typed') {
   // The chips as their own list of numbers, which is what a view does when the
   // table is not reachable from it.
@@ -386,6 +422,54 @@ console.log('\nthe corner slider cannot leave the card behind');
   let threw = false;
   try { F.setRadius(undefined); } catch (e) { threw = true; }
   check('a non-number throws', threw);
+}
+
+console.log('\nleaving asks only when there is work to lose');
+{
+  // The mutants swap single functions, and backAction reaches the others
+  // through the module's own bindings, so each is checked where it is called.
+  const s = fresh();
+  const kept = F.cardOf(s);
+  check('a card nobody touched is not unsaved', F.unsaved(s, kept) === false);
+  const moved = { ...s, crop: { ...s.crop, y: s.crop.y + 40 } };
+  check('a moved crop is unsaved', F.unsaved(moved, kept) === true);
+  check('so is a changed background', F.unsaved({ ...s, background: 'ink' }, kept) === true);
+  const reordered = { ...s, crop: { h: s.crop.h, w: s.crop.w, y: s.crop.y, x: s.crop.x } };
+  check('the same crop in another key order is not a change', F.unsaved(reordered, kept) === false);
+  const toured = F.doneTool(F.openTool(s, 'style'));
+  check('opening Style and closing it again is not work', F.unsaved(toured, kept) === false);
+  check('a tool open with nothing changed is not work either', F.unsaved(F.openTool(s, 'crop'), kept) === false);
+  check('after a save the moved card is kept', F.unsaved(moved, F.cardOf(moved)) === false);
+  check('with no record of a keep, a card is unsaved', F.unsaved(s, null) === true);
+  check('and with no editor there is nothing to lose', F.unsaved(null, kept) === false);
+  const snap = F.cardOf(moved);
+  moved.crop.y += 1;
+  check('the record is a copy, not the live crop', snap.crop.y !== moved.crop.y);
+
+  const crop = F.openTool(s, 'crop');
+  check('Crop just opened has not changed', F.toolChanged(crop) === false);
+  const dragged = { ...crop, crop: { ...crop.crop, x: 30 } };
+  check('Crop dragged has', F.toolChanged(dragged) === true);
+  check('and nothing open has nothing to change', F.toolChanged(s) === false);
+}
+
+console.log('\nBack takes one layer off at a time');
+{
+  const s = fresh();
+  const kept = F.cardOf(s);
+  const moved = { ...s, padding: PADDING.roomy };
+  const crop = F.openTool(s, 'crop');
+  const dragged = { ...crop, crop: { ...crop.crop, x: 30 } };
+  const b = (state, o) => F.backAction(state, { kept, ...o });
+  check('the developer panel goes first', b(dragged, { dev: true, menu: true }) === 'close-dev');
+  check('then the menu', b(moved, { menu: true }) === 'close-menu');
+  check('Crop unchanged is cancelled without asking', b(crop) === 'cancel-tool');
+  check('Crop dragged asks first', b(dragged) === 'ask-tool', b(dragged));
+  check('the Style strip just closes', b(F.openTool(moved, 'style')) === 'close-tool');
+  check('a changed card asks', b(moved) === 'ask', b(moved));
+  check('nothing leaves while a card is being made', b(moved, { busy: true }) === 'wait' && b(dragged, { busy: true }) === 'wait');
+  check('an untouched card leaves for the empty screen, not the home screen', b(s) === 'leave', b(s));
+  check('and the empty screen lets Android close the app', b(null) === 'exit');
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

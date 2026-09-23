@@ -93,6 +93,11 @@ the chrome competes with the image.
 to roughly 55% of the app background — soft, so it reads "inactive" rather than
 "masked out". Not a black scrim.
 
+> **Superseded 2026-09-23, the owner's call:** the brackets read as boxy, and
+> the crop now draws a white dot with a dark ring at all eight handles. The
+> white-with-a-dark-outline reasoning below still holds and the dots keep it;
+> the brackets-mean-a-frame argument in the survey was weighed and overruled.
+
 **Corner brackets, not a rectangle.** Four corner marks plus edge midpoints, 2px,
 white core with a thin dark outline. This is not decoration: the token table
 guarantees Signal against Paper and Ink, but crop handles sit over *arbitrary
@@ -281,7 +286,8 @@ at the bottom.
    owner drew: brackets for the frame the whole image sits inside, dots for a
    thing sitting on top of it. VSCO and Freeform agree on the dots. This is a
    free way to make Crop and Cover unmistakable without a word of copy. (Cover
-   has since been cut; the bracket half of this stands.)
+   has since been cut; the bracket half of this stood until 2026-09-23, when
+   the owner chose dots for Crop: see the note under "Corner brackets".)
 3. **The grid appears on touch, not at rest.** X and Binance show rule-of-thirds
    during a drag; Reddit, Google Photos and Apple Photos show brackets only when
    idle. uCrop and Android-Image-Cropper both name "show on touch" as an option,
@@ -1136,13 +1142,14 @@ measurement this repo can take on its own:
   [16256, 16384) is one driver's number.
 - **Other Android skins.** The status-bar shape test is verified both directions,
   but on a single stock-Android status bar.
-- **Receiving a share: the cache cleanup.** Everything else ran on the owner's
-  Pixel on 2026-09-23 (cold start, running, after Back, `SEND_MULTIPLE`, a
-  refused type, Recents). The first process-death replay re-imported, which is
-  what withShareInRestore fixed; that fix ran on the device before 1.0.4 went
-  out. The cleanup cannot be seen from outside a release build: no `run-as`.
-- **Save's permission fallback below API 30.** Written, never run: the one test
-  phone is on API 37.
+- ~~**Receiving a share: the cache cleanup.**~~ **Seen by the owner on
+  2026-09-23**: the older shared-in copies were gone. Seen from inside the app,
+  not measured (a release build has no `run-as`), so this is an observation
+  rather than a byte count. Everything else ran on the Pixel the same day (cold
+  start, running, after Back, `SEND_MULTIPLE`, a refused type, Recents, and the
+  process-death replay withShareInRestore fixed).
+- ~~**Save's permission fallback below API 30.**~~ **Out of scope, the owner's
+  call on 2026-09-23**: no Android 10 testing. The code stays, unrun.
 - **The share target's actual behaviour.** It registers and resolves correctly on
   the installed package — both actions, three mime types, with `text/plain`
   correctly refused. But a real `ACTION_SEND` is **consumed by the dev launcher**
