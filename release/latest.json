@@ -1,7 +1,7 @@
 {
-  "versionCode": 4,
-  "versionName": "1.0.3",
-  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.3/twitwa-1.0.3.apk",
-  "sha256": "b17266dd291e9ff18bdde9f33577358a882ae91a3dc7631d3c97c1f79a4682fd",
-  "notes": "The author's name and picture now stay in the crop on screenshots with no status bar. From 1.0.2: share a screenshot straight into Twitwa from any app's share menu (not yet tried on a phone; if it does not work, choose the screenshot inside Twitwa), Save to Photos and Copy image in the More menu, and a 19 MB download. Needs a 64-bit phone: if it will not install, keep 1.0.1 and ignore this banner. Installs over 1.0.1 and 1.0.2."
+  "versionCode": 5,
+  "versionName": "1.0.4",
+  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.4/twitwa-1.0.4.apk",
+  "sha256": "c3e1258590049a48e2a78085d562c42bc16fc50eeed6ef24d44247d8ad9f765e",
+  "notes": "Save is now next to Share. Sharing a screenshot into Twitwa has been tried on a phone and works. From this version on, updates download and install from inside Twitwa instead of the browser; the first time, Android asks you to allow Twitwa to install apps. Needs a 64-bit phone. Installs over 1.0.1, 1.0.2 and 1.0.3."
 }
