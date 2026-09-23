@@ -871,6 +871,16 @@ What landed, beyond the list below:
   is bounded by `MAX_PROFILE_PX`, past which it trims vertically only and says
   so — that read is the one place in the app that breaks `src/pipeline.js`'s
   "never read a whole image" rule, and a column profile has no banded form
+  - **It shipped cutting the byline, 2026-09-23.** It took `detectStatusBar`'s
+    cut as the top floor without the shape test that `plan.js` and
+    `pipeline.js` apply, so on a screenshot with no status bar the editor
+    opened with the author's avatar-and-name row gone -- the exact failure
+    Phase 0 measured and `social-card-renderer.md` records as "do nothing".
+    The owner found it on a tweet in 1.0.2; on the captures it was rows 13-133
+    of `x-quote-dark.png`. Fixed by `judgeStatusBar` in `pixels.js`, the one
+    function that pairs the detector with the shape test, and a proposal that
+    trims only on `likely === true`. The lesson is the two-sources one: this
+    was written beside two copies of that pairing instead of calling one.
 - `src/pixels.js` gains `colInkProfile`, tested against `rowInkProfile` of a
   transposed buffer rather than against a reimplementation
 - `planOutput` gains `frame`, so the Background control changes the card

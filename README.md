@@ -39,7 +39,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1523 of the 1539 checks run in a clone**, and the 16 that cannot say so
+true: **1533 of the 1549 checks run in a clone**, and the 16 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -152,7 +152,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 394 checks and 71 mutations between them while the renderer carries
-none (**1539 checks and 235 mutations** counting the two PNG tools, all three
+none (**1549 checks and 238 mutations** counting the two PNG tools, all three
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -165,18 +165,18 @@ editor opens on, and `sharein.js` is what a received share means.
 Those two numbers have a convention, because without one they are not
 comparable between readings: every check each gate prints as run, on a tree
 where `android/` exists, summed; and every mutant the loops below enumerate.
-They were re-derived by running all of it on 2026-09-22, not by adding to the
+They were re-derived by running all of it on 2026-09-23, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1523 of those 1539 and reports 16 skipped**, and it runs all 235
-mutations with none surviving. Measured 2026-09-22 from `git archive` of
-the commit that added share-in, extracted with CRLF line endings as a Windows clone gets it, so the thing gated is the commit and not the
+**A clone runs 1533 of those 1549 and reports 16 skipped**, and it runs all 238
+mutations with none surviving. Measured 2026-09-23 from `git archive` of
+the commit that stopped the crop proposal cutting the byline, extracted with CRLF line endings as a Windows clone gets it, so the thing gated is the commit and not the
 working copy. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1539 − 1523 = 16, which is the skip count, so the
+That pairing is the check: 1549 − 1533 = 16, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -390,11 +390,11 @@ cd spike && node src/plan.test.mjs       # 92 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
 cd spike && node src/shell.test.mjs      # 68 checks on the editor's tool sessions and Style controls
-cd spike && node src/autocrop.test.mjs   # 75 checks on the crop the editor opens on
+cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 84 checks on the update check and its URL allowlist
 cd spike && node src/sharein.test.mjs    # 60 checks on what a received share means, and its contract with the Kotlin
 cd spike && node tools/check-imports.mjs # 114 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 147 exports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 148 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 47 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
@@ -461,7 +461,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 235 mutations
+done                                     # silence is the pass; 238 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
