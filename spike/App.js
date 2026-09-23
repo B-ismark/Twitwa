@@ -243,6 +243,9 @@ export default function App() {
   // failure, null otherwise.
   const [updateStep, setUpdateStep] = useState(null);
   const updateBusy = useRef(false);
+  // "Later" during a download. The download itself runs on, but the installer
+  // must not then appear over whatever the person went back to doing.
+  const updateDismissed = useRef(false);
 
   // The picker launcher is dead until this runtime is replaced. See
   // src/recover.js for the measurement behind that claim.
@@ -606,6 +609,10 @@ export default function App() {
           setUpdateStep({ problem: updateProblem(got.reason) });
           return;
         }
+        if (updateDismissed.current) return;
+        // Progress arrives every 256 KB, so the last one is usually short of
+        // 100, and the caption would sit on "98%" while the file is re-checked.
+        setUpdateStep({ percent: 100 });
         installed = await installUpdate(u);
       }
       emit('P0.updateInstall', { status: installed.status, reason: installed.reason ?? null });
@@ -1193,7 +1200,14 @@ export default function App() {
               disabled={Boolean(updateStep && !updateStep.problem)}
               onPress={() => getUpdate(update)}
             />
-            <Action label={COPY.updateLater} palette={palette} onPress={() => setUpdate(null)} />
+            <Action
+              label={COPY.updateLater}
+              palette={palette}
+              onPress={() => {
+                updateDismissed.current = true;
+                setUpdate(null);
+              }}
+            />
           </View>
         </View>
       ) : null}

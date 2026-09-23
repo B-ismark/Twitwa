@@ -35,8 +35,11 @@ package dev.bismark.twitwa.updater
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import androidx.core.content.FileProvider
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.net.HttpURLConnection
@@ -49,14 +52,21 @@ class UpdaterModule : Module() {
 
     Events(PROGRESS)
 
-    // AsyncFunction bodies run off the main thread, so the blocking read below
-    // does not freeze the UI.
-    AsyncFunction("download") { url: String, sha256: String -> download(url, sha256) }
+    // Coroutines on Dispatchers.IO, NOT plain AsyncFunction bodies. A plain
+    // body runs on expo-modules-core's single "expo.modules.AsyncFunctionQueue"
+    // thread (AppContext.kt), which EVERY Expo module's async calls share: a
+    // blocking 19 MB download there held up Save, Share, Copy and the picker
+    // until it finished. Found in review of the first version.
+    AsyncFunction("download") Coroutine { url: String, sha256: String ->
+      withContext(Dispatchers.IO) { download(url, sha256) }
+    }
 
-    AsyncFunction("install") { sha256: String -> install(sha256) }
+    AsyncFunction("install") Coroutine { sha256: String ->
+      withContext(Dispatchers.IO) { install(sha256) }
+    }
 
-    AsyncFunction("clear") {
-      dir()?.listFiles()?.forEach { it.delete() }
+    AsyncFunction("clear") Coroutine { ->
+      withContext(Dispatchers.IO) { dir()?.listFiles()?.forEach { it.delete() } }
       null
     }
   }

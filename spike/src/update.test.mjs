@@ -378,6 +378,12 @@ console.log('the whole flow, with the network injected');
   check('the provider shares exactly the directory Kotlin downloads into', ktDir !== undefined && paths.includes(`path="${ktDir}/"`) && (paths.match(/-path /g) || []).length === 1, ktDir);
   check('the manifest asks for REQUEST_INSTALL_PACKAGES', manifest.includes('android.permission.REQUEST_INSTALL_PACKAGES'));
   check('the provider is not exported', /android:exported="false"/.test(manifest));
+  // A plain AsyncFunction body runs on the one queue every Expo module shares;
+  // a download there stalled Save and Share for its whole length.
+  for (const fn of ['download', 'install']) {
+    const re = new RegExp(`AsyncFunction\\("${fn}"\\) Coroutine \\{[^}]*withContext\\(Dispatchers\\.IO\\)`);
+    check(`Kotlin ${fn} runs on Dispatchers.IO, off the shared async queue`, re.test(kt));
+  }
   check('Kotlin checks the hash again before installing', /private fun install[\s\S]*?hashFile\(apk\) != sha256/.test(kt));
 }
 
