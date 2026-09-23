@@ -316,9 +316,13 @@ export function laterHides(update, later, now) {
  * person can act on differently get their own words: a file that did not
  * match is not fixed by trying again in a minute, and a phone with no
  * installer is not fixed at all. Everything else -- network, http-NNN, short,
- * too-big, rename, missing -- is "try again later".
+ * too-big, rename, missing -- is "try again later". A cancel is no problem
+ * at all, and gets null.
  */
 export function updateProblem(reason) {
+  // The person asked for it, so there is nothing to tell them: the banner goes
+  // back to Get it and Later.
+  if (reason === 'cancelled') return null;
   if (reason === 'digest') return COPY.updateMismatch;
   if (reason === 'no-installer') return COPY.updateNoInstaller;
   return COPY.updateFailed;

@@ -77,6 +77,9 @@ const MUTANTS = {
   mismatch_generic: ["if (reason === 'digest') return COPY.updateMismatch;", ''],
   // A phone with no installer is told to try again later, forever.
   no_installer_generic: ["if (reason === 'no-installer') return COPY.updateNoInstaller;", ''],
+  // A cancel reads as a failure, so tapping Cancel is answered with "The
+  // update did not download".
+  cancel_is_problem: ["if (reason === 'cancelled') return null;", ''],
   // Later hides every version from then on, so a friend who put off 1.0.5
   // never hears about 1.0.6.
   later_any_version: ['if (later.versionCode !== update.latestVersionCode) return false;', ''],
@@ -362,6 +365,7 @@ console.log('the whole flow, with the network injected');
   // key a reason maps to is seen.
   check('digest: the file did not match', updateProblem('digest') === 'The download did not match the release, so it was not installed.', updateProblem('digest'));
   check('no-installer: this phone cannot', updateProblem('no-installer') === 'This phone could not open the installer.', updateProblem('no-installer'));
+  check('cancelled: nothing to say, the person asked for it', updateProblem('cancelled') === null, updateProblem('cancelled'));
   for (const r of ['network', 'http-404', 'short', 'too-big', 'rename', 'missing', undefined]) {
     check(`${String(r)}: try again later`, updateProblem(r) === 'The update did not download. Try again later.', updateProblem(r));
   }
@@ -399,6 +403,20 @@ console.log('the whole flow, with the network injected');
   // readTimeout bounds one read; only this bounds the whole file.
   check('Kotlin gives up on a download that outlives its deadline',
     /if \(System\.nanoTime\(\) > deadline\) \{ late = true; break \}/.test(kt) && /late -> \{ part\.delete\(\); rejected\("slow"\) \}/.test(kt));
+  // Cancel. The JS side reads "cancelled" as no problem at all, so the word
+  // must be the one Kotlin answers with, on both of the ways a cancel ends a
+  // download: the flag between chunks, and the disconnect mid-read.
+  check('Kotlin has a synchronous cancel that sets the flag and drops the connection',
+    /Function\("cancel"\) \{\s*cancelled = true\s*live\?\.disconnect\(\)/.test(kt) && /Updater\.cancel\(\)/.test(io));
+  check('the read loop stops on the flag',
+    /if \(n < 0\) break\s*if \(cancelled\) break/.test(kt));
+  check('a cancelled download is deleted and answers "cancelled", checked first',
+    /when \{\s*cancelled -> \{ part\.delete\(\); rejected\("cancelled"\) \}/.test(kt));
+  check('a disconnect mid-read answers "cancelled", not "network"',
+    /if \(cancelled\) rejected\("cancelled"\) else rejected\("network"\)/.test(kt));
+  check('the flag is cleared when a download starts, and the connection published',
+    /cancelled = false\s*return try \{/.test(kt) && /live = conn\s*val code = conn\.responseCode/.test(kt));
+
   // Each of these used to escape install() as a thrown error, which the JS
   // side could only call "threw".
   for (const [ex, reason] of [['ActivityNotFoundException', 'no-installer'], ['IllegalArgumentException', 'provider'], ['SecurityException', 'refused']]) {

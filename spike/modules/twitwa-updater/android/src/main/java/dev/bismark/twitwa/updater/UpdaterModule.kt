@@ -15,6 +15,7 @@
 //                          one the manifest names;
 //   install(sha256)        hash that file AGAIN and, only if it still matches,
 //                          hand it to Android's own installer;
+//   cancel()               stop a running download; it answers "cancelled";
 //   clear()                delete whatever is in cache/update/.
 //
 // WHAT STILL PROTECTS THE PERSON. Android's package manager checks that the
@@ -65,6 +66,16 @@ class UpdaterModule : Module() {
       withContext(Dispatchers.IO) { install(sha256) }
     }
 
+    // A plain Function, so it runs at once on the JS thread's call rather than
+    // queueing behind anything. The flag stops the read loop between chunks;
+    // the disconnect wakes a read that is blocked on a silent network, which
+    // the flag alone would wait out for up to READ_TIMEOUT_MS.
+    Function("cancel") {
+      cancelled = true
+      live?.disconnect()
+      null
+    }
+
     AsyncFunction("clear") Coroutine { ->
       withContext(Dispatchers.IO) { dir()?.listFiles()?.forEach { it.delete() } }
       null
@@ -72,6 +83,10 @@ class UpdaterModule : Module() {
   }
 
   private fun rejected(reason: String) = mapOf("status" to "rejected", "reason" to reason)
+
+  // Written by cancel() on the JS thread, read by download() on an IO thread.
+  @Volatile private var cancelled = false
+  @Volatile private var live: HttpURLConnection? = null
 
   private fun dir(): File? {
     val context = appContext.reactContext ?: return null
@@ -91,6 +106,7 @@ class UpdaterModule : Module() {
     val apk = File(dir, APK)
 
     var conn: HttpURLConnection? = null
+    cancelled = false
     return try {
       conn = (URL(url).openConnection() as HttpURLConnection).apply {
         // GitHub answers a release asset with a redirect to its asset host.
@@ -100,6 +116,7 @@ class UpdaterModule : Module() {
         connectTimeout = CONNECT_TIMEOUT_MS
         readTimeout = READ_TIMEOUT_MS
       }
+      live = conn
       val code = conn.responseCode
       if (code != 200) return rejected("http-$code")
       if (conn.url.protocol != "https") return rejected("not-https")
@@ -119,6 +136,7 @@ class UpdaterModule : Module() {
           while (true) {
             val n = src.read(buf)
             if (n < 0) break
+            if (cancelled) break
             bytes += n
             if (bytes > MAX_BYTES) break
             if (System.nanoTime() > deadline) { late = true; break }
@@ -132,6 +150,7 @@ class UpdaterModule : Module() {
         }
       }
       when {
+        cancelled -> { part.delete(); rejected("cancelled") }
         bytes > MAX_BYTES -> { part.delete(); rejected("too-big") }
         late -> { part.delete(); rejected("slow") }
         total >= 0 && bytes != total -> { part.delete(); rejected("short") }
@@ -142,9 +161,11 @@ class UpdaterModule : Module() {
     } catch (e: Exception) {
       // No network, a timeout, a connection dropped mid-file. All the same to
       // the person holding the phone: try again later.
+      // A cancel's disconnect lands here too, as a closed socket.
       part.delete()
-      rejected("network")
+      if (cancelled) rejected("cancelled") else rejected("network")
     } finally {
+      live = null
       conn?.disconnect()
     }
   }

@@ -136,6 +136,7 @@ import {
   installedVersionCode,
   updaterAvailable,
   downloadUpdate,
+  cancelUpdate,
   installUpdate,
   clearUpdate,
   laterRecord,
@@ -250,9 +251,14 @@ export default function App() {
   // failure, null otherwise.
   const [updateStep, setUpdateStep] = useState(null);
   const updateBusy = useRef(false);
-  // "Later" during a download. The download itself runs on, but the installer
-  // must not then appear over whatever the person went back to doing.
+  // "Later" after Get it. While the file downloads the banner offers Cancel
+  // instead, but Later is back for the moment the file is re-checked, and the
+  // installer must not then appear over whatever the person went back to.
   const updateDismissed = useRef(false);
+  // Cancel during a download. Checked after it returns as well as by the
+  // native side, so a cancel that raced the download's start still keeps the
+  // installer from opening.
+  const updateCancelled = useRef(false);
 
   // The picker launcher is dead until this runtime is replaced. See
   // src/recover.js for the measurement behind that claim.
@@ -663,11 +669,19 @@ export default function App() {
       }
       let installed = await installUpdate(u);
       if (installed.status !== 'ok' && (installed.reason === 'missing' || installed.reason === 'digest')) {
+        updateCancelled.current = false;
         setUpdateStep({ percent: null });
-        const got = await downloadUpdate(u, ({ bytes, total }) => setUpdateStep({ percent: downloadPercent(bytes, total) }));
+        const got = await downloadUpdate(u, ({ bytes, total }) => {
+          if (!updateCancelled.current) setUpdateStep({ percent: downloadPercent(bytes, total) });
+        });
         emit('P0.update', { route, download: got.status, reason: got.reason ?? null });
+        if (updateCancelled.current) {
+          setUpdateStep(null);
+          return;
+        }
         if (got.status !== 'ok') {
-          setUpdateStep({ problem: updateProblem(got.reason) });
+          const problem = updateProblem(got.reason);
+          setUpdateStep(problem ? { problem } : null);
           return;
         }
         if (updateDismissed.current) return;
@@ -1326,15 +1340,30 @@ export default function App() {
               disabled={Boolean(updateStep && !updateStep.problem)}
               onPress={() => getUpdate(update)}
             />
-            <Action
-              label={COPY.updateLater}
-              palette={palette}
-              onPress={() => {
-                updateDismissed.current = true;
-                rememberLater(update);
-                setUpdate(null);
-              }}
-            />
+            {/* While it downloads, the way out is Cancel, not Later. Before
+                this there was no way to stop 19 MB once started: Later hid
+                the banner and left the download running. */}
+            {updateStep && !updateStep.problem && updateStep.percent !== 100 ? (
+              <Action
+                label={COPY.cancel}
+                palette={palette}
+                onPress={() => {
+                  updateCancelled.current = true;
+                  cancelUpdate();
+                  setUpdateStep(null);
+                }}
+              />
+            ) : (
+              <Action
+                label={COPY.updateLater}
+                palette={palette}
+                onPress={() => {
+                  updateDismissed.current = true;
+                  rememberLater(update);
+                  setUpdate(null);
+                }}
+              />
+            )}
           </View>
         </View>
       ) : null}

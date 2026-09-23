@@ -181,6 +181,17 @@ export async function downloadUpdate(update, onProgress) {
   }
 }
 
+/** Stop a running download. Its `downloadUpdate` then resolves with
+ *  `{status: 'rejected', reason: 'cancelled'}`. Harmless when none is running. */
+export function cancelUpdate() {
+  if (!Updater) return;
+  try {
+    Updater.cancel();
+  } catch (e) {
+    // A build whose module predates cancel. The download runs on to its end.
+  }
+}
+
 /** Check the downloaded APK again and open Android's installer on it. */
 export async function installUpdate(update) {
   if (!Updater) return { status: 'rejected', reason: 'no-module' };
