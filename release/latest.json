@@ -2,6 +2,6 @@
   "versionCode": 6,
   "versionName": "1.0.5",
   "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.5/twitwa-1.0.5.apk",
-  "sha256": "4c8446fc72af304b2cb03ef3a189555cfab5d66745129607d08fb7e95958b3d3",
-  "notes": "Back no longer throws your card away: it closes one thing at a time and asks before losing changes. Round crop handles. New screenshot in the More menu, Reset and Done in Style, and Later hides this banner for three days. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.4."
+  "sha256": "851d41a8a831c2e433e540d3204f916a1b80c47f47816d1947079398c97c89cc",
+  "notes": "Back no longer throws your card away: it closes one thing at a time and asks before losing changes. Round crop handles. New screenshot in the More menu, Reset and Done in Style, a Cancel for a running update download, and Later hides this banner for three days. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.4."
 }
