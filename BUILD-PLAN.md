@@ -1097,6 +1097,79 @@ and a per-entry size, because 200KB–2MB per source adds up.
 Screen densities, display-zoom settings, dark and light screenshots, a very tall
 thread crop, a 720p device, a P3 device.
 
+## Future — landscape — **TODO, not scheduled (noted 2026-09-23)**
+
+The app is locked to portrait (`app.json` `"orientation": "portrait"`, and
+`screenOrientation="portrait"` in the manifest), and the lock does not hold
+everywhere:
+
+- **Android 16 ignores it on large screens.** The app targets SDK 36, and from
+  Android 16 an app's orientation lock is ignored on displays at least 600dp
+  wide (Fold, tablets). Taken from the platform documentation; not yet observed,
+  because the only device is a phone.
+- **Split-screen gives a short, wide window even on a phone.** Nothing turns off
+  resizing, and `App.js` already expects this case ("a short landscape window"
+  in the card projection). When the card does not fit it returns `null`, so the
+  stage shows nothing at all.
+
+Rotation itself is cheap. `configChanges` includes `orientation|screenSize`, so
+rotating does not recreate the activity and the edit survives. `recover.js`
+deliberately ignores width and height, so a rotation is not reported as the
+stale-launcher fault. The stage measures itself with `onLayout`, so
+`fitView`/`project` recompute on their own. The pipeline doesn't depend on
+orientation. What is missing is layout, and safe-area insets: `root` uses a
+fixed `paddingTop`, so a side cutout or a 3-button nav bar on the side would
+cover the controls.
+
+Three options were weighed:
+
+1. **Keep the lock, fix the windows it cannot stop.** Show a "window too small"
+   message instead of an empty stage, let the tools row scroll, and shrink the
+   bottom padding on short windows. Small, and needed whatever else is chosen.
+2. **Unlock and keep the column.** Rejected: at 411dp tall the stage is
+   about 200dp and a 1440x3120 screenshot fits at about 90dp wide.
+3. **Unlock with a layout chosen by width (width > height).** Three prototypes
+   of this are in `spike/results/landscape-prototypes.html` (open it in a
+   browser; drawn at 891x411dp with the real tokens and labels, switchable
+   rotation, nav mode and theme).
+
+**Chosen for when this is picked up: option 1 first, then option 3 as the Rail
+layout.** Rail puts today's controls in a 224dp column on the right, with the
+same Style toggle and crop takeover, so there is one way of working in both
+orientations and the change to `App.js` is smallest. Measured in the prototype
+with headless Chrome, not on a device:
+
+| Layout | Stage (gesture nav) | Card height vs portrait | Problem found |
+|---|---|---|---|
+| Rail | 599x339dp | 49% (52% with 3-button nav) | fits Style with about 29dp to spare, **only** if the tools and Share/Save/More are each one row; the stacked portrait bar overflows by 88dp |
+| Inspector (Style always open in a side panel) | 523x339dp | 49% | 0-3dp to spare, overflowed by 2dp in one render; any larger text size breaks it. Two ways of working (toggle in portrait, always open in landscape) |
+| Islands (controls float on a full-window stage) | 859x363dp | 52% (56%) | the floating Style panel covers the card by 13-49dp; needs its own colour tokens, `contrast.py` pairs, and touch handling over the crop gesture |
+
+The layout barely changes the card size. A tall screenshot's card is limited by
+the window's height in every layout, at about half its portrait height. The
+layouts differ only in what they do with the spare width. Keep Inspector in mind
+for screens at least 600dp wide, where a side panel is cheap.
+
+What the prototype got wrong first, and is fixed in it: web flex children
+shrink by default and React Native's do not (`flexShrink: 0`), so the page
+squashed buttons instead of overflowing, and its overflow check could not fail.
+Match that default before trusting any web mock of an RN layout.
+
+Owed before this is done, none of it run yet:
+
+- Add `react-native-safe-area-context` and replace the fixed `paddingTop`.
+- On the Pixel: rotate both ways (`settings put system accelerometer_rotation 0`,
+  then `user_rotation 1` and `3`), with gesture and 3-button nav. Which side the
+  3-button bar sits on at 270° varies between Android versions.
+- Split-screen (`am start --windowingMode 3`, or the recents menu), and a 600dp+
+  emulator for the Android 16 case.
+- Rotating mid-gesture on a crop handle, and a Skia canvas resize.
+- A larger system text size in the rail. Check that it still fits, rather than
+  assuming it does.
+- The update banner: in Rail it goes at the top of the rail.
+- No gate loads `App.js` (see the README), so none of this is covered by the
+  suites.
+
 ---
 
 ## Order rationale
