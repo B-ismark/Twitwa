@@ -27,15 +27,15 @@ export const COPY = {
   // --- actions ------------------------------------------------------------
   choose: 'Choose screenshot',
   share: 'Share',
-  // The two other ways out, in the More menu. "Save to Photos" confirms as
-  // "Saved to Photos", per the rule at the top: the verb survives the flow.
-  save: 'Save to Photos',
-  // The same action on the main bar, beside Share. "Save to Photos" wrapped
-  // to two lines there on a 1440-wide Pixel (2026-09-23); the toast still
-  // says "Saved to Photos", so the verb survives the flow.
+  // Save, on the main bar beside Share. It was "Save to Photos" in the More
+  // menu; that label wrapped to two lines on the bar on a 1440-wide Pixel
+  // (2026-09-23), and More no longer holds it. The toast still says "Saved to
+  // Photos", so the verb survives the flow.
   saveShort: 'Save',
   copyImage: 'Copy image',
-  startOver: 'Start over',
+  // Opens the picker from the editor. Replaced "Start over", whose only other
+  // job, getting back to the empty screen, Back now does.
+  newShot: 'New screenshot',
   close: 'Close',
   // The overflow behind the three dots. Named for what it holds rather than
   // for its shape, because "More" is what a person reads and "overflow" is
@@ -57,7 +57,7 @@ export const COPY = {
   done: 'Done',
 
   // --- leaving with work on screen -----------------------------------------
-  // Asked by Back and by Start over, and only when the card changed since it
+  // Asked by Back and by New screenshot, and only when the card changed since it
   // was opened or last shared, saved or copied; see backAction in src/shell.js.
   // The destructive button says what it destroys, and the safe one is the
   // way back to what the person was doing.
@@ -67,6 +67,10 @@ export const COPY = {
   discardCropBody: 'The crop goes back to how it was when you opened it.',
   discard: 'Discard',
   keepEditing: 'Keep editing',
+  // A share arriving over a card with unsaved changes.
+  replaceCardTitle: 'Replace this card?',
+  replaceCardBody: 'The screenshot you shared takes its place, and the changes to this one will be lost.',
+  replace: 'Replace',
 
   // --- the Style strip ----------------------------------------------------
   padding: 'Padding',
@@ -86,13 +90,12 @@ export const COPY = {
   working: 'Making your card',
   // There is no 'Card ready' any more. It was the caption of the state that
   // followed the Make card button, and with the card live from the moment a
-  // screenshot arrives there is no moment at which it becomes ready. The
-  // caption carries the card's size instead, which is a fact rather than an
-  // announcement.
+  // screenshot arrives there is no moment at which it becomes ready. Nor is
+  // there a card size: "1080 by 2173" was removed on 2026-09-23, and at rest
+  // the caption says nothing.
   // Shown while a takeover tool is open. It says what the thumb is for, which
   // is otherwise guessable only by trying it.
   cropHint: 'Drag the edges to choose what the card shows.',
-  cardSize: '{width} by {height}',
 
   // --- when something goes wrong ------------------------------------------
   // Each one says what happened and what to do next. None of them mention a

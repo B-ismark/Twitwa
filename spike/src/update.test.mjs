@@ -77,6 +77,13 @@ const MUTANTS = {
   mismatch_generic: ["if (reason === 'digest') return COPY.updateMismatch;", ''],
   // A phone with no installer is told to try again later, forever.
   no_installer_generic: ["if (reason === 'no-installer') return COPY.updateNoInstaller;", ''],
+  // Later hides every version from then on, so a friend who put off 1.0.5
+  // never hears about 1.0.6.
+  later_any_version: ['if (later.versionCode !== update.latestVersionCode) return false;', ''],
+  // Later is for ever: the banner never comes back for that version.
+  later_forever: ['return now - later.at < LATER_MS;', 'return true;'],
+  // A clock set back hides the banner until it catches up.
+  later_clock_back: ['if (later.at > now) return false;', ''],
 };
 
 if (process.argv.includes('--list-mutants')) {
@@ -115,7 +122,7 @@ if (BREAK && MUTANTS[BREAK]) {
 const {
   parseManifest, decide, shouldCheck, checkForUpdate, isAllowedDownloadUrl,
   isVersionCode, MANIFEST_URL, DOWNLOAD_PREFIX, CHECK_INTERVAL_MS, MAX_NOTES,
-  isSha256, installRoute, downloadPercent, updateProblem,
+  isSha256, installRoute, downloadPercent, updateProblem, laterHides,
 } = mod;
 
 let fails = 0;
@@ -395,6 +402,20 @@ console.log('the whole flow, with the network injected');
     check(`Kotlin install reports ${ex} as "${reason}"`,
       new RegExp(`private fun install[\\s\\S]*?catch \\(e: ${ex}\\) \\{\\s*(//[^\\n]*\\s*)?rejected\\("${reason}"\\)`).test(kt));
   }
+}
+
+console.log('\n"Later" puts off one version for three days');
+{
+  const u = { action: 'update', latestVersionCode: 6 };
+  const t = 1_000 * DAY;
+  const later = { versionCode: 6, at: t };
+  check('the day after Later, the banner stays hidden', laterHides(u, later, t + DAY) === true);
+  check('two days and 23 hours after, still hidden', laterHides(u, later, t + 3 * DAY - 60_000) === true);
+  check('three days after, it shows again', laterHides(u, later, t + 3 * DAY) === false);
+  check('a newer version shows at once', laterHides({ ...u, latestVersionCode: 7 }, later, t + DAY) === false);
+  check('a clock set back shows it rather than hiding it', laterHides(u, later, t - DAY) === false);
+  check('with no Later on record it shows', laterHides(u, null, t) === false);
+  check('and a malformed record reads as none', laterHides(u, { versionCode: 6 }, t) === false);
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

@@ -86,6 +86,35 @@ function writeLastChecked(ms) {
   }
 }
 
+// "Later", remembered per version. A file of its own rather than a field in
+// the check's state file: writeLastChecked replaces that file whole, so a
+// second field there would be erased by the next check.
+const LATER_FILE = 'update-later.json';
+
+/** The last "Later" as `{ versionCode, at }`, or null. Any failure reads as
+ *  none: showing the banner once more is harmless. laterHides in
+ *  src/update.js decides what the record means. */
+export function laterRecord() {
+  try {
+    const f = new File(Paths.document, LATER_FILE);
+    if (!f.exists) return null;
+    // textSync, for the reason readLastChecked gives.
+    return JSON.parse(f.textSync());
+  } catch (e) {
+    return null;
+  }
+}
+
+export function rememberLater(update) {
+  try {
+    new File(Paths.document, LATER_FILE).write(
+      JSON.stringify({ versionCode: update.latestVersionCode, at: Date.now() }),
+    );
+  } catch (e) {
+    // The banner comes back at the next daily check instead. Not worth a word.
+  }
+}
+
 /**
  * Ask whether a newer Twitwa exists. Returns the same shapes src/update.js
  * documents. Never throws.

@@ -138,8 +138,10 @@ import {
   downloadUpdate,
   installUpdate,
   clearUpdate,
+  laterRecord,
+  rememberLater,
 } from './src/update-io';
-import { installRoute, downloadPercent, updateProblem } from './src/update';
+import { installRoute, downloadPercent, updateProblem, laterHides } from './src/update';
 import { shareOutcome } from './src/sharein';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
@@ -404,9 +406,14 @@ export default function App() {
   // gap would be told to keep the previous file.
   const shownUri = useRef(null);
   // The card as it was last kept: at import, and after every Share, Save and
-  // Copy. Back and Start over ask before discarding only a card that differs
+  // Copy. Back, New screenshot and a share-in ask before discarding only a card that differs
   // from it; see unsaved in src/shell.js for why Share counts as kept.
   const kept = useRef(null);
+  // The editor as last rendered, for the share handler. It is subscribed once
+  // (see the effect on `receive`), so a closure over `ed` would read the
+  // first render's null for ever and never ask before replacing a card.
+  const edRef = useRef(null);
+  edRef.current = ed;
 
   /**
    * Decode `uri`, propose a crop, and open the editor on it. Both ways in end
@@ -548,6 +555,24 @@ export default function App() {
       setProblem(o.message);
       return;
     }
+    // A share over a card with unsaved changes asks first, by the same rule
+    // Back and New screenshot use. Keep editing drops the share: its copy is
+    // not on screen, so the next take cleans it up like any other.
+    if (unsaved(edRef.current, kept.current)) {
+      const replace = await new Promise((resolve) => {
+        Alert.alert(
+          COPY.replaceCardTitle,
+          COPY.replaceCardBody,
+          [
+            { text: COPY.keepEditing, style: 'cancel', onPress: () => resolve(false) },
+            { text: COPY.replace, style: 'destructive', onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) },
+        );
+      });
+      emit('share.in.ask', { why, replace });
+      if (!replace) return;
+    }
     // A share replaces whatever is on screen, open tool and menus included:
     // it is a deliberate act from another app, and there is nowhere to put it
     // aside until the person is done.
@@ -590,7 +615,9 @@ export default function App() {
       const r = await checkForUpdate();
       if (!live) return;
       emit('P0.updateCheck', { action: r.action, installed: installedVersionCode(), latest: r.latestVersionCode ?? null, reason: r.reason ?? null });
-      if (r.action === 'update') setUpdate(r);
+      // Put off with Later less than three days ago: the check still ran and
+      // is still logged, the banner just stays down. See laterHides.
+      if (r.action === 'update' && !laterHides(r, laterRecord(), Date.now())) setUpdate(r);
     })();
     return () => { live = false; };
   }, [emit]);
@@ -918,7 +945,7 @@ export default function App() {
   //     and every module downstream ever read.
   //   - `liveCrop` is what the overlay draws while a finger is down, and it is
   //     written from `ed.crop` whenever `ed.crop` changes for any other
-  //     reason — a new image, Reset, Start over, an auto-proposal.
+  //     reason — a new image, Reset, a new screenshot, an auto-proposal.
   //   - Exactly one write flows the other way, in `onFinalize`, and after it
   //     the effect below writes the same value straight back.
   //
@@ -1181,11 +1208,15 @@ export default function App() {
     );
   }, []);
 
-  const startOver = useCallback(() => {
+  // Another screenshot, from the editor, in one tap. It asks before the
+  // picker rather than after it: a picker cancelled after Discard leaves the
+  // card where it was, because nothing replaced it, which is the safe way
+  // round. Replaces Start over, whose other job Back now does.
+  const newShot = useCallback(() => {
     setMenu(false);
-    if (unsaved(ed, kept.current)) confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
-    else clearEditor();
-  }, [ed, confirmDiscard, clearEditor]);
+    if (unsaved(ed, kept.current)) confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, pick);
+    else pick();
+  }, [ed, confirmDiscard, pick]);
 
   // Android's Back, one layer at a time. Before this there was no handler, so
   // Back closed the activity and the card went with it, unasked. The order
@@ -1214,7 +1245,10 @@ export default function App() {
   else if (busy) caption = COPY.working;
   else if (notice) caption = notice;
   else if (ed && ed.tool === 'crop') caption = COPY.cropHint;
-  else if (comp) caption = fill(COPY.cardSize, { width: comp.width, height: comp.height });
+  // Nothing at rest. It used to carry the export's size, "1080 by 2173",
+  // which nobody holding the app acts on (the owner's call, 2026-09-23). The
+  // strip keeps its height when empty, so the layout does not jump and the
+  // long press into Developer tools still has somewhere to land.
 
   const mode = ed ? barMode(ed) : 'main';
   const takeover = mode === 'takeover';
@@ -1261,6 +1295,7 @@ export default function App() {
               palette={palette}
               onPress={() => {
                 updateDismissed.current = true;
+                rememberLater(update);
                 setUpdate(null);
               }}
             />
@@ -1378,19 +1413,21 @@ export default function App() {
           stops={stops}
           stopLabel={stopLabel}
           frameLabel={frameLabel}
+          canReset={canReset(ed)}
+          onReset={resetT}
+          onDone={done}
         />
       ) : null}
 
       {menu ? (
         <View style={[styles.menu, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+          {/* Save is on the bar and no longer here. Developer tools is not
+              here either: it is for us, not for the people Twitwa is handed
+              to, and the long press on the caption is its way in. */}
           {src && ed && !busy ? (
-            <>
-              <MenuItem label={COPY.save} palette={palette} onPress={save} />
-              <MenuItem label={COPY.copyImage} palette={palette} onPress={copyImage} />
-            </>
+            <MenuItem label={COPY.copyImage} palette={palette} onPress={copyImage} />
           ) : null}
-          <MenuItem label={COPY.startOver} palette={palette} onPress={startOver} />
-          <MenuItem label={COPY.devTitle} palette={palette} onPress={() => { setMenu(false); setDevOpen(true); }} />
+          <MenuItem label={COPY.newShot} palette={palette} onPress={newShot} />
         </View>
       ) : null}
 
@@ -1419,12 +1456,12 @@ export default function App() {
           </View>
           <View style={styles.bar}>
             <Action label={COPY.share} palette={palette} primary wide disabled={busy} onPress={share} />
-            {/* Save beside Share, and still in More. The owner asked for it on
+            {/* Save beside Share, and only here. The owner asked for it on
                 the share sheet itself; Android lets an app add its own action
                 there only from 14 on, and expo-sharing cannot, so it is here. */}
             <Action label={COPY.saveShort} palette={palette} disabled={busy} onPress={save} />
             {/* Disabled while busy, as Share is. Open during an export, the menu
-                lacked Save and Copy with no reason given, and Start over from it
+                lacked Save and Copy with no reason given, and Start over (since replaced by New screenshot) from it
                 let "Saved to Photos" land on the empty screen. */}
             <Action label={COPY.more} palette={palette} selected={menu} disabled={busy} onPress={() => setMenu((v) => !v)} />
           </View>
@@ -1813,9 +1850,15 @@ function CropLoupe({ crop, view, stage, image, handle, on }) {
  * Padding, corners and background. No apply: every control here is already
  * its own preview, which is what `TOOL.style.takeover === false` means.
  */
-function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel }) {
+function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset: resettable, onReset, onDone }) {
   return (
     <View style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+      {/* Reset to a new card's style, and a way out that is not "tap Style
+          again". Before these the strip had neither. */}
+      <View style={styles.stripHead}>
+        <Chip label={COPY.reset} palette={palette} on={false} disabled={!resettable} onPress={onReset} />
+        <Chip label={COPY.done} palette={palette} on onPress={onDone} />
+      </View>
       <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.padding}</Text>
       <View style={styles.chips}>
         {stops.map((s) => (
@@ -1904,18 +1947,20 @@ function Slider({ value, min, max, onChange, palette }) {
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /** A small selectable label. On state is shown by fill AND border, not colour alone. */
-function Chip({ label, on, onPress, palette }) {
+function Chip({ label, on, onPress, palette, disabled = false }) {
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected: on }}
+      accessibilityState={{ selected: on, disabled }}
       style={[
         styles.chip,
         {
           backgroundColor: on ? palette.signal : 'transparent',
           borderColor: on ? palette.signal : palette.hairline,
+          opacity: disabled ? 0.4 : 1,
         },
       ]}
     >
@@ -2076,6 +2121,7 @@ const styles = StyleSheet.create({
     marginBottom: SPACE.sm,
   },
   stripLabel: { ...TYPE.caption, marginTop: SPACE.xs },
+  stripHead: { flexDirection: 'row', justifyContent: 'space-between' },
   chips: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.xs },
   chip: {
     minHeight: TOUCH,

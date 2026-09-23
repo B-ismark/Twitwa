@@ -287,6 +287,31 @@ export function downloadPercent(bytes, total) {
 }
 
 /**
+ * How long "Later" keeps one version's banner away.
+ *
+ * The check is already throttled to once a day, so before this "Later" meant
+ * "tomorrow". Three days is long enough not to nag and short enough that a
+ * friend who always taps Later still hears about the update this week.
+ */
+export const LATER_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
+ * Should the banner for `update` stay hidden because of an earlier "Later"?
+ *
+ * @param later  `{ versionCode, at }` as update-io.js stored it, or null.
+ *
+ * Only for the version that was put off: a newer one is news, and shows at
+ * once. A `later.at` in the future means the clock went backwards, and hiding
+ * until the clock catches up could hide the banner for years, so it shows.
+ */
+export function laterHides(update, later, now) {
+  if (!update || !later || typeof later.at !== 'number' || typeof now !== 'number') return false;
+  if (later.versionCode !== update.latestVersionCode) return false;
+  if (later.at > now) return false;
+  return now - later.at < LATER_MS;
+}
+
+/**
  * The sentence for an updater answer that was not 'ok'. Only the reasons a
  * person can act on differently get their own words: a file that did not
  * match is not fixed by trying again in a minute, and a phone with no

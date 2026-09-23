@@ -1105,6 +1105,49 @@ thread crop, a 720p device, a P3 device.
 
 ---
 
+## UX pass — 2026-09-23 — the owner's list
+
+Asked for after Back handling and the round crop handles (branch
+`back-and-dots`). Seven flows that did not make sense on the device, and what
+each becomes. The owner chose all seven, and chose "show nothing" for 4.
+
+1. **Developer tools out of More.** Friends saw a measurement panel meant for
+   us. It stays behind the long press on the caption strip, which was already
+   the documented way in; the strip keeps its height when empty, so the long
+   press still has a target.
+2. **"New screenshot" in More, replacing Start over.** Picking another
+   screenshot was More, Start over, Choose screenshot. Now one item opens the
+   picker. If the card has unsaved changes it asks "Discard this card?" first.
+   A picker cancelled after that keeps the current card, since nothing was
+   replaced. Start over goes: Back now returns to the empty screen, which was
+   its only other job.
+3. **A share into a changed card asks.** "Replace this card?" with Replace
+   and Keep editing, using the same `unsaved` rule Back uses. Keep editing
+   drops the share; the shared copy is cleaned up by the next take, as any
+   copy that is not on screen already is. An untouched or kept card is
+   replaced without asking, as before.
+4. **The caption shows nothing at rest.** "1080 by 2173" was the export's
+   pixel size, which nobody holding the app acts on. The caption still carries
+   problems, "Making your card", confirmations and the crop hint.
+5. **Save only on the bar.** More holds Copy image and New screenshot.
+6. **Style gets Reset and Done.** Reset puts padding, corners and background
+   back to the defaults a new card opens with, and is dead when they already
+   are; Done closes the strip. Before, the only way out was tapping Style again
+   and the only undo was by hand. `RESET_TO.style` in src/shell.js now holds
+   those defaults, and `editorState` reads the same table.
+7. **"Later" holds for three days per version.** Correction to the review
+   that raised this: the check is already throttled to once a day, so the
+   banner came back daily, not on every launch. Later now hides that version
+   for three days; a newer version shows at once, and a clock that went
+   backwards shows it rather than hiding it forever. `laterHides` in
+   src/update.js is the rule; update-io.js stores it beside the check.
+
+Each rule that can be pure is pure and has a mutant (6 in shell.test.mjs, 7 in
+update.test.mjs). 1, 2, 3 and 5 live in App.js, which no gate loads, so they
+are verified on the device or not at all.
+
+---
+
 ## Order rationale
 
 Phase 0 before everything because the premise is unproven. Phase 1 before the

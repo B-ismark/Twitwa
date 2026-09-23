@@ -55,14 +55,14 @@ const ALLOWED_CAPS = new Set(['PNG', 'APK', 'JPEG', 'HTTP', 'HTTPS', 'OK']);
 // Keys whose value is a control's label rather than a sentence. They get the
 // stricter rules: short, and no full stop, because a button is not a sentence.
 const LABEL_KEYS = new Set([
-  'choose', 'share', 'startOver', 'close', 'more',
+  'choose', 'share', 'newShot', 'close', 'more',
   'crop', 'style',
   'cancel', 'reset', 'done',
   'padding', 'corners', 'background',
   'snug', 'standard', 'roomy',
   'matchFrame', 'paperFrame', 'inkFrame',
   'updateGet', 'updateLater', 'devTitle',
-  'save', 'copyImage',
+  'saveShort', 'copyImage', 'discard', 'keepEditing', 'replace',
 ]);
 
 const BREAK = process.env.BREAK || '';

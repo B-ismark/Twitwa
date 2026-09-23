@@ -105,6 +105,17 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
 /**
+ * What a new card's Style starts at, and what Style's Reset goes back to. One
+ * table for both, so Reset cannot return a card to anything but the one the
+ * editor opened on.
+ */
+const STYLE_DEFAULTS = {
+  padding: PADDING.standard,
+  radius: DEFAULT_RADIUS,
+  background: BACKGROUNDS[0],
+};
+
+/**
  * The editor's state for one screenshot.
  *
  * @param proposed  the auto-proposed crop in source pixels, which is both the
@@ -116,9 +127,7 @@ export function editorState(proposed) {
     tool: null,
     proposed: copy(proposed),
     crop: copy(proposed),
-    padding: PADDING.standard,
-    radius: DEFAULT_RADIUS,
-    background: BACKGROUNDS[0],
+    ...STYLE_DEFAULTS,
     // The open tool's owned fields as they were when it opened. Null whenever
     // no takeover tool is open, which is what makes "Cancel with nothing to
     // cancel" unrepresentable rather than merely unhandled.
@@ -126,10 +135,16 @@ export function editorState(proposed) {
   };
 }
 
-/** What Reset puts back, per tool. The base value, not the open-time value. */
+/**
+ * What Reset puts back, per tool. The base value, not the open-time value.
+ *
+ * Style's Reset is the defaults a new card opens with. It used to be `{}`, a
+ * Reset with nothing to do, and the Style strip had no Reset at all: the only
+ * undo for a padding, a corner and a frame was to put each back by hand.
+ */
 const RESET_TO = {
   crop: (state) => ({ crop: copy(state.proposed) }),
-  style: () => ({}),
+  style: () => ({ ...STYLE_DEFAULTS }),
 };
 
 function snapshot(state, tool) {

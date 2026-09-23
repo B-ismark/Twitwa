@@ -5,7 +5,7 @@
 //            radius_unclamped reopen_allowed canreset_blind stops_typed \
 //            snap_constant unsaved_never unsaved_tool kept_ignored \
 //            back_crop_silent back_never_asks back_exits_editor back_menu_last \
-//            back_ignores_busy; do
+//            back_ignores_busy style_reset_noop style_reset_partial; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -119,6 +119,18 @@ if (BREAK === 'snapshot_shallow') {
   F.setBackground = (name) => name;
 } else if (BREAK === 'canreset_blind') {
   F.canReset = (state) => Boolean(state.tool);
+} else if (BREAK === 'style_reset_noop') {
+  // Style's Reset as it was: nothing to put back, so the strip's Reset is
+  // dead whatever the card looks like.
+  F.resetTool = (state) => (state.tool === 'style' ? state : real.resetTool(state));
+  F.canReset = (state) => (state.tool === 'style' ? false : real.canReset(state));
+} else if (BREAK === 'style_reset_partial') {
+  // Reset forgets the background, the kind of three-of-four restore this
+  // module's header warns about.
+  F.resetTool = (state) => {
+    const r = real.resetTool(state);
+    return state.tool === 'style' ? { ...r, background: state.background } : r;
+  };
 } else if (BREAK === 'unsaved_never') {
   // Nothing is ever unsaved, which is the app before this check: Back left
   // with the card and said nothing.
@@ -422,6 +434,21 @@ console.log('\nthe corner slider cannot leave the card behind');
   let threw = false;
   try { F.setRadius(undefined); } catch (e) { threw = true; }
   check('a non-number throws', threw);
+}
+
+console.log('\nStyle Reset goes back to the card the editor opened on');
+{
+  const opened = fresh();
+  const styled = { ...F.openTool(opened, 'style'), padding: PADDING.roomy, radius: 0, background: 'ink' };
+  check('Reset is live once the style has changed', F.canReset(styled) === true);
+  const back = F.resetTool(styled);
+  check('and puts padding, corners and background back to a new card\'s',
+    back.padding === opened.padding && back.radius === opened.radius && back.background === opened.background,
+    JSON.stringify([back.padding, back.radius, back.background]));
+  check('without closing the strip', back.tool === 'style');
+  check('or touching the crop', back.crop.y === opened.crop.y && back.crop.h === opened.crop.h);
+  check('and is dead once it has', F.canReset(back) === false);
+  check('dead too on a strip opened on the defaults', F.canReset(F.openTool(opened, 'style')) === false);
 }
 
 console.log('\nleaving asks only when there is work to lose');
