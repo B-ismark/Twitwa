@@ -15,8 +15,7 @@ import {
 import {
   rowInkProfile,
   detectStatusBar,
-  zoneInk,
-  looksLikeStatusBar,
+  judgeStatusBar,
   maxChannelDelta,
   rgbHex,
 } from './pixels';
@@ -135,12 +134,11 @@ export function measureStatusBar(img, rows = 400) {
   // on the author's avatar-and-name row, so trimming it would have removed the
   // byline. The shape test is what stops that.
   if (det.detected) {
-    const zones = zoneInk(buf, rowBytes, width, det.inkAt, det.cut);
-    const verdict = looksLikeStatusBar(zones, det.cut, img.height());
-    out.zones = Array.from(zones, (z) => +z.toFixed(4));
-    out.looksLikeStatusBar = verdict.likely;
-    out.shapeReasons = verdict.reasons;
-    out.shouldTrim = verdict.likely;
+    const judged = judgeStatusBar(det, buf, rowBytes, width, img.height());
+    out.zones = Array.from(judged.zones, (z) => +z.toFixed(4));
+    out.looksLikeStatusBar = judged.likely;
+    out.shapeReasons = judged.shapeReasons;
+    out.shouldTrim = judged.likely;
   } else {
     out.shouldTrim = false;
   }

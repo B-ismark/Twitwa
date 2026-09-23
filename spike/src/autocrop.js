@@ -8,8 +8,10 @@
 // which is a different job from `detectStatusBar`. The status bar is inked —
 // a clock, a battery, two or three icons — so no amount of flat-band trimming
 // removes it, and a proposal that leaves it on is not a card. So this takes
-// the status-bar cut as a floor on the top edge and does the four edges
-// itself. Both, or neither works.
+// the status-bar cut as a floor on the top edge -- when, and only when, the
+// band above it passes the shape test in `judgeStatusBar` -- and does the four
+// edges itself. Both, or neither works. Without the shape test the floor lands
+// on the author's byline of any screenshot with no status bar; see proposeCrop.
 //
 // It is NOT a subject detector. Nothing here knows what a post is; it knows
 // what an unbroken run of one colour is. On a screenshot with a gradient

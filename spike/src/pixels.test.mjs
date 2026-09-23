@@ -198,6 +198,41 @@ if (BREAK === 'ring_flat') {
   F.inkRuns = (...a) => real.inkRuns(...a).map((r) => ({ ...r, gapAbove: 0, gapBelow: 0 }));
 } else if (BREAK === 'sb_shape') {
   F.looksLikeStatusBar = (...a) => ({ ...real.looksLikeStatusBar(...a), likely: true, reasons: [] });
+} else if (BREAK === 'shape_left_dead' || BREAK === 'shape_right_dead' || BREAK === 'shape_middle_dead') {
+  // One reason of the shape test switched off. Each is invisible to a
+  // fixture that fails for two reasons at once, which is what every header
+  // fixture here did until 2026-09-23.
+  const drop = { shape_left_dead: 'no ink at the left edge', shape_right_dead: 'no ink at the right edge',
+    shape_middle_dead: 'middle is not empty' }[BREAK];
+  F.looksLikeStatusBar = (...a) => {
+    const r = real.looksLikeStatusBar(...a);
+    const reasons = r.reasons.filter((x) => x !== drop);
+    return { ...r, reasons, likely: reasons.length === 0 };
+  };
+} else if (BREAK === 'shape_tall_ge') {
+  // `>=` for `>`: a band at exactly the limit rejected.
+  F.looksLikeStatusBar = (zones, bandHeight, imageHeight, opts) => {
+    const r = real.looksLikeStatusBar(zones, bandHeight, imageHeight, opts);
+    if (bandHeight / imageHeight !== 0.075) return r;
+    const reasons = [...r.reasons, 'band is too tall for a status bar'];
+    return { ...r, reasons, likely: false };
+  };
+} else if (BREAK === 'judge_undetected_likely') {
+  // Nothing detected, and the verdict says status bar anyway.
+  F.judgeStatusBar = (sb, ...a) => (sb.detected ? real.judgeStatusBar(sb, ...a)
+    : { ...sb, likely: true, zones: null, shapeReasons: [] });
+} else if (BREAK === 'judge_no_early') {
+  // The not-detected early return deleted, so the shape test runs over rows
+  // undefined..0 and reports zones for a boundary that does not exist.
+  F.judgeStatusBar = (sb, buf, rowBytes, width, imageHeight) => {
+    const zones = real.zoneInk(buf, rowBytes, width, sb.inkAt, sb.cut);
+    const shape = real.looksLikeStatusBar(zones, sb.cut, imageHeight);
+    return { ...sb, zones, likely: shape.likely, shapeReasons: shape.reasons };
+  };
+} else if (BREAK === 'judge_width_as_height') {
+  // The image's width taken for its height: "too tall" becomes a fraction of
+  // the wrong axis.
+  F.judgeStatusBar = (sb, buf, rowBytes, width) => real.judgeStatusBar(sb, buf, rowBytes, width, width);
 } else if (BREAK === 'zones') {
   F.zoneInk = (b, rb, w) => new Float32Array(5);
 } else if (BREAK === 'edge_one') {
@@ -511,6 +546,58 @@ console.log('looksLikeStatusBar separates a status bar from an app header');
   const tall = F.looksLikeStatusBar(zsb, 400, 1000);
   check('correct shape but too tall is rejected', tall.likely === false, JSON.stringify(tall));
   check('and says why', tall.reasons.some((r) => r.includes('too tall')), JSON.stringify(tall.reasons));
+
+  // ONE REASON AT A TIME. The header above fails on two reasons, so it pins
+  // neither: switch either off and it is still rejected by the other. The
+  // byline fix (2026-09-23) rests on this test, so each reason gets a fixture
+  // that fails on it alone, with the exact reason list asserted.
+  const ok = [0.1, 0.05, 0, 0.05, 0.1];
+  const only = (name, zones, band, height, reason) => {
+    const v = F.looksLikeStatusBar(zones, band, height);
+    check(`${name} alone is rejected`, v.likely === false, JSON.stringify(v));
+    check(`${name}: that is the only reason`, JSON.stringify(v.reasons) === JSON.stringify([reason]),
+      JSON.stringify(v.reasons));
+  };
+  const base = F.looksLikeStatusBar(ok, 30, 1000);
+  check('the one-reason fixtures start from a status bar that passes', base.likely === true,
+    JSON.stringify(base.reasons));
+  only('no left-edge ink', [0, 0, 0, 0.05, 0.1], 30, 1000, 'no ink at the left edge');
+  only('no right-edge ink', [0.1, 0.05, 0, 0, 0], 30, 1000, 'no ink at the right edge');
+  only('an inked middle', [0.1, 0, 0.1, 0, 0.1], 30, 1000, 'middle is not empty');
+  only('a band just over 7.5% of the image', ok, 76, 1000, 'band is too tall for a status bar');
+  const edge = F.looksLikeStatusBar(ok, 75, 1000);
+  check('a band at exactly 7.5% still passes', edge.likely === true, JSON.stringify(edge.reasons));
+}
+
+console.log('judgeStatusBar pairs the detector with the shape test');
+{
+  // The status-bar image from above: glyphs at both edges, rows 10..22, 1000
+  // rows tall and 200 wide, so width, band and height are three different
+  // numbers and a swap between any two of them shows.
+  const img = blank(200, 1000, [255, 255, 255]);
+  for (let x = 4; x < 40; x += 8) fillRect(img, { x, y: 10, w: 3, h: 12 }, [0, 0, 0]);
+  for (let x = 160; x < 196; x += 8) fillRect(img, { x, y: 10, w: 3, h: 12 }, [0, 0, 0]);
+  const sb = { detected: true, inkAt: 10, cut: 30 };
+
+  const j = F.judgeStatusBar(sb, img.buf, img.rowBytes, 200, 1000);
+  check('a status bar is judged likely', j.likely === true, JSON.stringify(j.shapeReasons));
+  check('the detector fields come through', j.detected === true && j.cut === 30 && j.inkAt === 10,
+    JSON.stringify({ detected: j.detected, cut: j.cut, inkAt: j.inkAt }));
+  const direct = real.zoneInk(img.buf, img.rowBytes, 200, 10, 30);
+  check('its zones are zoneInk over inkAt..cut',
+    !!j.zones && JSON.stringify(Array.from(j.zones)) === JSON.stringify(Array.from(direct)),
+    JSON.stringify(j.zones && Array.from(j.zones)));
+
+  // "Too tall" is a fraction of the image's HEIGHT. 30 rows is 3% of 1000 and
+  // 10% of 300, so the same band on a shorter image must be rejected.
+  const short = F.judgeStatusBar(sb, img.buf, img.rowBytes, 200, 300);
+  check('the height it is judged against is the one passed', short.likely === false,
+    JSON.stringify(short.shapeReasons));
+
+  const none = F.judgeStatusBar({ detected: false, cut: 0, reason: 'no ink' }, img.buf, img.rowBytes, 200, 1000);
+  check('nothing detected is never likely', none.likely === false, String(none.likely));
+  check('and has no zones', none.zones === null, JSON.stringify(none.zones));
+  check('and keeps the detector reason', none.reason === 'no ink', String(none.reason));
 }
 
 console.log('regionBackground respects its rect');

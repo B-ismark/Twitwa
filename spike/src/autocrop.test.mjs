@@ -167,6 +167,11 @@ if (BREAK === 'band_symmetric') {
   // proposeFromImage handing the proposal a bare detectStatusBar answer with
   // the verdict faked as a pass: the path the editor actually took in 1.0.2.
   F.proposeFromImage = (img, read, opts) => body(img, read, opts, { unjudged: true });
+} else if (BREAK === 'band_as_height') {
+  // The status band's height passed where the image's belongs. "Too tall" is
+  // then a fraction of 400 rows, a real ~100-row status bar is 25% of that,
+  // and every one is rejected: the fix turns into "never trim".
+  F.proposeFromImage = (img, read, opts) => body(img, read, opts, { bandAsHeight: true });
 } else if (BREAK === 'budget_whole') {
   // Over the column budget gives up on BOTH axes rather than on the one it
   // could not measure. The vertical trim was fine and is thrown away.
@@ -211,7 +216,7 @@ function body(img, read, { step = real.PROFILE_STEP, band = real.STATUS_BAND, bu
   const sb = detectStatusBar(bandRows);
   const statusBar = how.unjudged
     ? { ...sb, likely: sb.detected }
-    : judgeStatusBar(sb, c.buf, c.rowBytes, width, height);
+    : judgeStatusBar(sb, c.buf, c.rowBytes, width, how.bandAsHeight ? h : height);
   return real.proposeCrop({ width, height, rows, cols, statusBar });
 }
 
@@ -310,7 +315,9 @@ console.log('\nthe status bar is ink, so the band trim walks past it');
   check('with it the top is the status-bar cut', r.trimmed.top === 96, String(r.trimmed.top));
   check('the crop starts there', r.crop.y === 96, String(r.crop.y));
   check('and the height follows it', r.crop.h === H - 96 - BOTTOM, String(r.crop.h));
-  check('and it says why', r.reasons.some((s) => s.includes('status bar')), JSON.stringify(r.reasons));
+  check('and it says why, with both rows',
+    r.reasons.includes('the status bar is inked, so the top was cut at row 96 instead of 6'),
+    JSON.stringify(r.reasons));
 
   // Only ever a floor. Someone who already cropped below their status bar has
   // a flat lead LARGER than the cut, and taking the cut puts the top of the
@@ -332,8 +339,8 @@ console.log('\nthe status bar is ink, so the band trim walks past it');
     header.trimmed.top === 6, String(header.trimmed.top));
   check('so the crop starts above the byline', header.crop.y === 6, String(header.crop.y));
   check('and the height keeps it', header.crop.h === H - 6 - BOTTOM, String(header.crop.h));
-  check('and it says the edge was not a status bar',
-    header.reasons.some((s) => s.includes('does not look like a status bar')),
+  check('and it says the edge was not a status bar, with both rows',
+    header.reasons.includes('the edge at row 96 does not look like a status bar, so the top was left at row 6'),
     JSON.stringify(header.reasons));
 
   // A bare detectStatusBar answer has no `likely` at all. That is a caller
@@ -631,7 +638,12 @@ console.log('\nproposeFromImage: the whole path, from pixels to a crop');
   // A status bar: a clock at the left, icons at the right, empty middle, and
   // thin. The same code must still cut this one, or the fix is just "never
   // trim", which the band trim would also survive.
-  const BAR_END = 30;
+  //
+  // 40 rows, NOT 30. 40 is 4.4% of the 900-row image and 10% of the 400-row
+  // status band and of the 400-px width, so judging it against either of
+  // those instead of the height rejects it. At 30 it sat at exactly 7.5% of
+  // 400, the limit, and both of those mutants survived review.
+  const BAR_END = 40;
   const bar = topped(BAR_END, (x) => (x >= 16 && x < 60) || (x >= W - 70 && x < W - 20));
   const sb = fake(W, H, { buf: bar });
   const sbGot = F.proposeFromImage(sb, sb.read);
