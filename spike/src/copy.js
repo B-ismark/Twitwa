@@ -30,6 +30,10 @@ export const COPY = {
   // The two other ways out, in the More menu. "Save to Photos" confirms as
   // "Saved to Photos", per the rule at the top: the verb survives the flow.
   save: 'Save to Photos',
+  // The same action on the main bar, beside Share. "Save to Photos" wrapped
+  // to two lines there on a 1440-wide Pixel (2026-09-23); the toast still
+  // says "Saved to Photos", so the verb survives the flow.
+  saveShort: 'Save',
   copyImage: 'Copy image',
   startOver: 'Start over',
   close: 'Close',

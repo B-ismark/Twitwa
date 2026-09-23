@@ -1366,7 +1366,7 @@ export default function App() {
             {/* Save beside Share, and still in More. The owner asked for it on
                 the share sheet itself; Android lets an app add its own action
                 there only from 14 on, and expo-sharing cannot, so it is here. */}
-            <Action label={COPY.save} palette={palette} disabled={busy} onPress={save} />
+            <Action label={COPY.saveShort} palette={palette} disabled={busy} onPress={save} />
             {/* Disabled while busy, as Share is. Open during an export, the menu
                 lacked Save and Copy with no reason given, and Start over from it
                 let "Saved to Photos" land on the empty screen. */}
