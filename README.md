@@ -97,7 +97,7 @@ What the extra recipients *do* change, none of it about policy:
   **124,548,439 bytes**, which is not a thing anyone sends over a chat app. It
   was **32,886,397 bytes** after two Gradle properties, and is **19,211,087**
   since 2026-09-22, when the owner dropped 32-bit and R8 went on; 1.0.2, with
-  the share-in module, is **19,220,311**, 1.0.3 is **19,220,639**, 1.0.4 is **19,230,939**, and 1.0.5 is **19,236,487**. See "Making the
+  the share-in module, is **19,220,311**, 1.0.3 is **19,220,639**, 1.0.4 is **19,230,939**, 1.0.5 is **19,236,487**, and 1.0.6 is **19,235,347**. See "Making the
   APK small enough to send" below — the whole of the problem was in `lib/`.
 - **Nothing tells a recipient that a new version exists.** There is no store, so
   there is no update notification unless the app makes one. See "Telling people

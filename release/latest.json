@@ -1,7 +1,7 @@
 {
-  "versionCode": 6,
-  "versionName": "1.0.5",
-  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.5/twitwa-1.0.5.apk",
-  "sha256": "851d41a8a831c2e433e540d3204f916a1b80c47f47816d1947079398c97c89cc",
-  "notes": "Back no longer throws your card away: it closes one thing at a time and asks before losing changes. Round crop handles. New screenshot in the More menu, Reset and Done in Style, a Cancel for a running update download, and Later hides this banner for three days. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.4."
+  "versionCode": 7,
+  "versionName": "1.0.6",
+  "url": "https://github.com/B-ismark/Twitwa/releases/download/v1.0.6/twitwa-1.0.6.apk",
+  "sha256": "8514eaa829e33fca2454b33f32e964e0fd884e12bafbc3f23e08c112a05dd25e",
+  "notes": "Sharper cards: your screenshot is no longer shrunk, so saved cards keep every pixel of the original. Very long screenshots are still scaled to fit, now smoothly. Corners is gone from Style. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.5."
 }
