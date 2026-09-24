@@ -2,7 +2,7 @@
   "expo": {
     "name": "Twitwa",
     "slug": "twitwa",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -17,7 +17,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "dev.bismark.twitwa",
-      "versionCode": 6,
+      "versionCode": 7,
       "intentFilters": [
         {
           "action": "SEND",
