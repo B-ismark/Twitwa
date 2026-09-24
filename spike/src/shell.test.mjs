@@ -2,11 +2,11 @@
 //
 //   for b in snapshot_shallow cancel_keeps done_restores reset_to_session \
 //            style_takeover canvas_flag no_snap pad_unclamped bg_unvalidated \
-//            radius_unclamped reopen_allowed canreset_blind stops_typed \
+//            reopen_allowed canreset_blind stops_typed \
 //            snap_constant unsaved_never unsaved_tool kept_ignored \
 //            back_crop_silent back_never_asks back_exits_editor back_menu_last \
 //            back_ignores_busy style_reset_noop style_reset_partial \
-//            unsaved_no_radius style_reset_crop; do
+//            style_reset_crop; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -31,7 +31,6 @@
 // in whole pixels of padding -- units a thumb can feel.
 import * as real from './shell.js';
 import { PADDING, padPixels } from './sizing.js';
-import { MAX_RADIUS } from './compose.js';
 
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
@@ -102,8 +101,6 @@ if (BREAK === 'snapshot_shallow') {
     const hit = real.padStops().find((s) => s.value === v);
     return { padding: v, stop: hit ? hit.key : null };
   };
-} else if (BREAK === 'radius_unclamped') {
-  F.setRadius = (frac) => frac;
 } else if (BREAK === 'reopen_allowed') {
   // Opening Crop over an open Crop silently takes a fresh snapshot, so the
   // session already running can never be cancelled back to where it began.
@@ -140,11 +137,6 @@ if (BREAK === 'snapshot_shallow') {
     const r = real.resetTool(state);
     return state.tool === 'style' ? { ...r, crop: { ...state.proposed } } : r;
   };
-} else if (BREAK === 'unsaved_no_radius') {
-  // The corners left out of the compared fields, so a corner drag followed by
-  // Back leaves without asking. Found in review, 2026-09-23.
-  F.unsaved = (state, kept) =>
-    real.unsaved(state && kept ? { ...state, radius: kept.radius } : state, kept);
 } else if (BREAK === 'unsaved_never') {
   // Nothing is ever unsaved, which is the app before this check: Back left
   // with the card and said nothing.
@@ -247,7 +239,7 @@ console.log('\na takeover tool shows the raw screenshot, because that is what is
   check('Crop shows the screenshot', F.canvasShows(c) === 'screenshot', F.canvasShows(c));
   check('and takes the bar over', F.barMode(c) === 'takeover', F.barMode(c));
   const y = F.openTool(fresh(), 'style');
-  // The one that matters: Style is adjusting the padding and the corners, and
+  // The one that matters: Style is adjusting the padding and the frame, and
   // both are invisible on a raw screenshot.
   check('Style keeps the card on the canvas', F.canvasShows(y) === 'card', F.canvasShows(y));
   check('and opens a strip rather than a takeover', F.barMode(y) === 'strip', F.barMode(y));
@@ -440,28 +432,18 @@ console.log('\nthe padding drag snaps, clamps, and says which chip lights');
   check('and a missing crop width throws rather than picking a band for itself', threwW);
 }
 
-console.log('\nthe corner slider cannot leave the card behind');
-{
-  check('the top of the slider is what compose will accept', F.setRadius(1) === MAX_RADIUS, String(F.setRadius(1)));
-  check('the bottom is square', F.setRadius(-1) === 0, String(F.setRadius(-1)));
-  check('and a value inside the range is its own', F.setRadius(0.02) === 0.02);
-  let threw = false;
-  try { F.setRadius(undefined); } catch (e) { threw = true; }
-  check('a non-number throws', threw);
-}
-
 console.log('\nStyle Reset goes back to the card the editor opened on');
 {
   // The crop is moved off the proposal first, as Crop and Done would leave
   // it, so a Reset that also put the crop back would show.
   const proposal = fresh();
   const opened = { ...proposal, crop: { ...proposal.crop, y: proposal.crop.y + 40, h: proposal.crop.h - 40 } };
-  const styled = { ...F.openTool(opened, 'style'), padding: PADDING.roomy, radius: 0, background: 'ink' };
+  const styled = { ...F.openTool(opened, 'style'), padding: PADDING.roomy, background: 'ink' };
   check('Reset is live once the style has changed', F.canReset(styled) === true);
   const back = F.resetTool(styled);
-  check('and puts padding, corners and background back to a new card\'s',
-    back.padding === opened.padding && back.radius === opened.radius && back.background === opened.background,
-    JSON.stringify([back.padding, back.radius, back.background]));
+  check('and puts padding and background back to a new card\'s',
+    back.padding === opened.padding && back.background === opened.background,
+    JSON.stringify([back.padding, back.background]));
   check('without closing the strip', back.tool === 'style');
   check('or touching the crop', back.crop.y === opened.crop.y && back.crop.h === opened.crop.h);
   check('and is dead once it has', F.canReset(back) === false);
@@ -478,7 +460,6 @@ console.log('\nleaving asks only when there is work to lose');
   const moved = { ...s, crop: { ...s.crop, y: s.crop.y + 40 } };
   check('a moved crop is unsaved', F.unsaved(moved, kept) === true);
   check('so is a changed background', F.unsaved({ ...s, background: 'ink' }, kept) === true);
-  check('and changed corners', F.unsaved({ ...s, radius: s.radius + 8 }, kept) === true);
   check('and changed padding', F.unsaved({ ...s, padding: PADDING.roomy }, kept) === true);
   const reordered = { ...s, crop: { h: s.crop.h, w: s.crop.w, y: s.crop.y, x: s.crop.x } };
   check('the same crop in another key order is not a change', F.unsaved(reordered, kept) === false);

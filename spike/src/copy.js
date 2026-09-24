@@ -74,7 +74,6 @@ export const COPY = {
 
   // --- the Style strip ----------------------------------------------------
   padding: 'Padding',
-  corners: 'Corners',
   background: 'Background',
   // The three padding stops. Named, not measured: "6%" is a number about the
   // card's construction and tells nobody how the card will look.

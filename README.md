@@ -40,7 +40,7 @@ was **false**, and a review caught it. `tools/chunks.test.mjs` reads
 `fixtures/screenshots/ig-handwriting-dark.png` by name, and `make-fixture.mjs`
 writes only IHDR/IDAT/IEND — so it cannot produce the embedded ICC profile that
 test inspects, and it takes an output path rather than that filename. What is
-true: **1697 of the 1715 checks run in a clone**, and the 18 that cannot say so
+true: **1701 of the 1719 checks run in a clone**, and the 18 that cannot say so
 and say why. The seven skipped there include the only test of the Q4 Display-P3
 answer.
 
@@ -49,15 +49,17 @@ Treat the device figures as recorded measurements, not as reproducible ones.
 ## State
 
 Decided: screenshot input; card background sampled from the crop's edges with a Paper/Ink fallback; no aspect presets (the crop
-*is* the aspect); PNG **width-bounded** at `min(1080, crop + padding)` with height
+*is* the aspect); PNG at **the crop's own pixels, 1:1, plus padding** (until 2026-09-24 it was
+scaled to fit 1080 wide, which blurred every 1440-wide capture), with height
 following the crop; sRGB SDR output; link input deferred to the appendix.
 
 Settled 2026-09-18, and they changed the shape of the app: **one screen and no
 navigation**, so there is no Library and nothing persists past a session; **Share
 is the primary action**, with Save to Photos and Copy image in an overflow
 (Save moved to the bar beside Share on 2026-09-23);
-**padding is three stops plus a drag** to fine-tune; **corner radius is in**,
-partly reversing the spec's own refusal of it, while the **drop shadow was wanted
+**padding is three stops plus a drag** to fine-tune; **corner radius was in**,
+partly reversing the spec's own refusal of it, until the owner removed it on
+2026-09-24 as not needed (cards are square-cornered again), while the **drop shadow was wanted
 and dropped the same day** because it could not be platform elevation and a Skia
 one clips against the padding budget in the export; **auto-redaction is out**.
 **Cover is out too, cut by the owner on 2026-09-22**: the app does no redaction,
@@ -118,7 +120,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | File | What it is |
 | --- | --- |
 | `src/pixels.js` | All the pixel math. Ring flatness, modal background, row ink profile, status-bar cut and shape test, four-edge card background, colour round-trip delta. No Skia — none of it needs Skia to be correct |
-| `src/sizing.js` | Output size: width-bounded, never upscaling, no long-edge cap, encode ceiling |
+| `src/sizing.js` | Output size: the crop 1:1 plus padding, never resampled except past the surface and encode ceilings, no long-edge cap |
 | `src/recover.js` | When the photo picker's launcher has died and what to do about it: detect the recreation, recognise the rejection, bound the resume flag, and reload at most once. Pure, so the policy is testable without a phone |
 | `src/sharein.js` | What the native share-in module's answer means: open a `file://` copy, show a sentence, or do nothing. Pure, and it tells "no share" apart from "the module is not in this build", which look the same on screen |
 | `src/sharein-io.js` | The JS face of `modules/twitwa-share-in`. Optional, so a build without the module reads as no share rather than a crash |
@@ -157,7 +159,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1715 checks and 279 mutations** counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -170,18 +172,20 @@ editor opens on, and `sharein.js` is what a received share means.
 Those two numbers have a convention, because without one they are not
 comparable between readings: every check each gate prints as run, on a tree
 where `android/` exists, summed; and every mutant the loops below enumerate.
-They were re-derived by running all of it on 2026-09-23, not by adding to the
+They were re-derived by running all of it on 2026-09-24, not by adding to the
 previous figure. Doing that arithmetic instead is what published three wrong
 counts in this file before.
 
-**A clone runs 1697 of those 1715 and reports 18 skipped**, and it runs all 279
-mutations with none surviving. Measured 2026-09-23 from `git archive` of
-the 1.0.5 release commit (with Cancel), extracted with CRLF line endings as a Windows clone gets it, so the thing gated is the commit and not the
-working copy. The warm figure above was re-measured by the same script in the
+**A clone runs 1701 of those 1719 and reports 18 skipped**, and it runs all 286
+mutations with none surviving. Measured 2026-09-24 from `git archive` of
+the corner-radius removal tree (a `git stash create` object, so it was the tree and
+not the working copy that was gated), extracted with CRLF line endings as a Windows
+clone gets it, with `node_modules` linked in and `git init` run so `check-dead` can
+list files. The warm figure above was re-measured by the same script in the
 same sitting rather than being carried over, because two numbers from two
 instruments are not a comparison.
 
-That pairing is the check: 1715 − 1697 = 18, which is the skip count, so the
+That pairing is the check: 1719 − 1701 = 18, which is the skip count, so the
 clone is the warm run minus exactly the checks that announced they could not
 run. The pair before Phase 4.5's device run was 1109 of 1125, and both figures
 moved by 234 — the arithmetic this file refused to publish would have been
@@ -390,16 +394,16 @@ python og.py <pages...>                  # OG extraction; needs fixtures below
 cd spike && node src/pixels.test.mjs     # 196 checks on the pixel math
 cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
-cd spike && node src/sizing.test.mjs     # 62 checks on the output sizing
+cd spike && node src/sizing.test.mjs     # 92 checks on the output sizing
 cd spike && node src/plan.test.mjs       # 92 checks on the decision layer
 cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
-cd spike && node src/compose.test.mjs    # 80 checks that the preview and the export are one composition
-cd spike && node src/shell.test.mjs      # 98 checks on the editor's tool sessions, Style controls and Back
+cd spike && node src/compose.test.mjs    # 66 checks that the preview and the export are one composition
+cd spike && node src/shell.test.mjs      # 93 checks on the editor's tool sessions, Style controls and Back
 cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 142 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
 cd spike && node src/sharein.test.mjs    # 60 checks on what a received share means, and its contract with the Kotlin
-cd spike && node tools/check-imports.mjs # 129 imports + 7 self-checks on its own rule
-cd spike && node tools/check-dead.mjs    # 168 exports + 7 self-checks on its own rule
+cd spike && node tools/check-imports.mjs # 125 imports + 7 self-checks on its own rule
+cd spike && node tools/check-dead.mjs    # 165 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 48 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
@@ -467,7 +471,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 279 mutations
+done                                     # silence is the pass; 286 mutations
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -559,10 +563,12 @@ arithmetic and proves nothing about a real screenshot — so the real captures i
 **All five Phase 0 questions now have measured answers, and none says stop.** The
 two numbers that were placeholders waiting on Q5 came back split: the 8000px
 height ceiling survives with about 2x headroom and does real work, while the
-~10MP total turns out to be **unreachable** — `cardSize` caps width at 1080 and
-height at 8000, so its largest output is 8.64MP and the pixel check is dead code.
-It was justified twice before anyone checked that. Kept as a guard, with the
-slack asserted in `spike/src/sizing.test.mjs`.
+~10MP total turned out to be **unreachable** — `cardSize` capped width at 1080 and
+height at 8000, so its largest output was 8.64MP and the pixel check was dead code.
+It was justified twice before anyone checked that. On 2026-09-24 the 1080 cap went
+(cards are now the crop 1:1 plus padding), which made the pixel ceiling live; it
+was raised to 14MP so a 1440-wide capture at Roomy stays 1:1 all the way to the
+8000px height ceiling, and `spike/src/sizing.test.mjs` asserts that slack.
 
 What is left in Phase 0 is not a measurement. Q1's verdict belongs to an eye on a
 real display, and no number in `spike/results/` can settle it.

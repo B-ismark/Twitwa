@@ -86,7 +86,7 @@ visible fill.
    bands are detected and trimmed, the background is sampled, the padding is at its
    default. **There is nothing to press to make this happen.**
 3. Optional: **Crop** to a different region.
-4. Optional: **Style** — padding, corner radius, background.
+4. Optional: **Style** — padding, background.
 5. Share. The chooser opens on the card.
 
 Steps 3 and 4 are optional by design, and the default path is share in, then share
@@ -138,15 +138,23 @@ test once inputs were found where they diverge (904×904 roomy gives margins 90 
 **Sizing, in order:**
 
 1. `padded_w = crop_w + 2 × pad`, `padded_h = crop_h + 2 × pad`
-2. `scale = min(1, 1080 / padded_w)` — **width-bounded, and never upscaling.** A crop
-   from a 1080-wide screenshot lands near the target; a crop from an older 720p
-   device produces a smaller card rather than a soft one.
+2. `scale = 1` — **the crop's pixels are copied, never resampled**, and the padding
+   is added around them. A crop from an older 720p device produces a smaller card
+   rather than a soft one.
+
+   This replaced `scale = min(1, 1080 / padded_w)` on 2026-09-24. The Pixel 6 Pro
+   captures at 1440 wide, so that rule was a 0.67 resample on every card, and
+   Skia's `drawImageRect` samples nearest-neighbour: about one row and one column
+   in three were dropped, and the owner reported the cards as blurry. The card is
+   now wider than 1080 (1612 for a full-width capture at Standard); chat apps that
+   want a smaller image recompress it themselves, which is a sharing concern and
+   not a reason to degrade the saved file.
 3. Height simply follows. **There is no long-edge cap**, and this reverses an earlier
    decision in this document.
 
    That earlier rule capped the long edge at 1600px, which quietly destroyed exactly
    the input the spec elsewhere promises to accept. A 1080×6000 thread crop at
-   Standard padding is 1210×6130 padded; the width bound alone gives 1080×5472,
+   Standard padding is 1210×6130 padded (and, since 2026-09-24, that is the card),
    while the 1600 long-edge cap gives **316×1600** — a 0.26 scale factor that turns
    36px source text into 9.4px. Unreadable, silently, on the one case most worth
    supporting. The cap was reasoned from WhatsApp's recompression, which is a
@@ -158,17 +166,28 @@ test once inputs were found where they diverge (904×904 roomy gives margins 90 
    - **8000px on the height: kept.** The real hardware ceiling is
      `Skia.Surface.MakeOffscreen`, measured between 16256 (composes) and 16384
      (returns `null`, rather than throwing). 8000 has roughly 2x headroom.
-   - **~10MP total: kept as a guard, but it cannot fire.** Output width is capped
-     at 1080 and height at 8000, so the largest card this can produce is 8.64MP —
-     under the limit, always. Two justifications were written for it before that
+   - **8000px on the width: added 2026-09-24**, for the same surface ceiling. The
+     1080 target used to bound width for free; without it a panorama would ask for
+     a surface the device cannot make.
+   - **14MP total (was ~10MP): live since 2026-09-24.** While output width was
+     capped at 1080 and height at 8000, the largest card was 8.64MP and this could
+     not fire. With the crop copied 1:1 it can, so it was set to the smallest value
+     that keeps a 1440-wide capture at Roomy 1:1 up to 8000 tall (1728×8000 =
+     13.8MP). Before that change: Two justifications were written for it before that
      was checked: an encoder-and-heap limit (wrong; a 19.64MP surface composed and
      encoded without complaint, and a full 82.4MiB `readPixels` never failed), then
      a time limit (compose+encode runs ~50-60ms per megapixel, **92.5% of it the
      PNG encoder**, so 10MP would be ~550ms of encoding — sound reasoning about an
-     unreachable branch). The real time bound is the 8.64MP maximum, around 500ms.
-     Time is still the right frame if the ceiling is ever revisited; memory is not.
+     unreachable branch). At 14MP the far end is around 800ms, reached only by a
+     scrolling capture near 8000px. Time is still the right frame; memory is not.
 
-   Above the ceiling, scale down and say so.
+   Above the ceiling, scale down and say so. That is the only resample left, and
+   it is filtered: a mipmapped image shader (`drawImageRectOptions` would drop the
+   mipmaps, because RN Skia fixes its constraint to strict), drawn on a **raster**
+   surface. On the GPU surface a shader over a source past the texture limit
+   (~16k on a side) draws nothing and raises no error: measured on the Pixel on
+   2026-09-24, a 1440×12000 checker drew and a 1440×20000 one gave a card of
+   pure frame. On raster the 20000-row card drew in ~170ms and encoded in ~390ms.
 5. Above ~4000px tall, warn once that chat apps will downscale the preview. Warn,
    do not shrink: shrinking to pre-empt someone else's downscale loses the archival
    copy too, and the user may be saving rather than sending.
@@ -314,7 +333,7 @@ Editor — the only screen
 └── With a screenshot    the card, live, as it will export
     ├── Crop     ── takes over the bar ── Cancel / Reset / Done
     ├── Style    ── a control strip, no takeover
-    │                Padding · Corners · Background
+    │                Padding · Background
     ├── island: Share
     └── overflow ⋯
         ├── Save to Photos
@@ -341,7 +360,7 @@ use for their crop. Style is four knobs whose effect is already visible on the
 canvas, so it needs no takeover and no apply.
 
 **What the canvas shows depends on the tool.** Style and the resting state show
-the composed card — background, padding, radius. Crop shows the raw
+the composed card — background, padding. Crop shows the raw
 screenshot, full-bleed, because padding around a crop you are still choosing
 is noise. Switching tools cross-fades between the two. This is the one piece of
 motion in the app.
@@ -367,7 +386,7 @@ flowchart TD
     J -->|"No"| K2["Background = Paper or Ink by luminance"]
     K --> L["Compose: padding"]
     K2 --> L
-    L --> M["Rasterise: width min(1080, crop + padding), height follows"]
+    L --> M["Rasterise: crop 1:1 plus padding, ceilings only past 8000px or 14MP"]
     M --> N{"Photos permission?"}
     N -->|"Denied"| N1["Share-only fallback"]
     N -->|"Granted"| O["Saved to Photos"]
@@ -411,22 +430,23 @@ boxes as objects with eight dots and a delete, any number of them, each filled
 with the modal colour of its own ring — is kept in BUILD-PLAN.md's Phase 3 as the
 design to return to if redaction is ever wanted.
 
-**Style.** Four controls on a strip, all live, no apply:
+**Style.** Controls on a strip, all live, no apply:
 
 | Control | Shape | Default |
 | --- | --- | --- |
 | Padding | Three stops — Snug / Standard / Roomy — and drag between them to fine-tune | Standard (6% of crop width) |
-| Corners | Slider, 0 to ~4% of crop width | A small radius, not zero |
 | Background | Match screenshot / Paper / Ink | Match |
 
 Padding is stops **and** a drag, settled by the owner on 2026-09-18: one tap gets
 the common case right, and a drag is there for the card that needs it. Stops alone
 could not be fine-tuned; a bare slider would make every card a judgement call.
 
-Corners are **new on 2026-09-18 and partly reverse this document's own earlier
-"no border or shadow controls"**. That line existed so the app would not become a
-photo editor. A radius is overruled because a flat rectangle on a flat ground
-reads as a crop rather than as a card, and it is one knob that costs nothing.
+Corners were **added on 2026-09-18, partly reversing this document's own earlier
+"no border or shadow controls", and removed on 2026-09-24** because the owner
+did not need them; the card is square-cornered again. That line existed so the app would not become a
+photo editor. The radius was let in on the argument that a flat rectangle on a
+flat ground reads as a crop rather than as a card; the owner's call on
+2026-09-24 was that the frame alone is enough.
 
 **The shadow was wanted and then dropped, the same day, and the reason is worth
 keeping.** A shadow on the card cannot be platform elevation: elevation is a
@@ -434,8 +454,8 @@ compositor effect and never reaches the exported pixels, so it would have to be
 drawn in Skia, inside the composition. That means it has to fit within the
 padding budget or it is clipped at the card's edge — and it is clipped *in the
 exported PNG only*, where nobody is looking. A control whose failure mode is
-invisible on screen and permanent in the output is worth more than it returns,
-for an effect a radius mostly already achieves. The shadow is out; if it ever
+invisible on screen and permanent in the output costs more than it returns,
+for an effect the frame already mostly delivers. The shadow is out; if it ever
 comes back, it comes back with a gate that measures the exported bounds.
 
 Deliberate omissions, unchanged: no filters, no colour adjustment, no text or
@@ -468,7 +488,7 @@ Revised 2026-09-18 with the Library and its detail screen removed.
 | Settings | n/a | n/a | n/a | Grouped list in a sheet |
 
 The one loading state that matters is **Share**: the canvas runs at screen
-resolution and the export runs at up to 1080 wide, so the encode is the only
+resolution and the export runs at the crop's own size, so the encode is the only
 moment the app can make someone wait. It belongs on the island that was pressed,
 not on a blocking overlay.
 
@@ -481,8 +501,8 @@ not on a blocking overlay.
 | EXIF orientation flag set | Honour it at decode. A shared camera photo or a re-encoded screenshot can carry one, and ignoring it rotates the crop relative to what the user saw. |
 | Display P3 source | Gamut-map to sRGB deliberately per the output spec. A naive clamp shifts colours visibly on media posts; a deliberate map shifts them less and predictably. |
 | HDR source | Tone-map to SDR. Not the same problem as wide gamut — an SDR PNG has no headroom to carry it, so there is nothing to "preserve". No HDR output in v1. |
-| Very low-resolution source | Never upscale. Warn once that the card will be small, and let it be small. A soft card is the one outcome this app exists to avoid. |
-| Very tall crop (long thread) | Allowed at full height — only the width is bounded. Above ~4000px, warn that chat apps will downscale the preview. Above the decode/encode ceiling, scale down and say so. |
+| Very low-resolution source | Never upscale, and say nothing: the card is the crop's own size plus its frame, which is the rule for every card since 2026-09-24, not a special case worth a warning. A soft card is the one outcome this app exists to avoid. |
+| Very tall crop (long thread) | Allowed at full height, 1:1, up to the 8000px side and 14MP ceilings. Above ~4000px, warn that chat apps will downscale the preview. Above the decode/encode ceiling, scale down and say so. |
 | Source too large to decode | Downscale at decode rather than failing. A 1080×20000 capture is ~82MiB as one RGBA buffer before any copy, so the ceiling is a heap limit, not a preference. |
 | Crop smaller than a floor | Enforce a minimum crop of ~120px on the short edge so the output is not a postage stamp. Clamp the gesture rather than erroring. |
 | Status bar present | Auto-trimmed by default, shown as an excluded band the user can drag back. Trim only when the band passes a **shape test** — glyphs at both outer edges, empty middle, under ~7.5% of height. |
@@ -508,11 +528,11 @@ not on a blocking overlay.
 | Card background | Sampled from the crop's edges, overridable to Paper or Ink | Padding that matches the screenshot reads as breathing room rather than a mount. Replaces the per-card theme toggle, which fixed pixels make meaningless. |
 | Quote posts, reply parents | **Free** | Already in the screenshot, rendered by the platform as the user saw them. No fetch chains, no nested template, no parent lookup. |
 | Private and login-walled posts | **Supported** | They were impossible under link input. This is the single largest capability gain. |
-| Output | PNG, width `min(1080, crop + padding)`, height unbounded below the encode ceiling, sRGB SDR | Width-bounded because a long-edge cap turns a long thread into 9px text. One colour space because wide gamut and HDR are different problems and only one of them fits in an SDR PNG. |
+| Output | PNG, the crop 1:1 plus padding (was `min(1080, crop + padding)` wide until 2026-09-24), resampled only past the surface and encode ceilings, sRGB SDR | 1:1 because a resample to 1080 blurred every 1440-wide capture; no long-edge cap because a long-edge cap turns a long thread into 9px text. One colour space because wide gamut and HDR are different problems and only one of them fits in an SDR PNG. |
 | App shape | **One screen, no navigation** (2026-09-18) | Editor only. No Library, no saved cards, no grid, no card-detail state, no re-edit path, and no nav bar. Deletes a destination, a persistence layer and six states from the build, and removes the only reason a nav pill existed. Settings survives as a sheet behind the overflow. |
 | Padding control | **Three stops, plus drag to fine-tune** (2026-09-18) | `PADDING` in `src/sizing.js` already has the stops; the drag is new. One tap for the common case, a continuous value for the card that needs it. |
-| Corner radius | **In** (2026-09-18, partly reversing "no border or shadow controls" above) | One slider in Style. A flat rectangle on a flat ground reads as a crop; a radius is what makes it read as a card, and it costs nothing. |
-| Drop shadow | **Wanted, then declined the same day** (2026-09-18) | It cannot be platform elevation, which never reaches the exported pixels, so it would be a Skia shadow inside the composition and would have to fit within the padding budget or be clipped — clipped in the PNG only, where nobody is looking. An invisible-on-screen, permanent-in-the-output failure mode is too much for an effect the radius mostly delivers. |
+| Corner radius | **Removed** (2026-09-24; was in from 2026-09-18, partly reversing "no border or shadow controls" above) | The owner did not need it. It was one slider in Style, let in on the argument that a flat rectangle on a flat ground reads as a crop; the frame alone is judged enough. |
+| Drop shadow | **Wanted, then declined the same day** (2026-09-18) | It cannot be platform elevation, which never reaches the exported pixels, so it would be a Skia shadow inside the composition and would have to fit within the padding budget or be clipped — clipped in the PNG only, where nobody is looking. An invisible-on-screen, permanent-in-the-output failure mode is too much for an effect the frame already mostly delivers. |
 | Primary action | **Share** (2026-09-18) | The island opens the system chooser on the card. Save to Photos and Copy image move to the overflow. Matches the stated destination, and Share is the path already exercised on the phone; MediaStore and its permission-denied state stay in Phase 5. |
 | Auto-redaction | **Declined** (2026-09-18) | Xnapper proposes redactions over OCR and it would have been Cover's other half. Not being built, and the ML Kit native module and model download it required are not being added. |
 | Aspect presets | **Dropped** | The crop determines the output shape; padding is the only shape control. Inherited from the link design, where text could be re-laid-out to any ratio — with committed pixels a preset must either pad asymmetrically or discard content the user chose to include. |

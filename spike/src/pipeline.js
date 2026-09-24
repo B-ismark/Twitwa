@@ -19,7 +19,7 @@
 //      a callback so this cannot be got wrong; see the note in plan.js.
 // ColorType and AlphaType are gone from this list: the only thing that used
 // them was the private RGBA constant that moved to src/skia.js.
-import { Skia, ImageFormat, ColorSpace } from '@shopify/react-native-skia';
+import { Skia, ImageFormat, ColorSpace, FilterMode, MipmapMode, TileMode } from '@shopify/react-native-skia';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import {
@@ -35,8 +35,7 @@ import {
 } from './pixels';
 import { planCard, orientedSize, needsOrientation } from './plan';
 import { readRect } from './skia';
-import { MAX_PX } from './sizing';
-import { radiusPx } from './compose';
+import { MAX_PX, samplingFor } from './sizing';
 
 const STATUS_BAND_ROWS = 400;   // enough to hold any status bar; never the whole image
 const EDGE_THICKNESS = 8;       // matches pixels.js's default, kept explicit here
@@ -235,20 +234,32 @@ function sampleFallbackTiles(img, crop, tolerance = 16, tileOpts) {
  * whose whole point is the frame.
  */
 function composeCard(img, plan, opts = {}) {
-  const { colorSpace, radius = 0 } = opts;
+  const { colorSpace } = opts;
   const t0 = now();
 
-  const surface = Skia.Surface.MakeOffscreen(
-    plan.width,
-    plan.height,
-    colorSpace ? { colorSpace } : undefined,
-  );
+  // A card a ceiling shrank is composed on a RASTER surface, not the GPU one.
+  // The smooth path below is an image shader, and a GPU shader needs the whole
+  // source as one texture: Skia tiles an oversized image for drawImageRect but
+  // cannot for a shader, so a source past the texture limit (~16k on a side)
+  // drew NOTHING — a card of pure frame, no error. Measured on the Pixel
+  // 2026-09-24: a 1440x12000 source drew, a 1440x20000 one did not. A raster
+  // image has no such limit. Surface.Make is sRGB only, so a P3 request (the
+  // Phase 0 Q4 panel, not the export) keeps the GPU surface.
+  const sampling = samplingFor(plan.crop, plan.dest);
+  const raster = sampling === 'smooth' && !colorSpace;
+  const surface = raster
+    ? Skia.Surface.Make(plan.width, plan.height)
+    : Skia.Surface.MakeOffscreen(
+        plan.width,
+        plan.height,
+        colorSpace ? { colorSpace } : undefined,
+      );
   // Measured on a Mali-G78: this returns NULL rather than throwing, somewhere in
   // [16256, 16384) on a side. An unchecked caller gets a null dereference
   // pointing at the wrong layer.
   if (!surface) {
     return {
-      error: `MakeOffscreen(${plan.width}x${plan.height}) returned null`,
+      error: `${raster ? 'Make' : 'MakeOffscreen'}(${plan.width}x${plan.height}) returned null`,
       width: plan.width,
       height: plan.height,
     };
@@ -260,39 +271,34 @@ function composeCard(img, plan, opts = {}) {
   const paint = Skia.Paint();
   paint.setAntiAlias(true);
 
-  // Rounded corners, drawn as a clip on the IMAGE rather than as a shape over
-  // it. Painting the frame colour into the corners would be a second thing
-  // that has to be exactly the background, and the two go out of step the
-  // moment the Style strip changes one of them.
-  //
-  // The pixel count comes from compose.js's radiusPx, the same call the
-  // on-screen preview makes, because "a fraction of the image's width" is a
-  // one-line multiplication and a one-line multiplication written twice gets
-  // rounded differently the second time.
-  //
-  // Anti-aliasing ON, because a corner is a curve and the stair-stepping AA
-  // removes is the whole defect.
-  const rPx = radiusPx(plan.dest.w, radius);
-  const rounded = rPx > 0;
-  if (rounded) {
-    canvas.save();
-    canvas.clipRRect(
-      Skia.RRectXY(
-        Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h),
-        rPx,
-        rPx,
-      ),
-      1, // Intersect
-      true,
-    );
+  // 1:1 is a copy and must stay one; only a card a ceiling shrank is filtered.
+  // sizing.js `samplingFor` says which, and why the plain call is the copy.
+  const src = Skia.XYWHRect(plan.crop.x, plan.crop.y, plan.crop.w, plan.crop.h);
+  const dst = Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h);
+  if (sampling === 'exact') {
+    canvas.drawImageRect(img, src, dst, paint);
+  } else {
+    // Through an image SHADER, not drawImageRectOptions. RN Skia's
+    // drawImageRectOptions hard-codes kStrict_SrcRectConstraint, and Skia's
+    // header says strict "disables the use of mipmaps" — so the mipmap mode was
+    // silently dropped and a clamp below 0.5 (a capture past ~16000 rows, or a
+    // panorama past MAX_W twice over) went back to skipping rows. Found in
+    // review, 2026-09-24. A shader has no src-rect constraint, so the mipmaps
+    // are real. The cost: at the crop's edge the filter may blend in about one
+    // output pixel of what lies just outside the crop. Only a card a ceiling
+    // already shrank pays it.
+    //
+    // Pre-concatenated, so this reads as the mapping it builds, outermost
+    // first: dest origin <- scale <- crop origin.
+    const m = Skia.Matrix();
+    m.translate(plan.dest.x, plan.dest.y);
+    m.scale(plan.dest.w / plan.crop.w, plan.dest.h / plan.crop.h);
+    m.translate(-plan.crop.x, -plan.crop.y);
+    const smooth = Skia.Paint();
+    smooth.setAntiAlias(true);
+    smooth.setShader(img.makeShaderOptions(TileMode.Clamp, TileMode.Clamp, FilterMode.Linear, MipmapMode.Linear, m));
+    canvas.drawRect(dst, smooth);
   }
-  canvas.drawImageRect(
-    img,
-    Skia.XYWHRect(plan.crop.x, plan.crop.y, plan.crop.w, plan.crop.h),
-    Skia.XYWHRect(plan.dest.x, plan.dest.y, plan.dest.w, plan.dest.h),
-    paint,
-  );
-  if (rounded) canvas.restore();
 
   const drawMs = +(now() - t0).toFixed(2);
   const t1 = now();
@@ -308,6 +314,7 @@ function composeCard(img, plan, opts = {}) {
     drawMs,
     encodeMs,
     totalMs: +(drawMs + encodeMs).toFixed(2),
+    surface: raster ? 'raster' : 'gpu',
   };
 }
 
@@ -320,7 +327,6 @@ function composeCard(img, plan, opts = {}) {
  * @param padding      'snug' | 'standard' | 'roomy', or a fraction
  * @param trim         'auto' | 'always' | 'never'
  * @param frame        'match' | 'paper' | 'ink' — the Style strip's Background
- * @param radius       corner radius as a fraction of the image's own width
  * @param colorSpace   a Skia ColorSpace, or omit for sRGB
  * @param outputName   basename for the written file
  */
@@ -331,7 +337,6 @@ export async function renderCard({
   padding = 'standard',
   trim = 'auto',
   frame = 'match',
-  radius = 0,
   colorSpace,
   orientation = 1,
   outputName,
@@ -403,7 +408,7 @@ export async function renderCard({
     warnings.push(`output exceeds MAX_PX after planning (${plan.width}x${plan.height})`);
   }
 
-  const composed = composeCard(img, plan, { colorSpace, radius });
+  const composed = composeCard(img, plan, { colorSpace });
   if (composed.error) {
     return { error: composed.error, plan, statusBar, source, warnings, timings };
   }
@@ -431,14 +436,10 @@ export async function renderCard({
     crop: plan.crop,
     dest: plan.dest,
     pad: plan.pad,
-    // Both, because the fraction is what the editor holds and the pixels are
-    // what landed. A gate comparing the preview with the export needs the
-    // fraction; someone reading a log wanting to know why a corner looks wrong
-    // needs the pixels.
-    radius,
-    radiusPx: radiusPx(plan.dest.w, radius),
     frame,
     scale: plan.scale,
+    sampling: samplingFor(plan.crop, plan.dest),
+    surface: composed.surface,
     clamped: plan.clamped,
     trimmed: plan.trimmed,
     trimmedRows: plan.trimmedRows,

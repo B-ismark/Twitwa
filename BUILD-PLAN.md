@@ -113,8 +113,9 @@ Roomy as a small segmented pill, with a continuous fine-tune on the drag. Decisi
 defaults beat fiddling, so a tap is the common path; the drag is there because the
 owner asked to be able to set the white space, and stops alone cannot.
 
-**Two radii, one shadow, one motion.** Pill for chrome, and the card's own radius
-is now a control rather than a fixed 14px (2026-09-18). Still exactly one shadow
+**One radius, one shadow, one motion.** (It was "two radii" until 2026-09-24.) Pill for chrome, and the card's own radius
+was a control rather than a fixed 14px from 2026-09-18 until it was removed on
+2026-09-24; the card is square-cornered now. Still exactly one shadow
 in the app, under the island: a second one on the card was wanted and dropped the
 same day, because it could not be elevation and a Skia shadow clips against the
 padding budget in the export where nobody would see it. The only animation is the
@@ -167,9 +168,10 @@ Q5 are now blocked only on driving the app, not on tooling.
    check is not optional.
 
    Consequences for the spec's provisional numbers: `MAX_H = 8000` survives with
-   2x headroom and does real work. **`MAX_PX = 10e6` cannot fire**: `cardSize`
-   bounds width by `TARGET_W = 1080` and height by `MAX_H`, so its largest output
-   is 8.64MP and the pixel disjunct is dead code. It was justified twice before
+   2x headroom and does real work. **`MAX_PX = 10e6` could not fire**: `cardSize`
+   bounded width by `TARGET_W = 1080` and height by `MAX_H`, so its largest output
+   was 8.64MP and the pixel disjunct was dead code. (2026-09-24: `TARGET_W` is gone,
+   cards are the crop 1:1, and `MAX_PX` is now a live 14e6 beside a new `MAX_W`.) It was justified twice before
    anyone checked that — first as a memory limit (wrong: a 19.64MP surface encoded
    fine) and then as a time limit (sound reasoning about an unreachable branch).
    The 19.64MP figure came from `src/measure.js`, which pads without scaling; no
@@ -225,7 +227,8 @@ interactive.
   time also moves the destination rect and leaves a 90-degree rotation sized for
   the wrong aspect
 - Edge sampling with the four-edge agreement test, Paper/Ink fallback by luminance
-- **Never upscale**: width is `min(1080, crop_width + 2 × padding)`; height follows
+- **Never resample**: width is `crop_width + 2 × padding` (it was
+  `min(1080, …)` until 2026-09-24, which blurred 1440-wide captures); height follows
   the crop, with no long-edge cap — see the output spec for why that cap was removed
 - Padding is a fraction of crop width (3 / 6 / 10%), floored at 12px. **Not**
   rounded to an even number — that was cargo cult. Symmetry comes from adding
@@ -348,7 +351,7 @@ on a fairly short feature list. Read against Twitwa:
 | Auto-redact detected sensitive text | Xnapper, on Apple's Vision OCR | **Declined by the owner, 2026-09-18.** It would have been Cover's other half; the ML Kit native module and model download are not being added |
 | Background: solid, gradient, or sampled from the image | Pika, Xnapper, PostSpark, Photoroom | **Have it.** Sampled is already the product |
 | Padding or inset control | Pika, Xnapper, Photoroom "Resize" | **Have it.** `PADDING` snug/standard/roomy in `src/sizing.js` |
-| Corner radius on the inner image | Pika, PostSpark | **Take, 2026-09-18.** One slider in Style, partly reversing the spec's own "no border or shadow controls" |
+| Corner radius on the inner image | Pika, PostSpark | **Taken 2026-09-18, removed 2026-09-24** (owner: not needed). Was one slider in Style, partly reversing the spec's own "no border or shadow controls" |
 | Drop shadow on the inner image | Pika, PostSpark, Photoroom "Shadows" | **Wanted, then declined the same day.** It cannot be elevation, so it is a Skia shadow that must fit inside the padding budget or clip — in the export only, where nobody is looking |
 | Aspect presets named by destination rather than by ratio | Pika social sizes, TweetPik | **Skip.** Retracted 2026-09-18: the spec's argument is better than this one — the crop already *is* the aspect, so a preset can only fight it by padding unevenly or by discarding content the user chose |
 | Device or browser frames around the shot | Picsew, Pika, PostSpark | **Skip.** The input is already a phone screenshot; framing a phone inside a phone is noise |
@@ -576,7 +579,8 @@ unplugged it mid-session and none of the above has been seen:
 - the 48pt touch target has not made two adjacent handles fight on a small
   crop (the corner-beats-edge rule says it cannot, and that is an argument,
   not an observation);
-- `DEFAULT_RADIUS` 0.02 on a real card rather than on a cropped corner.
+- ~~`DEFAULT_RADIUS` 0.02 on a real card rather than on a cropped corner.~~
+  Moot: corner radius was removed on 2026-09-24.
 
 Added 2026-09-19, same reason -- the phone was still unplugged:
 
@@ -891,7 +895,8 @@ What landed, beyond the list below:
   transposed buffer rather than against a reimplementation
 - `planOutput` gains `frame`, so the Background control changes the card
 - `composeCard` clips the image to a rounded rect, and the pixel count comes
-  from `compose.js`'s `radiusPx` — the same call the preview makes
+  from `compose.js`'s `radiusPx` — the same call the preview makes (removed
+  with the corner radius on 2026-09-24)
 - The preview's frame colour comes from `planOutput` itself, with the sample
   taken by the renderer's own `sampleCropBackground` at import and on Done.
   An earlier draft drew a neutral frame under Match and let the export decide,
@@ -920,7 +925,8 @@ two rows of the overflow, above Start over and the developer panel.
 - **Style: padding, corners, background.** Padding is three stops plus a drag to
   fine-tune, so `PADDING` in `src/sizing.js` needs a continuous path beside its
   named stops. Corners are new to the product and partly reverse the spec's own
-  "no border or shadow controls"
+  "no border or shadow controls" (removed 2026-09-24: Style is padding and
+  background now)
 - **No drop shadow.** Wanted on 2026-09-18 and dropped the same day: it cannot be
   platform elevation, which never reaches the exported pixels, so it would be a
   Skia shadow that has to fit inside the padding budget or clip — and clip in the
@@ -998,10 +1004,11 @@ asks for and everybody notices".
 
 **Verification.** The composed card and the exported PNG must be the same
 composition at two scales, because the canvas runs at screen resolution and the
-export runs at up to 1080 wide. A gate that composes both and compares geometry
-rather than pixels: same aspect, same padding as a fraction of crop width, same
-radius as a fraction of crop width. Break each of those three on purpose and
-watch the gate go red before trusting it.
+export runs at the crop's own size (it ran at up to 1080 wide until 2026-09-24).
+A gate that composes both and compares geometry rather than pixels: same aspect,
+same padding as a fraction of crop width, and, while it existed, the same radius
+as a fraction of crop width. Break each on purpose and watch the gate go red
+before trusting it.
 
 ## Phase 5 — save and share — **BUILT 2026-09-22**
 
@@ -1204,6 +1211,7 @@ each becomes. The owner chose all seven, and chose "show nothing" for 4.
    problems, "Making your card", confirmations and the crop hint.
 5. **Save only on the bar.** More holds Copy image and New screenshot.
 6. **Style gets Reset and Done.** Reset puts padding, corners and background
+   (padding and background since corners went, 2026-09-24)
    back to the defaults a new card opens with, and is dead when they already
    are; Done closes the strip. Before, the only way out was tapping Style again
    and the only undo was by hand. `RESET_TO.style` in src/shell.js now holds

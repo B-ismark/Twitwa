@@ -1,13 +1,19 @@
 // Tests for src/sizing.js.
 //
 //   for b in longedge no_upscale_guard no_ceiling asym maxpx_binds pad_divorced \
-//            no_dest_repair repair_always repair_asym; do
+//            no_dest_repair repair_always repair_asym shrink_to_1080 \
+//            no_width_ceiling sampling_always_exact sampling_always_smooth \
+//            sampling_one_axis sampling_other_axis clamp_rounds no_width_repair \
+//            clamp_at_ceiling \
+//            pipeline_ignores_sampling pipeline_rect_options pipeline_gpu_shader; do
 //     BREAK=$b node src/sizing.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
-// Every one must print 1. `longedge` is the important one: it reintroduces the
-// 1600px long-edge cap that this module exists to have removed, so the
-// long-thread assertion is shown to be guarding a real decision.
+// Every one must print 1. `longedge` and `shrink_to_1080` are the important
+// ones: each reintroduces a rule this module exists to have removed — the
+// 1600px long-edge cap, and the 1080 target width that made every card from a
+// 1440-wide phone a 0.67 nearest-neighbour resample — so the assertions against
+// them are shown to be guarding real decisions.
 import * as real from './sizing.js';
 
 const BREAK = process.env.BREAK || '';
@@ -31,11 +37,77 @@ if (BREAK === 'pad_divorced') {
     return r;
   };
 } else if (BREAK === 'no_upscale_guard') {
-  // Drop the min(1, ...) so small sources are blown up to the target width.
+  // Small sources blown up to a phone's width, which makes them soft.
   F.cardSize = (crop, stop) => {
     const r = real.cardSize(crop, stop);
-    const k = real.TARGET_W / r.width;
-    return { ...r, width: real.TARGET_W, height: Math.round(r.height * k), scale: k };
+    if (r.width >= 1440) return r;
+    const k = 1440 / r.width;
+    return { ...r, width: 1440, height: Math.round(r.height * k), scale: k };
+  };
+} else if (BREAK === 'sampling_one_axis') {
+  // Only the width compared: a card clamped by a single row reads as 1:1 and
+  // is drawn nearest-neighbour. Survived the first review's mutation pass.
+  F.samplingFor = (crop, dest) => (dest.w === crop.w ? 'exact' : 'smooth');
+} else if (BREAK === 'sampling_other_axis') {
+  F.samplingFor = (crop, dest) => (dest.h === crop.h ? 'exact' : 'smooth');
+} else if (BREAK === 'clamp_rounds') {
+  // The clamp rounding instead of flooring, which is how 1493x7700 at Roomy
+  // came out 14,003,297px against a 14e6 ceiling.
+  F.cardSize = (crop, stop) => {
+    const r = real.cardSize(crop, stop);
+    if (!r.clamped) return r;
+    const pct = typeof stop === 'number' ? stop : real.PADDING[stop];
+    const padSrc = real.padPixels(crop.w, pct);
+    const pw = crop.w + padSrc * 2;
+    const ph = crop.h + padSrc * 2;
+    const k = Math.min(real.MAX_W / pw, real.MAX_H / ph, Math.sqrt(real.MAX_PX / (pw * ph)));
+    return { ...r, width: Math.round(pw * k), height: Math.round(ph * k) };
+  };
+} else if (BREAK === 'no_width_repair') {
+  // The width half of the thin-crop repair removed: a hair-thin crop on a very
+  // tall capture plans a card whose padding closes over the image.
+  F.cardSize = (crop, stop) => {
+    const r = real.cardSize(crop, stop);
+    if (r.repaired !== 'width' && r.repaired !== 'both') return r;
+    const pad = Math.round(real.padPixels(crop.w, typeof stop === 'number' ? stop : real.PADDING[stop]) * r.scale);
+    return { ...r, pad, repaired: null, dest: { x: pad, y: pad, w: r.width - pad * 2, h: r.dest.h } };
+  };
+} else if (BREAK === 'clamp_at_ceiling') {
+  // `>=` for `>`: a card exactly at a ceiling is marked clamped and resampled.
+  F.cardSize = (crop, stop) => {
+    const r = real.cardSize(crop, stop);
+    if (r.clamped || (r.width < real.MAX_W && r.height < real.MAX_H)) return r;
+    return { ...r, clamped: true, width: r.width - 1, dest: { ...r.dest, w: r.dest.w - 1 } };
+  };
+} else if (BREAK === 'shrink_to_1080') {
+  // The rule removed on 2026-09-24, restored: the padded crop scaled to fit 1080.
+  F.cardSize = (crop, stop) => {
+    const r = real.cardSize(crop, stop);
+    if (r.width <= 1080) return r;
+    const k = 1080 / r.width;
+    const width = 1080;
+    const height = Math.round(r.height * k);
+    const pad = Math.round(r.pad * k);
+    return { ...r, width, height, pad, scale: +(r.scale * k).toFixed(6),
+      dest: { x: pad, y: pad, w: width - pad * 2, h: height - pad * 2 } };
+  };
+} else if (BREAK === 'sampling_always_exact') {
+  // The plain draw everywhere: a clamped card is nearest-neighbour resampled,
+  // which is the original blur, kept for exactly the cards that still shrink.
+  F.samplingFor = () => 'exact';
+} else if (BREAK === 'sampling_always_smooth') {
+  // Filtering even at 1:1, which risks turning the copy into an interpolation.
+  F.samplingFor = () => 'smooth';
+} else if (BREAK === 'no_width_ceiling') {
+  // MAX_W ignored: a panorama composes wider than the surface can be.
+  F.cardSize = (crop, stop) => {
+    const r = real.cardSize(crop, stop);
+    const pad = real.padPixels(crop.w, typeof stop === 'number' ? stop : real.PADDING[stop]);
+    const width = crop.w + pad * 2;
+    const height = crop.h + pad * 2;
+    if (width <= real.MAX_W || height > real.MAX_H || width * height > real.MAX_PX) return r;
+    return { ...r, width, height, pad, scale: 1, clamped: false,
+      dest: { x: pad, y: pad, w: crop.w, h: crop.h } };
   };
 } else if (BREAK === 'warn_hardcoded') {
   // The coupling this file used to have: the threshold moves, the message keeps
@@ -109,12 +181,45 @@ function check(name, cond, detail) {
   console.log(`  FAIL  ${name}${detail === undefined ? '' : `  -> ${detail}`}`);
 }
 
-console.log('a normal 1080-wide crop');
+console.log('a phone screenshot is copied 1:1, never shrunk');
+{
+  // The owner's report, 2026-09-24: cards came out blurry. A 1440-wide Pixel
+  // capture was scaled to 1080 with its padding, a 0.67 resample. These are
+  // the assertions `shrink_to_1080` breaks.
+  for (const [w, h, stop] of [[1440, 3120, 'standard'], [1440, 1947, 'roomy'], [1080, 2400, 'snug']]) {
+    const r = F.cardSize({ w, h }, stop);
+    check(`${w}x${h} ${stop}: scale is exactly 1`, r.scale === 1, r.scale);
+    check(`${w}x${h} ${stop}: the image lands at its own size`,
+      r.dest.w === w && r.dest.h === h, JSON.stringify(r.dest));
+    check(`${w}x${h} ${stop}: the card is the crop plus its frame`,
+      r.width === w + r.pad * 2 && r.height === h + r.pad * 2, `${r.width}x${r.height} pad ${r.pad}`);
+  }
+}
 {
   const r = F.cardSize({ w: 1080, h: 1200 }, 'standard');
-  check('width lands at the target', r.width === 1080, r.width);
-  check('does not exceed the target', r.width <= real.TARGET_W, r.width);
-  check('scale is below 1 (padding pushed it over)', r.scale < 1, r.scale);
+  check('a 1080 crop makes a card wider than 1080', r.width === 1080 + 2 * 65, r.width);
+}
+{
+  // A card exactly AT a ceiling is still 1:1; one pixel over is clamped. Both
+  // edges, both axes, because `>=` for `>` survived the first mutation pass.
+  const atH = F.cardSize({ w: 1440, h: 7828 }, 'standard');   // 1612x8000
+  check('exactly MAX_H tall is not clamped', atH.height === real.MAX_H && !atH.clamped && atH.scale === 1,
+    `${atH.width}x${atH.height} clamped ${atH.clamped}`);
+  const atW = F.cardSize({ w: 7142, h: 100 }, 'standard');    // 8000x958
+  check('exactly MAX_W wide is not clamped', atW.width === real.MAX_W && !atW.clamped && atW.scale === 1,
+    `${atW.width}x${atW.height} clamped ${atW.clamped}`);
+  const overH = F.cardSize({ w: 1440, h: 7829 }, 'standard');
+  check('one row over MAX_H is clamped', overH.clamped && overH.height <= real.MAX_H, JSON.stringify(overH));
+  // And a clamp to MAX_H uses all of it. 1440x8139 pads to 8311 tall, the
+  // first padded height where 8311 * (8000 / 8311) is 7999.999... in floats,
+  // so a bare floor gives up a row the budget allows. This is the epsilon's
+  // whole job; without this case a mutant deleting it survived.
+  const fitH = F.cardSize({ w: 1440, h: 8139 }, 'standard');
+  check('a height clamp lands on MAX_H exactly, not a row short',
+    fitH.clamped && fitH.height === real.MAX_H, `${fitH.width}x${fitH.height}`);
+}
+{
+  const r = F.cardSize({ w: 1080, h: 1200 }, 'standard');
   check('left and right margins are equal',
     r.width - r.dest.x - r.dest.w === r.dest.x,
     `left ${r.dest.x}, right ${r.width - r.dest.x - r.dest.w}`);
@@ -128,9 +233,9 @@ console.log('the long thread that motivated removing the long-edge cap');
 {
   // 1080x6000 at standard padding. The old rule gave 316x1600.
   const r = F.cardSize({ w: 1080, h: 6000 }, 'standard');
-  check('width is still the target', r.width === 1080, r.width);
+  check('width is the crop plus its frame', r.width === 1080 + r.pad * 2, r.width);
   check('height is NOT capped near 1600', r.height > 5000, r.height);
-  check('scale did not collapse', r.scale > 0.8, r.scale);
+  check('scale did not collapse', r.scale === 1, r.scale);
   // Against the constant, not the literal '4000px' this used to match. A
   // hardcoded height in an assertion about a threshold keeps passing when the
   // threshold moves, which is the assertion agreeing with itself.
@@ -138,7 +243,7 @@ console.log('the long thread that motivated removing the long-edge cap');
     r.warnings.some((w) => w.includes(`${F.WARN_H}px`)), JSON.stringify(r.warnings));
   check('and the warning names the threshold actually used',
     r.height > F.WARN_H, `${r.height} vs ${F.WARN_H}`);
-  check('not clamped — 5.9MP is inside the ceiling', r.clamped === false, JSON.stringify(r));
+  check('not clamped — 7.4MP is inside the ceiling', r.clamped === false, JSON.stringify(r));
   // The concrete regression: 36px source text must not become 9px.
   check('source text keeps most of its size', 36 * r.scale > 28, (36 * r.scale).toFixed(1));
 }
@@ -147,10 +252,9 @@ console.log('never upscale');
 {
   const r = F.cardSize({ w: 720, h: 900 }, 'standard');
   check('scale is exactly 1', r.scale === 1, r.scale);
-  check('width stays below the target', r.width < real.TARGET_W, r.width);
   check('width is the padded source width', r.width === 720 + r.pad * 2, `${r.width} vs ${720 + r.pad * 2}`);
-  check('says it did not upscale',
-    r.warnings.some((w) => w.includes('not upscaled')), JSON.stringify(r.warnings));
+  check('and nothing warns about it, because it is the normal case', r.warnings.length === 0,
+    JSON.stringify(r.warnings));
 }
 {
   const tiny = F.cardSize({ w: 140, h: 90 }, 'snug');
@@ -198,7 +302,12 @@ console.log('the encode ceiling');
   check('pixel count is at or under the ceiling', r.width * r.height <= real.MAX_PX + 1,
     r.width * r.height);
   check('width shrank too, so aspect is kept', r.width < 1080, r.width);
-  const srcAspect = (1080 + 128) / (20000 + 128);
+  // Pinned, because a clamped card is the only one whose pad is rounded at
+  // all, and `ceil` for `round` survived the first mutation pass unpinned.
+  check('pinned: 480x8000, pad 26', r.width === 480 && r.height === 8000 && r.pad === 26,
+    `${r.width}x${r.height} pad ${r.pad}`);
+  const padSrc = F.padPixels(1080, real.PADDING.standard);
+  const srcAspect = (1080 + padSrc * 2) / (20000 + padSrc * 2);
   check('aspect preserved within a pixel of rounding',
     Math.abs(r.width / r.height - srcAspect) < 0.002, `${(r.width / r.height).toFixed(5)} vs ${srcAspect.toFixed(5)}`);
   check('says it was clamped',
@@ -215,11 +324,18 @@ console.log('symmetry at the inputs where naive scaling actually diverges');
   // from width - 2*pad by one pixel, which is a bright line down one edge of the
   // frame. Symmetry assertions on "nice" inputs pass either way and prove
   // nothing — BREAK=asym exits 0 without these cases.
+  //
+  // Since cards stopped being scaled to 1080 (2026-09-24) only a CLAMPED card
+  // is resampled at all, so these are panoramas past MAX_W. The old list
+  // (904x904 roomy and its neighbours) went 1:1 and stopped discriminating,
+  // which the check below the loop is there to notice.
   const DIVERGENT = [
-    { w: 904, h: 904, stop: 'roomy' },   // naive 901 vs 900
-    { w: 905, h: 905, stop: 'roomy' },   // naive 899 vs 900
-    { w: 901, h: 1532, stop: 'roomy' },  // diverges on height only
-    { w: 904, h: 542, stop: 'roomy' },
+    // Re-derived when the clamp went from round to floor (review, 2026-09-24):
+    // two of the first four stopped diverging, and the check below said so.
+    { w: 7001, h: 924, stop: 'roomy' },  // both: naive 5928x782 vs 5927x781
+    { w: 7002, h: 927, stop: 'roomy' },  // height only: naive 784 vs 785
+    { w: 7003, h: 930, stop: 'roomy' },  // width only: naive 5922 vs 5921
+    { w: 7004, h: 933, stop: 'roomy' },
   ];
   let asymmetric = 0;
   const detail = [];
@@ -281,31 +397,39 @@ console.log('rejects nonsense rather than returning it');
   check('a numeric stop is accepted', numeric.pad > 0, numeric.pad);
 }
 
-console.log('MAX_PX is slack, and the test says so rather than the comment');
+console.log('MAX_PX leaves every phone screenshot 1:1, and the test says so rather than the comment');
 {
-  // The reachable maximum: cardSize never exceeds TARGET_W in width and clamps
-  // height to MAX_H, so this product bounds every possible output.
-  const reachable = F.TARGET_W * F.MAX_H;
-  check('the largest possible output is under MAX_PX', reachable <= F.MAX_PX,
+  // The promise: a full-width phone crop at the roomiest stop, as tall as
+  // MAX_H allows, is not shrunk by the pixel ceiling. Lowering MAX_PX under
+  // this re-arms shrinking on real screenshots, which is the blur the owner
+  // reported; `maxpx_binds` is that.
+  // 1440 is the Pixel 6 Pro's capture width, read off the device, and the width
+  // of the other QHD+ phones. A literal on purpose: an exported constant for it
+  // let a mutant set it to 1080 and pass this check.
+  const PIXEL_W = 1440;
+  const roomiest = Math.max(...Object.values(real.PADDING));
+  const widest = PIXEL_W + F.padPixels(PIXEL_W, roomiest) * 2;
+  const reachable = widest * F.MAX_H;
+  check('a full-width capture at MAX_H, roomy, is under MAX_PX', reachable <= F.MAX_PX,
     (reachable / 1e6).toFixed(2) + 'MP vs ' + (F.MAX_PX / 1e6).toFixed(2) + 'MP');
-  // Which makes the pixel disjunct in the clamp unreachable. Documented as a
-  // property instead of a comment, so growing TARGET_W or MAX_H past it fails
-  // here rather than quietly arming a limit nobody has revisited.
-  check('so the pixel ceiling cannot be the binding constraint',
-    F.MAX_PX / reachable >= 1, (F.MAX_PX / reachable).toFixed(2) + 'x headroom');
+  // And the behaviour, not just the constants.
+  const tallest = F.cardSize({ w: PIXEL_W, h: F.MAX_H - F.padPixels(PIXEL_W, roomiest) * 2 }, 'roomy');
+  check('and cardSize agrees: that card is not clamped', tallest.clamped === false && tallest.scale === 1,
+    `${tallest.width}x${tallest.height} scale ${tallest.scale}`);
 
   // MEASURED_SURFACE_MAX was exported and referenced by nothing at all — a
   // measured number with `export const` in front of it, which is a comment
   // wearing a constant's clothes. Its own note said it is "the number to check
-  // first if TARGET_W or MAX_H ever grow", so that check is here now. Raising
+  // first if TARGET_W or MAX_H ever grow", so that check is here now (TARGET_W
+  // is gone since 2026-09-24; MAX_W is what bounds the width). Raising
   // MAX_H past it fails this instead of producing an output size the device
   // answers with a null surface. It is one driver's value, not a portable
   // constant, which is why it bounds rather than being enforced per-call.
   check('output height stays under the measured Skia surface ceiling',
     F.MAX_H < F.MEASURED_SURFACE_MAX,
     `MAX_H ${F.MAX_H} vs measured ${F.MEASURED_SURFACE_MAX}`);
-  check('and so does output width', F.TARGET_W < F.MEASURED_SURFACE_MAX,
-    `TARGET_W ${F.TARGET_W} vs measured ${F.MEASURED_SURFACE_MAX}`);
+  check('and so does output width', F.MAX_W < F.MEASURED_SURFACE_MAX,
+    `MAX_W ${F.MAX_W} vs measured ${F.MEASURED_SURFACE_MAX}`);
   check('with the headroom the device measurement claimed',
     F.MEASURED_SURFACE_MAX / F.MAX_H >= 2,
     (F.MEASURED_SURFACE_MAX / F.MAX_H).toFixed(2) + 'x');
@@ -315,13 +439,45 @@ console.log('MAX_PX is slack, and the test says so rather than the comment');
   check('a very tall crop is clamped', tall.clamped === true);
   check('to at most MAX_H', tall.height <= F.MAX_H, tall.height);
   check('and says so', tall.warnings.some((w) => /ceiling/.test(w)), JSON.stringify(tall.warnings));
+
+  // The width ceiling, new with the 1:1 rule. 9000x300 pads to 10080x1380,
+  // 13.9MP: over MAX_W and UNDER MAX_PX, so only the width ceiling can catch
+  // it. 20000x1000 was the first choice and taught nothing — MAX_PX clamps it
+  // anyway, and `no_width_ceiling` survived it.
+  const wide = F.cardSize({ w: 9000, h: 300 }, 'standard');
+  check('a panorama is clamped', wide.clamped === true, JSON.stringify(wide));
+  check('to at most MAX_W', wide.width <= F.MAX_W, wide.width);
+
+  // No clamped card may land over a ceiling after its rounding. Swept rather
+  // than spot-checked, and the known offender pinned so the sweep cannot rot
+  // into inputs that never overshoot.
+  const known = F.cardSize({ w: 1493, h: 7700 }, 'roomy');
+  check('1493x7700 roomy is under MAX_PX (it rounded to 14,003,297 once)',
+    known.width * known.height <= F.MAX_PX, `${known.width}x${known.height} = ${known.width * known.height}`);
+  let over = 0;
+  let clampedSeen = 0;
+  let n = 0;
+  for (const stop of ['snug', 'standard', 'roomy', 0.037, 0.0513]) {
+    for (let w = 1000; w <= 9000; w += 37) {
+      for (let h = 5000; h <= 40000; h += 313) {
+        n++;
+        const c = F.cardSize({ w, h }, stop);
+        if (c.clamped) clampedSeen++;
+        if (c.width * c.height > F.MAX_PX || c.width > F.MAX_W || c.height > F.MAX_H) over++;
+      }
+    }
+  }
+  check(`none of ${n} clamped-range cards lands over a ceiling`, over === 0, `${over} over`);
+  check('and the sweep really was in the clamped range', clampedSeen > n / 2, `${clampedSeen} of ${n}`);
 }
 
 console.log('a crop too thin to survive the padding still yields a drawable card');
 {
-  // The exact case from the review. Independent rounding of height and pad left
-  // dest.h === 0 and no warning at all.
-  const r = F.cardSize({ x: 0, y: 0, w: 1440, h: 1 }, 'standard');
+  // The case from the review was 1440x1: independent rounding of height and
+  // pad left dest.h === 0 and no warning at all. At 1:1 that crop is safe, so
+  // the input is now one the WIDTH ceiling scales, which is the only way left
+  // for the padding to round past the image.
+  const r = F.cardSize({ x: 0, y: 0, w: 60000, h: 1 }, 'standard');
   check('the destination has a row to draw into', r.dest.h >= 1, JSON.stringify(r.dest));
   check('and a column', r.dest.w >= 1, JSON.stringify(r.dest));
   check('the caller is told', r.warnings.some((w) => /thinner than the padding/.test(w)),
@@ -333,7 +489,7 @@ console.log('a crop too thin to survive the padding still yields a drawable card
   check('and left and right',
     r.dest.x === r.pad && r.width - (r.dest.x + r.dest.w) === r.pad,
     `x ${r.dest.x}, pad ${r.pad}, right ${r.width - (r.dest.x + r.dest.w)}`);
-  check('the width cap is still not exceeded', r.width <= real.TARGET_W, r.width);
+  check('the width cap is still not exceeded', r.width <= real.MAX_W, r.width);
 }
 
 console.log('no crop anywhere in the thin band produces a degenerate destination');
@@ -345,8 +501,13 @@ console.log('no crop anywhere in the thin band produces a degenerate destination
   let repaired = 0;
   let swept = 0;
   const badExamples = [];
+  // Phone widths, which are 1:1 and must never need the repair, and then
+  // widths past MAX_W, where the clamp scales and the repair has work to do.
+  const widths = [];
+  for (let w = 100; w <= 3000; w += 10) widths.push(w);
+  for (let w = 8000; w <= 60000; w += 2000) widths.push(w);
   for (const stop of Object.keys(real.PADDING)) {
-    for (let w = 100; w <= 3000; w += 10) {
+    for (const w of widths) {
       for (let h = 1; h <= 40; h++) {
         swept++;
         const r = F.cardSize({ x: 0, y: 0, w, h }, stop);
@@ -359,7 +520,7 @@ console.log('no crop anywhere in the thin band produces a degenerate destination
       }
     }
   }
-  check('the sweep actually ran', swept === 3 * 291 * 40, swept);
+  check('the sweep actually ran', swept === 3 * (291 + 27) * 40, swept);
   check('nothing degenerate survives it', degenerate === 0, badExamples.join(', '));
   // Without this the line above would also pass if the repair had been applied
   // to every crop, which would silently change real output.
@@ -370,12 +531,14 @@ console.log('no crop anywhere in the thin band produces a degenerate destination
 console.log('the repair does not touch a crop that never needed it');
 {
   // Pinned numbers from the capture the device run used, so the repair cannot
-  // quietly alter the card whose sha256 the density gate rests on.
+  // quietly alter a real card. Re-pinned on 2026-09-24 when the 1080 target
+  // went: this was 1080x2146 pad 58 dest 964x2030, a 0.67 resample, and every
+  // sha256 taken of a card before that date is of the old geometry.
   const r = F.cardSize({ x: 0, y: 0, w: 1440, h: 3031 }, 'standard');
-  check('width unchanged', r.width === 1080, r.width);
-  check('height unchanged', r.height === 2146, r.height);
-  check('padding unchanged', r.pad === 58, r.pad);
-  check('destination unchanged', r.dest.w === 964 && r.dest.h === 2030, JSON.stringify(r.dest));
+  check('width unchanged', r.width === 1612, r.width);
+  check('height unchanged', r.height === 3203, r.height);
+  check('padding unchanged', r.pad === 86, r.pad);
+  check('destination unchanged', r.dest.w === 1440 && r.dest.h === 3031, JSON.stringify(r.dest));
   check('and it is not marked repaired', r.repaired === null, r.repaired);
 
   // The asymmetric direction: thin in WIDTH rather than height. This one was
@@ -385,6 +548,98 @@ console.log('the repair does not touch a crop that never needed it');
   check('a crop thin in the other axis needs no repair', v.repaired === null, v.repaired);
   check('and still has a drawable destination', v.dest.w >= 1 && v.dest.h >= 1,
     JSON.stringify(v.dest));
+}
+
+console.log('the crop is copied when it fits and filtered only when a ceiling shrank it');
+{
+  // Through cardSize, so the check is about the geometry the pipeline really
+  // hands to samplingFor, not about two hand-made rects.
+  const phone = F.cardSize({ w: 1404, h: 3002 }, 'standard');
+  check('a phone crop is drawn exact', F.samplingFor({ w: 1404, h: 3002 }, phone.dest) === 'exact',
+    JSON.stringify(phone.dest));
+  const roomyTall = F.cardSize({ w: 1392, h: 7712 }, 'roomy');
+  check('so is the tallest one that fits', F.samplingFor({ w: 1392, h: 7712 }, roomyTall.dest) === 'exact',
+    JSON.stringify(roomyTall.dest));
+  const clamped = F.cardSize({ w: 1392, h: 12000 }, 'standard');
+  check('a clamped crop is drawn smooth', clamped.clamped && F.samplingFor({ w: 1392, h: 12000 }, clamped.dest) === 'smooth',
+    JSON.stringify(clamped.dest));
+  const wide = F.cardSize({ w: 9000, h: 300 }, 'standard');
+  check('and so is a panorama the width ceiling shrank', F.samplingFor({ w: 9000, h: 300 }, wide.dest) === 'smooth',
+    JSON.stringify(wide.dest));
+}
+
+console.log('a crop thin in WIDTH on a tall capture keeps a column and a non-negative frame');
+{
+  // The width half of the repair had no test that could fail: every thin case
+  // above is thin in height. These are thin in width and tall enough to clamp,
+  // which is the only way the width axis can close now.
+  const cases = [{ w: 1, h: 20000 }, { w: 2, h: 60000 }, { w: 3, h: 200000 }, { w: 1, h: 1e6 }];
+  let bad = 0;
+  const detail = [];
+  for (const c of cases) {
+    for (const stop of Object.keys(real.PADDING)) {
+      const r = F.cardSize(c, stop);
+      const ok = r.pad >= 0 && r.dest.x >= 0 && r.dest.w >= 1 && r.dest.h >= 1 && r.width >= 1 &&
+        r.width === r.dest.w + r.pad * 2;
+      if (!ok) { bad++; if (detail.length < 3) detail.push(`${c.w}x${c.h} ${stop}: ${JSON.stringify(r.dest)} pad ${r.pad} w ${r.width}`); }
+    }
+  }
+  check('every one has a column to draw into and equal, non-negative margins', bad === 0, detail.join('; '));
+  const r = F.cardSize({ w: 1, h: 20000 }, 'standard');
+  check('and the width repair is what fired on 1x20000', r.repaired === 'width', String(r.repaired));
+}
+
+console.log('a card clamped on one axis only is still filtered');
+{
+  // A clamped card nearly always shrinks on both axes, so a one-axis
+  // comparison passes on every ordinary case. These are the two that move on
+  // one axis alone, found by search: 2x8297 keeps its width (MIN_PAD's frame
+  // gives up the pixel instead) and 7152x50 keeps its height. Each kills one
+  // of the one-axis mutants, and each is checked to still be that shape so the
+  // pair cannot rot into two ordinary cases.
+  const tall = { w: 2, h: 8297 };
+  const rt = F.cardSize(tall, 'standard');
+  check('2x8297: clamped, width kept, height scaled',
+    rt.clamped && rt.dest.w === tall.w && rt.dest.h !== tall.h, JSON.stringify(rt.dest));
+  check('2x8297 is drawn smooth', F.samplingFor(tall, rt.dest) === 'smooth', JSON.stringify(rt.dest));
+  const wide = { w: 7152, h: 50 };
+  const rw = F.cardSize(wide, 'standard');
+  check('7152x50: clamped, height kept, width scaled',
+    rw.clamped && rw.dest.h === wide.h && rw.dest.w !== wide.w, JSON.stringify(rw.dest));
+  check('7152x50 is drawn smooth', F.samplingFor(wide, rw.dest) === 'smooth', JSON.stringify(rw.dest));
+}
+
+console.log('pipeline.js draws the way samplingFor says');
+{
+  // The draw itself needs Skia, which no desktop test can load, so this reads
+  // the SOURCE — the legitimate exception to importing the data, for the same
+  // reason crop.test.mjs reads crop.js for its worklet directives. It asserts
+  // the two things a desktop can hold: the branch is on samplingFor with the
+  // real plan geometry, and the smooth path is the shader, not
+  // drawImageRectOptions, whose strict constraint drops the mipmaps.
+  const { readFileSync } = await import('node:fs');
+  let src = readFileSync(new URL('./pipeline.js', import.meta.url), 'utf8');
+  if (BREAK === 'pipeline_ignores_sampling') {
+    src = src.replace("if (sampling === 'exact')", 'if (true)');
+  } else if (BREAK === 'pipeline_rect_options') {
+    src = src.replace('canvas.drawRect(dst, smooth);',
+      'canvas.drawImageRectOptions(img, src, dst, FilterMode.Linear, MipmapMode.Linear, paint);');
+  } else if (BREAK === 'pipeline_gpu_shader') {
+    src = src.replace("const raster = sampling === 'smooth' && !colorSpace;", 'const raster = false;');
+  }
+  check('composeCard branches on samplingFor(plan.crop, plan.dest)',
+    src.includes("const sampling = samplingFor(plan.crop, plan.dest);") && src.includes("if (sampling === 'exact')"));
+  check('the smooth path samples through a mipmapped image shader',
+    /makeShaderOptions\([^)]*FilterMode\.Linear,\s*MipmapMode\.Linear/.test(src) && src.includes('canvas.drawRect(dst, smooth);'));
+  // A GPU image shader over a source past the texture limit draws nothing
+  // (measured: 1440x20000 on the Pixel gave a card of pure frame).
+  check('a smooth sRGB card is composed on a raster surface, which has no texture limit',
+    src.includes("const raster = sampling === 'smooth' && !colorSpace;") &&
+    src.includes('? Skia.Surface.Make(plan.width, plan.height)') &&
+    src.includes("const sampling = samplingFor(plan.crop, plan.dest);") &&
+    src.includes("if (sampling === 'exact') {"));
+  check('and nothing calls drawImageRectOptions, which silently drops mipmaps',
+    !/\.drawImageRectOptions\(/.test(src.replace(/^\s*\/\/.*$/gm, '')));
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

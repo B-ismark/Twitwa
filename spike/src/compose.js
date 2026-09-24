@@ -3,8 +3,8 @@
 // the same reason src/crop.js separates it from the gesture.
 //
 // WHY THIS EXISTS. Deleting the "Make card" step means the card is composed
-// twice: once at screen resolution, sixty times a second, and once at up to
-// 1080 wide when Share is pressed. Two compositions of one card is the
+// twice: once at screen resolution, sixty times a second, and once at the
+// crop's own size when Share is pressed. Two compositions of one card is the
 // two-sources-of-truth defect in its purest form. They would agree on the day
 // they were written and drift on the first change to either, and the symptom
 // is the worst kind: the card the user approved is not the card that was sent,
@@ -26,43 +26,6 @@
 import { cardSize } from './sizing.js';
 
 /**
- * The largest corner radius, as a fraction of the image's own width inside the
- * card.
- *
- * A fraction of the IMAGE rather than of the card, because the radius is drawn
- * on the image's corners and has to look the same whatever padding is around
- * it. Tie it to the card and widening the padding fattens the corners, which
- * is a thing nobody asks for and everybody notices.
- *
- * 4% is where a screenshot stops reading as a screenshot. Past that it is a
- * sticker.
- */
-export const MAX_RADIUS = 0.04;
-
-/**
- * Enough to read as a card, little enough to not read as a decision.
- *
- * That criterion is the original one and it is right; 0.015 did not meet it.
- * On 2026-09-18 the same corner was captured off the device at 0, 0.010,
- * 0.015, 0.020, 0.030 and 0.040 with a Paper frame behind a black screenshot,
- * which is the contrast that shows an arc at all. Read across:
- *
- *   0       square, and honest about it
- *   0.010   indistinguishable from anti-aliasing
- *   0.015   almost-square; visibly rounded only once pointed out
- *   0.020   the first that reads as a deliberate corner
- *   0.030   comfortably rounded
- *   0.040   a tile -- which is why MAX_RADIUS is there and not higher
- *
- * 0.015 sat in the band that costs the square corner's honesty and buys none
- * of the card, so the default is the smallest value that clears the bar rather
- * than the middle of the range. The strip itself is not in the repo: it is a
- * crop of a fixture screenshot, and those carry real posts by identifiable
- * people.
- */
-export const DEFAULT_RADIUS = 0.02;
-
-/**
  * Below this width a projection is refused rather than rounded.
  *
  * Not a style rule: `pad` and `dest` are rounded independently of `width`, and
@@ -75,26 +38,6 @@ export const DEFAULT_RADIUS = 0.02;
  */
 export const MIN_PROJECT = 32;
 
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-
-/**
- * How many pixels a radius fraction is, against an image `destW` wide.
- *
- * Exported and used by BOTH `project()` below and `composeCard` in
- * src/pipeline.js, which is the point: "the radius is a fraction of the
- * image's width" is a one-line multiplication, and a one-line multiplication
- * is exactly the kind of rule that gets written twice and rounded differently
- * the second time. One floor call apart is one pixel of corner, which on a
- * 16px radius is visible.
- *
- * It clamps too, so a radius arriving from a slider cannot reach the renderer
- * unbounded through a path that skipped `composition()`.
- */
-export function radiusPx(destW, radiusFrac) {
-  const r = Number.isFinite(radiusFrac) ? clamp(radiusFrac, 0, MAX_RADIUS) : 0;
-  return Math.round(destW * r);
-}
-
 /**
  * What the card is, independent of how big it is drawn.
  *
@@ -102,11 +45,8 @@ export function radiusPx(destW, radiusFrac) {
  * @param stop    'snug' | 'standard' | 'roomy', or a number as a fraction of
  *                crop width. Passed straight through to `cardSize`, which is
  *                why the continuous value the Style strip needs already works.
- * @param radius  fraction of the image's width, 0..MAX_RADIUS. Clamped, not
- *                rejected: it arrives from a slider, and a slider that can
- *                throw is a crash waiting for a fast thumb.
  *
- * @returns {{width, height, aspect, padFrac, radius, pad, dest, warnings, clamped, repaired}}
+ * @returns {{width, height, aspect, padFrac, pad, dest, warnings, clamped, repaired}}
  *
  * `aspect` and `padFrac` are the ratios `project` multiplies. `width`/`height`/
  * `pad`/`dest` are the EXPORT pixels, kept on the same object because every
@@ -114,9 +54,8 @@ export function radiusPx(destW, radiusFrac) {
  * and because `project(comp, comp.width)` reproducing them exactly is the
  * invariant this whole module exists to hold.
  */
-export function composition(crop, stop = 'standard', radius = DEFAULT_RADIUS) {
+export function composition(crop, stop = 'standard') {
   const card = cardSize(crop, stop);
-  const r = Number.isFinite(radius) ? clamp(radius, 0, MAX_RADIUS) : 0;
 
   return {
     width: card.width,
@@ -127,11 +66,6 @@ export function composition(crop, stop = 'standard', radius = DEFAULT_RADIUS) {
     // and the two agree closely enough at standard padding to pass a glance.
     aspect: card.height / card.width,
     padFrac: card.pad / card.width,
-    // Kept as the input fraction of the IMAGE width, not as pixels. A radius
-    // in pixels is meaningless at a second scale, and carrying it as pixels is
-    // invisible at export scale — where it is correct — and wrong only on the
-    // preview, which is the half nobody has a reference for.
-    radius: r,
     pad: card.pad,
     dest: card.dest,
     warnings: card.warnings,
@@ -143,7 +77,7 @@ export function composition(crop, stop = 'standard', radius = DEFAULT_RADIUS) {
 /**
  * The same card, in pixels, at `width`.
  *
- * @returns {{width, height, pad, dest: {x, y, w, h}, radius}}
+ * @returns {{width, height, pad, dest: {x, y, w, h}}}
  *
  * `dest` is derived by SUBTRACTION, for the reason `cardSize` gives at length:
  * scaling the image and the padding independently lets rounding land a
@@ -164,7 +98,7 @@ export function project(comp, width) {
         'The stage is too small for this composition.',
     );
   }
-  return { width: w, height, pad, dest, radius: radiusPx(dest.w, comp.radius) };
+  return { width: w, height, pad, dest };
 }
 
 /**
@@ -185,12 +119,10 @@ export function sameComposition(comp, shot, tol = 0.5) {
   const want = {
     height: shot.width * comp.aspect,
     pad: shot.width * comp.padFrac,
-    radius: shot.dest.w * comp.radius,
   };
   const off = {
     height: Math.abs(shot.height - want.height),
     pad: Math.abs(shot.pad - want.pad),
-    radius: Math.abs(shot.radius - want.radius),
   };
   // The margins have to be equal to each other as well as right in size.
   // Subtraction makes that true by construction, so this asserts the
@@ -202,11 +134,11 @@ export function sameComposition(comp, shot, tol = 0.5) {
     shot.dest.w === shot.width - shot.pad * 2 &&
     shot.dest.h === shot.height - shot.pad * 2;
 
-  const worst = Math.max(off.height, off.pad, off.radius);
+  const worst = Math.max(off.height, off.pad);
   const ok = worst <= tol && symmetric;
   const detail =
     `at ${shot.width}px: height off ${off.height.toFixed(3)}, ` +
-    `pad off ${off.pad.toFixed(3)}, radius off ${off.radius.toFixed(3)}` +
+    `pad off ${off.pad.toFixed(3)}` +
     (symmetric ? '' : ', AND dest is not symmetric about the padding');
   return { ok, worst, detail };
 }

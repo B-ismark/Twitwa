@@ -21,7 +21,6 @@
 // lists in two `if`s.
 
 import { PADDING, padPixels } from './sizing.js';
-import { DEFAULT_RADIUS, MAX_RADIUS } from './compose.js';
 
 /**
  * The tool table. `owns` is the set of state fields a tool session can change,
@@ -111,7 +110,6 @@ const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))
  */
 const STYLE_DEFAULTS = {
   padding: PADDING.standard,
-  radius: DEFAULT_RADIUS,
   background: BACKGROUNDS[0],
 };
 
@@ -140,7 +138,7 @@ export function editorState(proposed) {
  *
  * Style's Reset is the defaults a new card opens with. It used to be `{}`, a
  * Reset with nothing to do, and the Style strip had no Reset at all: the only
- * undo for a padding, a corner and a frame was to put each back by hand.
+ * undo for a padding and a frame was to put each back by hand.
  */
 const RESET_TO = {
   crop: (state) => ({ crop: copy(state.proposed) }),
@@ -239,9 +237,9 @@ export function barMode(state) {
 /**
  * The fields that ARE the card. Everything else in the state -- which tool is
  * open, its session, the proposal Reset returns to -- is about the editor, and
- * leaving can only lose work that lives in these four.
+ * leaving can only lose work that lives in these three.
  */
-const CARD_FIELDS = ['crop', 'padding', 'radius', 'background'];
+const CARD_FIELDS = ['crop', 'padding', 'background'];
 
 /** The card alone, as a copy, for remembering what was last kept. */
 export function cardOf(state) {
@@ -335,21 +333,6 @@ export function setPadding(frac, cropW) {
   }
   const hit = STOPS.find((s) => s.value === v);
   return { padding: v, stop: hit ? hit.key : null };
-}
-
-/**
- * Set the corner radius from a slider, clamped to what `compose.js` will
- * accept.
- *
- * Clamped here as well as there, and that is not redundant: `composition()`
- * clamps so a fast thumb cannot produce a card with a 40% radius, and this
- * clamps so the slider's own thumb does not sit somewhere the card is not.
- * Without this the control and the card disagree above MAX_RADIUS, which reads
- * as the slider being broken at the top of its travel.
- */
-export function setRadius(frac) {
-  if (!Number.isFinite(frac)) throw new Error(`shell: radius is not a number: ${String(frac)}`);
-  return clamp(frac, 0, MAX_RADIUS);
 }
 
 /**

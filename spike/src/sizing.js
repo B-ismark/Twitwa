@@ -7,9 +7,23 @@
 // source text at 9.4px. Unreadable, silently, on the input most worth
 // supporting. `BREAK=longedge` in the tests reintroduces that cap so the
 // assertion guarding against it is shown to be live.
+//
+// NOR IS THERE A TARGET WIDTH, since 2026-09-24. The card used to be scaled to
+// fit 1080 wide, padding included, which on the Pixel's 1440-wide screenshots
+// is a 0.67 resample — and Skia's drawImageRect samples nearest-neighbour, so
+// one row and one column in three simply vanished and the text came out broken.
+// The owner reported it as "blurry after editing". The rule now is that the
+// crop is copied 1:1 and the padding is added around it; the card is as wide
+// as the crop plus its frame. The ceilings below are the only thing that can
+// shrink it, and each one exists for a hardware reason, not for looks.
 
-export const TARGET_W = 1080;   // width to aim for; never exceeded, never upscaled to
 export const WARN_H = 4000;     // above this, chat apps will downscale the preview
+
+// A width ceiling, which the 1080 target used to provide for free. Without one
+// a panorama shared in from Photos composes to a surface wider than the
+// measured MEASURED_SURFACE_MAX and MakeOffscreen answers null. Same value as
+// MAX_H, for the same reason.
+export const MAX_W = 8000;
 
 // Both of the next two were provisional pending Phase 0 Q5. Q5 has now run on a
 // device (results/phase0-device.md) and they come out differently:
@@ -19,36 +33,32 @@ export const WARN_H = 4000;     // above this, chat apps will downscale the prev
 // (returns null) on a Mali-G78, so 8000 has about 2x headroom. It stays.
 export const MAX_H = 8000;
 
-// MAX_PX HAS NEVER BEEN ABLE TO FIRE, and two justifications were written for it
-// before anyone checked that.
+// MAX_PX is live since the target width went (2026-09-24). Before that it could
+// never fire: width was at most 1080 and height at most MAX_H, so no output
+// exceeded 8.64MP, and it sat here as a guard for a branch nobody could reach.
 //
-// The first called it an encoder and heap limit. The device disagreed: a 19.64MP
-// surface composed and encoded without complaint, and a full 82.4MiB readPixels
-// never failed. So it was re-justified on TIME — ~50-60ms per megapixel, 92.5% of
-// it the PNG encoder, making 10MP about 550ms of encoding. That reasoning is
-// sound and it is still about a branch that cannot be reached.
-//
-// cardSize scales the PADDED crop to fit TARGET_W, so width is at most 1080, and
-// clamps height to MAX_H = 8000. The largest output the function can produce is
-// therefore 8.64MP — below this ceiling, always. The `width * height > MAX_PX`
-// disjunct in the clamp is dead code.
-//
-// It is kept rather than deleted because it is the guard that would matter the
-// moment TARGET_W or MAX_H grows, and `sizing.test.mjs` asserts the slack
-// (TARGET_W * MAX_H <= MAX_PX) so that raising either constant past it fails a
-// test instead of silently arming a limit nobody has thought about since.
-export const MAX_PX = 10e6;
+// What it limits is TIME, not memory. On the device a 19.64MP surface composed
+// and encoded without complaint and a full 82.4MiB readPixels never failed; the
+// cost is ~50-60ms per megapixel, 92.5% of it the PNG encoder. So the value is
+// the smallest one that keeps the promise "never shrink a phone screenshot":
+// a full-width crop from the Pixel 6 Pro (1440 wide, like the other QHD+
+// phones) at the ROOMIEST stop, MAX_H tall, is 1728 x 8000 = 13.8MP. 14MP is about 800ms of encoding at the far
+// end, and only a scrolling capture of 8000px gets near it. sizing.test.mjs
+// asserts that slack, so lowering this below it re-arms shrinking on real
+// screenshots and fails a test instead of quietly blurring them again.
+export const MAX_PX = 14e6;
 
-// The measured surface ceiling. Not enforced per call: MAX_H bounds output
-// height to 8000, so this is unreachable through cardSize and a runtime guard
-// here would be dead code. It is one driver's value, not a portable constant.
+// The measured surface ceiling. Not enforced per call: MAX_W and MAX_H bound
+// the output to 8000 on a side, so this is unreachable through cardSize and a
+// runtime guard here would be dead code. It is one driver's value, not a portable constant.
 //
 // It IS asserted, though, which it was not before. This was exported and
 // referenced by nothing at all — a measured number with `export const` in front
 // of it, which is a comment wearing a constant's clothes, and `check-dead.mjs`
 // is what said so. Its own note already stated the rule: "the number to check
-// first if TARGET_W or MAX_H ever grow". sizing.test.mjs now checks it, so
-// growing either past this fails a test instead of producing an output size the
+// first if TARGET_W or MAX_H ever grow" (TARGET_W is gone since 2026-09-24;
+// MAX_W bounds the width now). sizing.test.mjs checks it, so growing MAX_W or
+// MAX_H past this fails a test instead of producing an output size the
 // driver answers with a null surface. `BREAK=surface_ceiling_slack` raises MAX_H
 // past it.
 export const MEASURED_SURFACE_MAX = 16256;
@@ -115,21 +125,28 @@ export function cardSize(crop, stop = 'standard') {
   const paddedW = crop.w + padSrc * 2;
   const paddedH = crop.h + padSrc * 2;
 
-  // Width-bounded, and never upscaling: a crop from a 720p phone yields a
-  // smaller card rather than a soft one.
-  let scale = Math.min(1, TARGET_W / paddedW);
+  // 1:1. The crop's pixels are copied, not resampled, and the padding is added
+  // around them: neither shrinking (which is what made cards blurry) nor
+  // upscaling (which would make a 720p crop soft).
+  let scale = 1;
 
-  let width = Math.round(paddedW * scale);
-  let height = Math.round(paddedH * scale);
+  let width = Math.round(paddedW);
+  let height = Math.round(paddedH);
   let clamped = false;
 
-  // The ceiling is for the encoder and the heap, not for looks.
-  if (height > MAX_H || width * height > MAX_PX) {
-    const byHeight = MAX_H / height;
-    const byPixels = Math.sqrt(MAX_PX / (width * height));
-    scale *= Math.min(byHeight, byPixels);
-    width = Math.round(paddedW * scale);
-    height = Math.round(paddedH * scale);
+  // The ceilings are for the surface and the encoder, not for looks, and they
+  // are the only way a card comes out smaller than its crop.
+  if (width > MAX_W || height > MAX_H || width * height > MAX_PX) {
+    scale = Math.min(MAX_W / width, MAX_H / height, Math.sqrt(MAX_PX / (width * height)));
+    // FLOORED, not rounded. Rounding both sides of a sqrt-scaled pixel budget
+    // can round both up: 1493x7700 at Roomy came out 1771x7907 = 14,003,297px,
+    // over the ceiling it was clamped to (found in review, 2026-09-24). The
+    // epsilon keeps an exact fit — paddedH * (8000 / paddedH) — from flooring to
+    // 7999 on float error. And never below one pixel: a 1x1e6 crop rounded its
+    // width to 0 and planned a surface with no columns and a pad of -1.
+    const fit = (v) => Math.max(1, Math.floor(v + 1e-9));
+    width = fit(paddedW * scale);
+    height = fit(paddedH * scale);
     clamped = true;
   }
 
@@ -141,20 +158,19 @@ export function cardSize(crop, stop = 'standard') {
   // asserted on the string '4000px', so the test would have kept passing while
   // saying the wrong thing. The test now asserts against the constant.
   if (height > WARN_H) warnings.push(`taller than ${WARN_H}px: chat apps will downscale the preview`);
-  if (scale === 1 && paddedW < TARGET_W) warnings.push('source is smaller than the target; not upscaled');
 
   let pad = Math.round(padSrc * scale);
 
   // `height`, `width` and `pad` are each rounded independently, and for a very
-  // thin crop the padding catches up with the whole card: a 1440x1 crop gave
-  // width 1080, height 116, pad 58 — and a destination 964x0, with no warning,
-  // because 2*58 is exactly 116. The planner accepted it and composition then
+  // thin crop the padding catches up with the whole card: a 1440x1 crop, back
+  // when cards were scaled to 1080 wide, gave width 1080, height 116, pad 58 —
+  // and a destination 964x0, with no warning, because 2*58 is exactly 116. The planner accepted it and composition then
   // had no row to draw into.
   //
   // The repair GROWS the card rather than shrinking the padding, because the
   // padding is what the caller asked for and the height is free — except on the
-  // width axis, which is capped at TARGET_W and so has to give up padding
-  // instead. Both keep one integer `pad` on all four sides, so the margins stay
+  // width axis, which only a clamped card can reach, and a clamped width is at
+  // its ceiling and so has to give up padding instead. Both keep one integer `pad` on all four sides, so the margins stay
   // equal; see the note on `dest` below for why that is derived by subtraction.
   //
   // Reachable today only from a synthetic crop — the detector never emits a crop
@@ -185,4 +201,27 @@ export function cardSize(crop, stop = 'standard') {
     clamped,
     warnings,
   };
+}
+
+/**
+ * How the crop must be drawn into `dest`: 'exact' or 'smooth'.
+ *
+ * Exact when the destination is the crop's own size, which is every card below
+ * the ceilings. Skia's plain drawImageRect samples nearest-neighbour, and at
+ * 1:1 on integer rects nearest-neighbour IS a copy: measured on the device on
+ * 2026-09-24, all 4,214,808 image pixels of a 1440-wide card equal the source.
+ *
+ * Smooth for everything else, which is only a card a ceiling has shrunk. That
+ * same nearest-neighbour sampling at 0.67 dropped a row and a column in three
+ * and was the blur the owner reported; a clamped card is still resampled, so it
+ * is resampled with filtering (linear, with mipmaps for the heavy clamps,
+ * drawn through an image shader in pipeline.js because RN Skia's
+ * drawImageRectOptions silently drops the mipmaps) rather than by throwing
+ * pixels away.
+ *
+ * Decided from the geometry rather than from `scale`, because `scale` is
+ * rounded for reporting and the geometry is what is actually drawn.
+ */
+export function samplingFor(crop, dest) {
+  return dest.w === crop.w && dest.h === crop.h ? 'exact' : 'smooth';
 }

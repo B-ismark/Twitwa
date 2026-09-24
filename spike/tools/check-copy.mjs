@@ -58,7 +58,7 @@ const LABEL_KEYS = new Set([
   'choose', 'share', 'newShot', 'close', 'more',
   'crop', 'style',
   'cancel', 'reset', 'done',
-  'padding', 'corners', 'background',
+  'padding', 'background',
   'snug', 'standard', 'roomy',
   'matchFrame', 'paperFrame', 'inkFrame',
   'updateGet', 'updateLater', 'devTitle',

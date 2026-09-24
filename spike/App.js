@@ -17,7 +17,7 @@
 // So the canvas IS the card, composed at screen resolution and recomposed on
 // every change. The rules live in three modules and none of them are here:
 //
-//   src/compose.js   one composition, projected to the stage and to 1080. The
+//   src/compose.js   one composition, projected to the stage and to the export. The
 //                    preview and the export cannot be two layouts because
 //                    there is only one `project()`.
 //   src/shell.js     which tool is open, which image the canvas draws, and
@@ -68,7 +68,6 @@ import {
   Image as SkiaImage,
   Rect,
   rect as skRect,
-  rrect as skRRect,
 } from '@shopify/react-native-skia';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
@@ -83,7 +82,7 @@ import {
   stressFullRead,
 } from './src/measure';
 import { renderCard, decodeUri, sampleCropBackground } from './src/pipeline';
-import { composition, project, MIN_PROJECT, MAX_RADIUS } from './src/compose';
+import { composition, project, MIN_PROJECT } from './src/compose';
 import {
   TOOL,
   TOOLS,
@@ -100,7 +99,6 @@ import {
   resetTool,
   setBackground,
   setPadding,
-  setRadius,
   unsaved,
   BACKGROUNDS,
   PAD_MAX,
@@ -287,12 +285,12 @@ export default function App() {
   // --- the card, as ratios and then as pixels ------------------------------
   //
   // One composition. `comp` is what the card IS; `shot` is that card at the
-  // size the stage can show. The export calls `project` again at up to 1080.
+  // size the stage can show. The export draws it at the crop's own size.
   // Neither computes a layout, which is the whole point of src/compose.js.
   const comp = useMemo(() => {
     if (!ed) return null;
     try {
-      return composition({ w: ed.crop.w, h: ed.crop.h }, ed.padding, ed.radius);
+      return composition({ w: ed.crop.w, h: ed.crop.h }, ed.padding);
     } catch (e) {
       return null;
     }
@@ -773,7 +771,6 @@ export default function App() {
       uri: src.uri,
       crop: ed.crop,
       padding: ed.padding,
-      radius: ed.radius,
       frame: ed.background,
       trim: 'never',
       outputName,
@@ -808,8 +805,8 @@ export default function App() {
       frame: out.frame,
       fill: out.fill,
       fillSource: out.fillSource,
-      radius: out.radius,
-      radiusPx: out.radiusPx,
+      sampling: out.sampling,
+      surface: out.surface,
       crop: out.crop,
       dest: out.dest,
       pad: out.pad,
@@ -822,8 +819,8 @@ export default function App() {
     // at different scales by design.
     if (shot) {
       emit('P4.sameComposition', {
-        preview: { w: shot.width, h: shot.height, pad: shot.pad, radius: shot.radius },
-        exported: { w: out.width, h: out.height, pad: out.pad, radius: out.radiusPx },
+        preview: { w: shot.width, h: shot.height, pad: shot.pad },
+        exported: { w: out.width, h: out.height, pad: out.pad },
         aspectOff: +Math.abs(out.height / out.width - shot.height / shot.width).toFixed(5),
         padFracOff: +Math.abs(out.pad / out.width - shot.pad / shot.width).toFixed(5),
       });
@@ -1165,7 +1162,6 @@ export default function App() {
           uri: src.uri,
           crop: ed.crop,
           padding: ed.padding,
-          radius: ed.radius,
           frame: ed.background,
           trim: 'never',
           colorSpace: space,
@@ -1197,7 +1193,6 @@ export default function App() {
           fill: out.fill,
           fillSource: out.fillSource,
           frame: out.frame,
-          radiusPx: out.radiusPx,
           crop: out.crop,
           dest: out.dest,
           pad: out.pad,
@@ -1391,12 +1386,12 @@ export default function App() {
             <Canvas style={{ width: stage.w, height: stage.h }}>
               <Group transform={[{ translateX: shot.offX }, { translateY: shot.offY }]}>
                 <Rect x={0} y={0} width={shot.width} height={shot.height} color={fillColour} />
-                {/* The image is clipped to the rounded destination and drawn
+                {/* The image is clipped to the destination and drawn
                     scaled so that the CROP lands on it. Skia's Image has no
                     source rect, so the placement does that job: the whole
                     picture is scaled and positioned, and the clip keeps the
                     part that belongs in the card. */}
-                <Group clip={skRRect(skRect(shot.dest.x, shot.dest.y, shot.dest.w, shot.dest.h), shot.radius, shot.radius)}>
+                <Group clip={skRect(shot.dest.x, shot.dest.y, shot.dest.w, shot.dest.h)}>
                   <SkiaImage
                     image={src.img}
                     fit="fill"
@@ -1929,7 +1924,7 @@ function CropLoupe({ crop, view, stage, image, handle, on }) {
 }
 
 /**
- * Padding, corners and background. No apply: every control here is already
+ * Padding and background. No apply: every control here is already
  * its own preview, which is what `TOOL.style.takeover === false` means.
  */
 function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset: resettable, onReset, onDone }) {
@@ -1961,15 +1956,6 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset
         max={PAD_MAX}
         palette={palette}
         onChange={(v) => setEd((s) => ({ ...s, padding: setPadding(v, s.crop.w).padding }))}
-      />
-
-      <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.corners}</Text>
-      <Slider
-        value={ed.radius}
-        min={0}
-        max={MAX_RADIUS}
-        palette={palette}
-        onChange={(v) => setEd((s) => ({ ...s, radius: setRadius(v) }))}
       />
 
       <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.background}</Text>
