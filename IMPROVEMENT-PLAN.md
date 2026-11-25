@@ -111,7 +111,7 @@ README, and generating icon PNGs from SVG.
 5. ~~One card per image for multi-image shares (builds on the P1 queue).~~ **Done, unbuilt.** The native
    module copies up to 10 images (`take(keep)` keeps the card on screen and the queue); `src/queue.js` holds the
    queue (cap 10, overflow counted as skipped), `src/sharein.js` plans arrivals and advances. The "N waiting"
-   chip opens the next; Close, Back and Discard open the next queued image instead of the empty state. The
+   chip opens the next; Close and Discard open the next queued image instead of the empty state; Back always returns to the start screen, where the chip still shows the queue. The
    Kotlin is uncompiled and untested on a device, and the queue is not restored after a process death.
 
 ## Release
