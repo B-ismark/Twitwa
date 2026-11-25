@@ -54,6 +54,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
+import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   interpolateColor,
@@ -150,6 +152,18 @@ import { cropFits, readSession, serialiseSession } from './src/session';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
 import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
+import {
+  CAPTION_LINE,
+  CAPTION_LINES,
+  bottomPad,
+  captionHeight,
+  cropGutter,
+  liftForSheet,
+  overlayTop,
+  statusBarStyle,
+  stepPadding,
+  topPad,
+} from './src/layout';
 import DevPanel from './src/DevPanel';
 
 const PAPER = '#F6F4EF';
@@ -249,7 +263,20 @@ function removeFile(uri) {
   }
 }
 
+// The provider is the app's outermost layer so `useSafeAreaInsets` has an
+// answer on the first render of the editor. The app draws edge to edge (Android
+// 15+ forces it), so the insets are the only honest source for the status and
+// navigation bars' heights.
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <Editor />
+    </SafeAreaProvider>
+  );
+}
+
+function Editor() {
+  const insets = useSafeAreaInsets();
   const { fontScale, scale: pixelScale } = useWindowDimensions();
   const scheme = useColorScheme();
   const palette = paletteFor(scheme);
@@ -404,6 +431,24 @@ export default function App() {
     }
   }, [ed, sampled]);
 
+  // What each Background choice would paint, for its swatch. The same
+  // `planOutput` answer as the card, per choice, so Match shows the colour that
+  // was actually sampled (with its fallbacks) and Paper and Ink show what the
+  // renderer uses rather than a second copy of those two hex values.
+  const swatchFills = useMemo(() => {
+    const out = {};
+    for (const b of BACKGROUNDS) {
+      try {
+        out[b] = ed
+          ? planOutput({ crop: ed.crop, padding: ed.padding, background: sampled, frame: b }).fill
+          : null;
+      } catch (e) {
+        out[b] = null;
+      }
+    }
+    return out;
+  }, [ed, sampled]);
+
   const shot = useMemo(() => {
     if (!comp || !stage) return null;
     // Contain-fit the CARD in the stage, not the image: the padding is part of
@@ -422,15 +467,26 @@ export default function App() {
     }
   }, [comp, stage]);
 
+
+  // The crop's working area: the stage less a gutter on each side, so a handle
+  // can never be dragged within 24dp of the screen's edge, where Android's back
+  // gesture takes the touch. Inset rather than the stage being narrowed, which
+  // would resize it for the whole of every crop. See `cropGutter`.
+  const gutter = cropGutter();
+  const cropStage = useMemo(
+    () => (stage ? { w: Math.max(0, stage.w - 2 * gutter), h: stage.h } : null),
+    [stage, gutter],
+  );
+
   /** The contain-fit projection used by the raw-screenshot layer and its tools. */
   const view = useMemo(() => {
-    if (!src || !stage) return null;
+    if (!src || !cropStage) return null;
     try {
-      return fitView({ imageW: src.width, imageH: src.height, viewW: stage.w, viewH: stage.h });
+      return fitView({ imageW: src.width, imageH: src.height, viewW: cropStage.w, viewH: cropStage.h });
     } catch (e) {
       return null;
     }
-  }, [src, stage]);
+  }, [src, cropStage]);
 
   // --- the cross-fade ------------------------------------------------------
   //
@@ -442,7 +498,16 @@ export default function App() {
   useEffect(() => {
     raw.value = withTiming(wants === 'screenshot' ? 1 : 0, { duration: FADE_MS });
   }, [wants, raw]);
-  const cardLayer = useAnimatedStyle(() => ({ opacity: 1 - raw.value }));
+  // The card's lift while the Style sheet is open: see liftForSheet. Two
+  // shared values so the card glides, and the sheet's height is measured
+  // rather than assumed, because it grows with the system font size.
+  const [sheetH, setSheetH] = useState(0);
+  const liftY = useSharedValue(0);
+  const liftS = useSharedValue(1);
+  const cardLayer = useAnimatedStyle(() => ({
+    opacity: 1 - raw.value,
+    transform: [{ translateY: liftY.value }, { scale: liftS.value }],
+  }));
 
   // The card fades in when it first appears, instead of replacing the empty
   // screen in one frame. Not on a replacement: `hasSrc` stays true, so the
@@ -460,6 +525,16 @@ export default function App() {
   }, [hasSrc, reduceMotion, appear]);
   const appearStyle = useAnimatedStyle(() => ({ opacity: appear.value }));
   const rawLayer = useAnimatedStyle(() => ({ opacity: raw.value }));
+
+  const styleOpen = Boolean(ed && ed.tool === 'style');
+  useEffect(() => {
+    const r = styleOpen && shot && stage
+      ? liftForSheet({ stageH: stage.h, cardTop: shot.offY, cardH: shot.height, sheetH })
+      : { scale: 1, ty: 0 };
+    const t = (v) => (reduceMotion ? v : withTiming(v, { duration: LIFT_MS }));
+    liftY.value = t(r.ty);
+    liftS.value = t(r.scale);
+  }, [styleOpen, shot, stage, sheetH, reduceMotion, liftY, liftS]);
 
   // The stage's ground rides the same value as the two layers.
   //
@@ -1596,6 +1671,18 @@ export default function App() {
   // activity and the card went with it, unasked. The order and the reasons are
   // backAction's, in src/shell.js; this only carries them out. Returning false
   // is the one case Android should handle itself.
+  // What Back does with an open takeover tool, once backAction has said which:
+  // cancel at once, or ask first because the tool was changed. It is also the
+  // Cancel button's, so Back and Cancel cannot disagree about when to ask.
+  const leaveTool = useCallback(
+    (a) => {
+      if (a === 'cancel-tool') cancel();
+      else if (a === 'ask-tool') confirmDiscard(COPY.discardCropTitle, COPY.discardCropBody, cancel);
+    },
+    [cancel, confirmDiscard],
+  );
+  const cancelCrop = useCallback(() => leaveTool(backAction(ed)), [ed, leaveTool]);
+
   const goBack = useCallback(() => {
     const busyMs = busy && busySince.current ? Date.now() - busySince.current : 0;
     const a = backAction(ed, { menu, dev: devOpen, busy, busyMs, kept: kept.current });
@@ -1604,13 +1691,12 @@ export default function App() {
     if (a === 'close-dev') setDevOpen(false);
     else if (a === 'close-menu') setMenu(false);
     else if (a === 'abandon') abandonExport();
-    else if (a === 'cancel-tool') cancel();
-    else if (a === 'ask-tool') confirmDiscard(COPY.discardCropTitle, COPY.discardCropBody, cancel);
+    else if (a === 'cancel-tool' || a === 'ask-tool') leaveTool(a);
     else if (a === 'close-tool') setEd((s) => (s ? doneTool(s) : s));
     else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
     else if (a === 'leave') clearEditor();
     return true;
-  }, [ed, menu, devOpen, busy, abandonExport, cancel, clearEditor, confirmDiscard, emit]);
+  }, [ed, menu, devOpen, busy, abandonExport, leaveTool, clearEditor, confirmDiscard, emit]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', goBack);
@@ -1653,65 +1739,15 @@ export default function App() {
   // tools/check-copy.mjs see that the string is used.
   const toolLabel = { crop: COPY.crop, style: COPY.style };
   const stopLabel = { snug: COPY.snug, standard: COPY.standard, roomy: COPY.roomy };
+  // The bars' bottom padding, from the navigation bar's real height.
+  const barPad = { paddingBottom: bottomPad(insets.bottom) };
   const frameLabel = { match: COPY.matchFrame, paper: COPY.paperFrame, ink: COPY.inkFrame };
 
   return (
-    <GestureHandlerRootView style={[styles.root, { backgroundColor: palette.background }]}>
-      {update ? (
-        <View style={[styles.update, { backgroundColor: palette.surface, borderColor: palette.signal }]}>
-          <Text style={[styles.updateTitle, { color: palette.text }]}>
-            {fill(COPY.updateTitle, { version: update.versionName })}
-          </Text>
-          {update.notes ? (
-            <Text style={[styles.updateNotes, { color: palette.graphite }]}>{update.notes}</Text>
-          ) : null}
-          {updateStep ? (
-            <Text
-              style={[styles.updateNotes, { color: palette.text }]}
-              accessibilityLiveRegion="polite"
-            >
-              {updateStep.problem
-                ?? (updateStep.percent === null
-                  ? COPY.updateStarting
-                  : fill(COPY.updateDownloading, { percent: updateStep.percent }))}
-            </Text>
-          ) : null}
-          <View style={styles.updateRow}>
-            <Action
-              label={COPY.updateGet}
-              palette={palette}
-              primary
-              disabled={Boolean(updateStep && !updateStep.problem)}
-              onPress={() => getUpdate(update)}
-            />
-            {/* While it downloads, the way out is Cancel, not Later. Before
-                this there was no way to stop 19 MB once started: Later hid
-                the banner and left the download running. */}
-            {updateStep && !updateStep.problem && updateStep.percent !== 100 ? (
-              <Action
-                label={COPY.cancel}
-                palette={palette}
-                onPress={() => {
-                  updateCancelled.current = true;
-                  cancelUpdate();
-                  setUpdateStep(null);
-                }}
-              />
-            ) : (
-              <Action
-                label={COPY.updateLater}
-                palette={palette}
-                onPress={() => {
-                  updateDismissed.current = true;
-                  rememberLater(update);
-                  setUpdate(null);
-                }}
-              />
-            )}
-          </View>
-        </View>
-      ) : null}
-
+    <GestureHandlerRootView
+      style={[styles.root, { backgroundColor: palette.background, paddingTop: topPad(insets.top) }]}
+    >
+      <StatusBar style={statusBarStyle(scheme)} />
       {/* The stage paints a ground only once there is an image on it, and
           which ground depends on what is being shown — see `stageGround`.
           Empty, the dark one was a full-height black slab with one line of
@@ -1719,15 +1755,7 @@ export default function App() {
           as an empty app. It was also unreadable: the stage colour is dark in
           BOTH themes, so in light mode that line was light-Graphite on Ink at
           2.37:1. */}
-      {/* Close, top-left, on the card view. The row stays while a takeover tool
-          is open so the stage does not change height under the person's
-          thumb; only the control goes, because Crop has its own Cancel. */}
-      {src ? (
-        <View style={styles.topBar}>
-          {takeover ? null : <Action label={COPY.close} palette={palette} fit onPress={goBack} />}
-        </View>
-      ) : null}
-
+      <View style={styles.stageArea}>
       <Animated.View
         style={[styles.stage, src ? stageGround : null]}
         onLayout={onStageLayout}
@@ -1789,11 +1817,11 @@ export default function App() {
         {/* Layer two: the raw screenshot, which is what a takeover tool edits. */}
         {src && stage && view && !override ? (
           <Animated.View
-            style={[StyleSheet.absoluteFill, rawLayer]}
+            style={[styles.rawLayer, { left: gutter, right: gutter }, rawLayer]}
             pointerEvents={takeover ? 'auto' : 'none'}
           >
-            <Canvas style={{ width: stage.w, height: stage.h }}>
-              <SkiaImage image={src.img} x={0} y={0} width={stage.w} height={stage.h} fit="contain" />
+            <Canvas style={{ width: cropStage.w, height: cropStage.h }}>
+              <SkiaImage image={src.img} x={0} y={0} width={cropStage.w} height={cropStage.h} fit="contain" />
             </Canvas>
             {ed && ed.tool === 'crop' ? (
               <GestureDetector gesture={cropGesture}>
@@ -1801,14 +1829,14 @@ export default function App() {
                   {/* The shared value, not `ed.crop`. Passing the rect would
                       put the projection back in the render and undo the whole
                       change: React would have to re-render to move the frame. */}
-                  <Scrim crop={liveCrop} view={view} stage={stage} />
+                  <Scrim crop={liveCrop} view={view} stage={cropStage} />
                   <CropBands crop={liveCrop} view={view} bounds={imageBounds} on={gridOn} />
                   <CropGrid crop={liveCrop} view={view} on={gridOn} />
-                  <CropFrame crop={liveCrop} view={view} stage={stage} />
+                  <CropFrame crop={liveCrop} view={view} stage={cropStage} />
                   <CropLoupe
                     crop={liveCrop}
                     view={view}
-                    stage={stage}
+                    stage={cropStage}
                     image={src.img}
                     handle={grabbed}
                     on={gridOn}
@@ -1821,6 +1849,114 @@ export default function App() {
         </Animated.View>
       </Animated.View>
 
+      {/* OVERLAYS. Everything below up to the closing of this area floats over
+          the stage and takes no height from it: see src/layout.js. */}
+      {update ? (
+        <View style={[styles.update, { top: overlayTop(Boolean(src) && !takeover) }, { backgroundColor: palette.surface, borderColor: palette.signal }]}>
+          <Text style={[styles.updateTitle, { color: palette.text }]}>
+            {fill(COPY.updateTitle, { version: update.versionName })}
+          </Text>
+          {update.notes ? (
+            <Text style={[styles.updateNotes, { color: palette.graphite }]}>{update.notes}</Text>
+          ) : null}
+          {updateStep ? (
+            <Text
+              style={[styles.updateNotes, { color: palette.text }]}
+              accessibilityLiveRegion="polite"
+            >
+              {updateStep.problem
+                ?? (updateStep.percent === null
+                  ? COPY.updateStarting
+                  : fill(COPY.updateDownloading, { percent: updateStep.percent }))}
+            </Text>
+          ) : null}
+          <View style={styles.updateRow}>
+            <Action
+              label={COPY.updateGet}
+              palette={palette}
+              primary
+              disabled={Boolean(updateStep && !updateStep.problem)}
+              onPress={() => getUpdate(update)}
+            />
+            {/* While it downloads, the way out is Cancel, not Later. Before
+                this there was no way to stop 19 MB once started: Later hid
+                the banner and left the download running. */}
+            {updateStep && !updateStep.problem && updateStep.percent !== 100 ? (
+              <Action
+                label={COPY.cancel}
+                palette={palette}
+                onPress={() => {
+                  updateCancelled.current = true;
+                  cancelUpdate();
+                  setUpdateStep(null);
+                }}
+              />
+            ) : (
+              <Action
+                label={COPY.updateLater}
+                palette={palette}
+                onPress={() => {
+                  updateDismissed.current = true;
+                  rememberLater(update);
+                  setUpdate(null);
+                }}
+              />
+            )}
+          </View>
+        </View>
+      ) : null}
+
+      {/* Close, floating over the stage's top-left, on the card view. It took
+          a row of its own, which made the stage 52dp shorter than it needed to
+          be; over the card it takes none. A surface fill so it reads over any
+          card, and it goes while a takeover tool is open because Crop has its
+          own Cancel and the corner is a crop handle's. */}
+      {src && !takeover ? (
+        <View style={styles.closeFloat} pointerEvents="box-none">
+          <Action label={COPY.close} palette={palette} fit onPress={goBack} />
+        </View>
+      ) : null}
+      {ed && ed.tool === 'style' ? (
+        <StyleStrip
+          ed={ed}
+          setEd={setEd}
+          palette={palette}
+          stops={stops}
+          stopLabel={stopLabel}
+          frameLabel={frameLabel}
+          swatchFills={swatchFills}
+          onSheetLayout={(h) => setSheetH(h + SPACE.sm)}
+          canReset={canReset(ed)}
+          onReset={resetT}
+          onDone={done}
+        />
+      ) : null}
+
+      {menu ? (
+        <>
+        {/* A tap on the card beside the sheet closes it, as a tap outside any
+            sheet does. Not a TalkBack stop: Back closes it too, and an
+            unlabelled full-screen button would be one. */}
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={() => setMenu(false)}
+          accessible={false}
+          importantForAccessibility="no"
+        />
+        <View style={[styles.menu, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+          {/* Save is on the bar and no longer here. Developer tools is not
+              here either: it is for us, not for the people Twitwa is handed
+              to, and the long press on the caption is its way in. */}
+          {src && ed && !busy ? (
+            <MenuItem label={COPY.copyImage} palette={palette} onPress={copyImage} />
+          ) : null}
+          <MenuItem label={COPY.newShot} palette={palette} onPress={newShot} />
+        </View>
+        </>
+      ) : null}
+
+      </View>
+
       {/* The way in to the measurement harness, and the only thing on this
           screen that is not for a person using the app. A long press rather
           than a control, because a visible button would be the first thing to
@@ -1828,7 +1964,7 @@ export default function App() {
       {/* Not a TalkBack stop while it says nothing: at rest the caption is
           empty, and an empty stop reads as a control with no name. The long
           press still works for a sighted developer either way. */}
-      <View style={styles.captionRow}>
+      <View style={[styles.captionRow, { height: captionHeight(fontScale) }]}>
         <Pressable
           onLongPress={() => setDevOpen(true)}
           delayLongPress={800}
@@ -1842,6 +1978,7 @@ export default function App() {
               out every time Crop opens. */}
           <Text
             style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}
+            numberOfLines={CAPTION_LINES}
             accessibilityLiveRegion={problem || notice ? 'polite' : 'none'}
           >
             {caption}
@@ -1854,42 +1991,24 @@ export default function App() {
         ) : null}
       </View>
 
-      {ed && ed.tool === 'style' ? (
-        <StyleStrip
-          ed={ed}
-          setEd={setEd}
-          palette={palette}
-          stops={stops}
-          stopLabel={stopLabel}
-          frameLabel={frameLabel}
-          canReset={canReset(ed)}
-          onReset={resetT}
-          onDone={done}
-        />
-      ) : null}
-
-      {menu ? (
-        <View style={[styles.menu, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
-          {/* Save is on the bar and no longer here. Developer tools is not
-              here either: it is for us, not for the people Twitwa is handed
-              to, and the long press on the caption is its way in. */}
-          {src && ed && !busy ? (
-            <MenuItem label={COPY.copyImage} palette={palette} onPress={copyImage} />
-          ) : null}
-          <MenuItem label={COPY.newShot} palette={palette} onPress={newShot} />
-        </View>
-      ) : null}
-
       {!src ? (
-        <View style={styles.bar}>
+        <View style={[styles.bar, barPad]}>
           <Action label={COPY.choose} palette={palette} primary wide disabled={importing} onPress={pick} />
         </View>
       ) : takeover ? (
-        <View style={styles.bar}>
-          <Action label={COPY.cancel} palette={palette} onPress={cancel} />
-          <Action label={COPY.reset} palette={palette} disabled={!canReset(ed)} onPress={resetT} />
-          <Action label={COPY.done} palette={palette} primary onPress={done} />
-        </View>
+        // Two rows, like the editor's tools row and bar, so opening Crop does
+        // not hand the stage the tools row's height: the picture would grow
+        // and jump in the same moment it cross-fades to the raw screenshot.
+        // Cancel and Reset take the tools row; Done is the bar's one primary.
+        <>
+          <View style={styles.tools}>
+            <Action label={COPY.cancel} palette={palette} onPress={cancelCrop} />
+            <Action label={COPY.reset} palette={palette} disabled={!canReset(ed)} onPress={resetT} />
+          </View>
+          <View style={[styles.bar, barPad]}>
+            <Action label={COPY.done} palette={palette} primary wide onPress={done} />
+          </View>
+        </>
       ) : (
         <>
           <View style={styles.tools}>
@@ -1903,7 +2022,7 @@ export default function App() {
               />
             ))}
           </View>
-          <View style={styles.bar}>
+          <View style={[styles.bar, barPad]}>
             <Action label={COPY.share} palette={palette} primary wide disabled={busy} onPress={share} />
             {/* Save beside Share, and only here. The owner asked for it on
                 the share sheet itself; Android lets an app add its own action
@@ -1971,6 +2090,8 @@ const GRID_MS = 120;
 const NOTICE_MS = 2500;
 // How long the card must sit still before it is written to the session file.
 const SESSION_MS = 400;
+// The card's glide out from under the Style sheet, and back.
+const LIFT_MS = 220;
 
 /**
  * The loupe's size, its inset from the stage's corner, and how many POINTS
@@ -2307,20 +2428,34 @@ function CropLoupe({ crop, view, stage, image, handle, on }) {
 }
 
 /**
- * Padding and background. No apply: every control here is already
- * its own preview, which is what `TOOL.style.takeover === false` means.
+ * Padding and background, as a sheet over the stage. No apply: every control
+ * here is already its own preview, which is what `TOOL.style.takeover ===
+ * false` means.
+ *
+ * Done is a plain text button, not a filled chip: Share is the one primary
+ * control on the screen, and a second filled thing in the sheet competed with
+ * it for "the thing to press".
  */
-function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset: resettable, onReset, onDone }) {
+function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, swatchFills, onSheetLayout, canReset: resettable, onReset, onDone }) {
   return (
-    <View style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}>
+    <View
+      style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}
+      onLayout={(e) => onSheetLayout(e.nativeEvent.layout.height)}
+    >
       {/* Reset to a new card's style, and a way out that is not "tap Style
-          again". Before these the strip had neither. They share the Padding
-          label's row rather than taking one of their own: a whole row cost
-          the stage 48dp more, which a 640dp-tall phone cannot spare. */}
+          again". They share the Padding label's row: a row of their own makes
+          the sheet 48dp taller, and it floats over the card it is editing. */}
       <View style={styles.stripHead}>
         <Text style={[styles.stripLabel, styles.stripHeadLabel, { color: palette.graphite }]}>{COPY.padding}</Text>
         <Chip label={COPY.reset} palette={palette} on={false} toggle={false} disabled={!resettable} onPress={onReset} />
-        <Chip label={COPY.done} palette={palette} on toggle={false} onPress={onDone} />
+        <Pressable
+          onPress={onDone}
+          accessibilityRole="button"
+          accessibilityLabel={COPY.done}
+          style={styles.textButton}
+        >
+          <Text style={[styles.chipText, { color: palette.signal }]}>{COPY.done}</Text>
+        </Pressable>
       </View>
       <View style={styles.chips}>
         {stops.map((s) => (
@@ -2338,15 +2473,22 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset
         min={PAD_MIN}
         max={PAD_MAX}
         palette={palette}
-        onChange={(v) => setEd((s) => ({ ...s, padding: setPadding(v, s.crop.w).padding }))}
+        label={COPY.padding}
+        onCommit={(v) => setEd((s) => ({ ...s, padding: setPadding(v, s.crop.w).padding }))}
+        onPreview={(v) => setEd((s) => {
+          const padding = setPadding(v, s.crop.w).padding;
+          return padding === s.padding ? s : { ...s, padding };
+        })}
+        onStep={(dir) => setEd((s) => ({ ...s, padding: stepPadding(s.padding, dir, s.crop.w) }))}
       />
 
       <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.background}</Text>
-      <View style={styles.chips}>
+      <View style={styles.swatches}>
         {BACKGROUNDS.map((b) => (
-          <Chip
+          <Swatch
             key={b}
             label={frameLabel[b]}
+            colour={swatchFills[b]}
             palette={palette}
             on={ed.background === b}
             onPress={() => setEd((s) => ({ ...s, background: setBackground(b) }))}
@@ -2358,51 +2500,131 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, canReset
 }
 
 /**
+ * A background choice as the colour it paints, with its name under it.
+ *
+ * Selected is a ring AND the accessibility state, not the ring alone. The ring
+ * is Signal-coloured and a gap wide, so it reads against a swatch of any
+ * colour, including one that matches the sheet. The disc itself has a hairline
+ * because Paper on a white sheet, and Ink on a dark one, have no edge
+ * otherwise.
+ */
+function Swatch({ label, colour, on, onPress, palette }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: on }}
+      style={styles.swatch}
+    >
+      <View style={[styles.swatchRing, { borderColor: on ? palette.signal : 'transparent' }]}>
+        <View style={[styles.swatchDisc, { backgroundColor: colour || palette.surface, borderColor: palette.hairline }]} />
+      </View>
+      <Text style={[styles.swatchText, { color: on ? palette.text : palette.graphite }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/**
  * A continuous control, written here because nothing in the dependency list is
  * one and a slider is forty lines.
  *
+ * THE THUMB IS A SHARED VALUE and the padding is committed to React once, on
+ * release, the way the crop commits its frame. It used to call `onChange` on
+ * every move, so every frame of a drag was a thread hop, a re-render of the
+ * whole app and a recompose of the card behind the sheet. Now the drag is the
+ * UI thread's alone, and the card is told only when the value has moved a
+ * hundredth of the range (and re-renders only when that changes the snapped
+ * padding), so it still previews WHILE it is dragged. The release commits the
+ * exact value.
+ *
  * The whole track is the touch target, not the thumb: a 20pt thumb is under
- * the platform's 44pt floor and a track that only responds where the thumb
+ * the platform's touch floor and a track that only responds where the thumb
  * already is makes a long drag start with a miss.
  */
-function Slider({ value, min, max, onChange, palette }) {
-  const [w, setW] = useState(0);
+function Slider({ value, min, max, onCommit, onPreview, onStep, palette, label }) {
   const at = max > min ? (value - min) / (max - min) : 0;
+  // 0..1 along the track, written by the drag and, at rest, by `value`.
+  const pos = useSharedValue(at);
+  const width = useSharedValue(0);
+  const dragging = useSharedValue(false);
+  const sent = useSharedValue(at);
+  useEffect(() => {
+    // Not while a finger is down: a commit from the previous release landing
+    // mid-drag would snatch the thumb back to where the finger WAS.
+    if (!dragging.value) pos.value = at;
+  }, [at, pos, dragging]);
+
   const move = useMemo(
     () =>
       Gesture.Pan()
-        .onBegin((e) => { if (w > 0) onChange(min + (max - min) * clamp01(e.x / w)); })
-        .onChange((e) => { if (w > 0) onChange(min + (max - min) * clamp01(e.x / w)); })
-        .runOnJS(true),
-    [w, min, max, onChange],
+        .onBegin((e) => {
+          'worklet';
+          if (width.value <= 0) return;
+          dragging.value = true;
+          pos.value = clamp01(e.x / width.value);
+          sent.value = pos.value;
+          runOnJS(onPreview)(min + (max - min) * pos.value);
+        })
+        .onChange((e) => {
+          'worklet';
+          if (width.value <= 0) return;
+          pos.value = clamp01(e.x / width.value);
+          // The card previews the padding as the finger moves, which is what a
+          // slider is for. Only when the value has moved a hundredth of the
+          // range: the thumb itself stays on the UI thread at frame rate, and
+          // the preview's setEd returns the same state (no render) when the
+          // snapped padding has not changed.
+          if (Math.abs(pos.value - sent.value) >= 0.01) {
+            sent.value = pos.value;
+            runOnJS(onPreview)(min + (max - min) * pos.value);
+          }
+        })
+        // onFinalize, as the crop's is: a drag cancelled by the system still
+        // has to put the thumb's value into the card.
+        .onFinalize(() => {
+          'worklet';
+          if (!dragging.value) return;
+          dragging.value = false;
+          runOnJS(onCommit)(min + (max - min) * pos.value);
+        }),
+    [width, pos, dragging, sent, min, max, onCommit, onPreview],
   );
+  const fillStyle = useAnimatedStyle(() => ({ width: pos.value * width.value }));
+  const thumbStyle = useAnimatedStyle(() => ({ left: pos.value * width.value - 11 }));
   return (
     <GestureDetector gesture={move}>
       <View
         style={styles.sliderHit}
-        onLayout={(e) => setW(Math.round(e.nativeEvent.layout.width))}
+        onLayout={(e) => { width.value = Math.round(e.nativeEvent.layout.width); }}
+        accessible
         accessibilityRole="adjustable"
+        accessibilityLabel={label}
         accessibilityValue={{ min: 0, max: 100, now: Math.round(at * 100) }}
+        accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === 'increment') onStep(1);
+          else if (e.nativeEvent.actionName === 'decrement') onStep(-1);
+        }}
       >
         <View style={[styles.track, { backgroundColor: palette.hairline }]} />
-        <View style={[styles.trackFill, { backgroundColor: palette.signal, width: Math.max(0, at * w) }]} />
-        <View
-          style={[
-            styles.thumb,
-            { backgroundColor: palette.signal, borderColor: palette.surface, left: Math.max(0, at * w - 11) },
-          ]}
+        <Animated.View style={[styles.trackFill, { backgroundColor: palette.signal }, fillStyle]} />
+        <Animated.View
+          style={[styles.thumb, { backgroundColor: palette.signal, borderColor: palette.surface }, thumbStyle]}
         />
       </View>
     </GestureDetector>
   );
 }
 
-const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const clamp01 = (v) => {
+  'worklet';
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+};
 
 /** A small selectable label. On state is shown by fill AND border, not colour alone. */
 // `toggle` false is for a chip that is an action, not a choice, such as the
-// Style strip's Done: filled to mark it as the way out, but TalkBack must
-// not read it as "selected".
+// Style sheet's Reset: TalkBack must not read it as "selected".
 function Chip({ label, on, onPress, palette, disabled = false, toggle = true }) {
   return (
     <Pressable
@@ -2467,12 +2689,24 @@ function Action({ label, onPress, disabled, primary, selected, wide, fit, palett
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, paddingTop: SPACE.xxl + SPACE.md },
+  // No fixed top padding: the status bar's height comes from the insets, in the
+  // view (`topPad`).
+  root: { flex: 1 },
+  // The stage and everything that floats over it. `flex: 1` is the one thing
+  // that sizes the stage, and nothing in here is in the flow but the stage.
+  stageArea: { flex: 1 },
+  // The raw screenshot's layer, inset left and right by `cropGutter` (inline).
+  rawLayer: { position: 'absolute', top: 0, bottom: 0 },
+  // The Close control, over the stage's top-left: the stage's own margin plus a
+  // gap, so it sits inside the card's corner rather than on the screen's edge.
+  closeFloat: { position: 'absolute', top: SPACE.sm, left: SPACE.md + SPACE.sm, minWidth: TOUCH },
+  // `top` is inline (`overlayTop`): it clears Close when Close is there.
   update: {
+    position: 'absolute',
+    left: SPACE.md,
+    right: SPACE.md,
     borderWidth: 1,
     borderRadius: RADIUS.md,
-    marginHorizontal: SPACE.md,
-    marginBottom: SPACE.sm,
     padding: SPACE.md,
   },
   updateTitle: { ...TYPE.label },
@@ -2565,21 +2799,25 @@ const styles = StyleSheet.create({
     outlineColor: 'rgba(0,0,0,0.35)',
   },
 
-  topBar: { minHeight: TOUCH, paddingHorizontal: SPACE.md, paddingBottom: SPACE.xs, alignItems: 'flex-start' },
+  // A FIXED slot (height inline: `captionHeight`), so a problem that runs to a
+  // second line, or none at all, never moves the stage above it.
   captionRow: { flexDirection: 'row', alignItems: 'center', paddingRight: SPACE.md },
   captionGrow: { flex: 1 },
-  captionWrap: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.lg },
-  caption: { ...TYPE.caption, textAlign: 'center' },
+  captionWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: SPACE.lg },
+  caption: { ...TYPE.caption, lineHeight: CAPTION_LINE, textAlign: 'center' },
 
+  // The Style sheet: anchored to the bottom of the stage area, which is the top
+  // of the caption and the bars, so it sits just above them and floats over the
+  // card instead of squeezing it.
   strip: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    position: 'absolute',
+    left: SPACE.md,
+    right: SPACE.md,
+    bottom: SPACE.sm,
     paddingHorizontal: SPACE.md,
     paddingVertical: SPACE.sm,
-    marginHorizontal: SPACE.md,
     borderRadius: RADIUS.md,
     borderWidth: StyleSheet.hairlineWidth,
-    marginBottom: SPACE.sm,
   },
   stripLabel: { ...TYPE.caption, marginTop: SPACE.xs },
   stripHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
@@ -2594,14 +2832,31 @@ const styles = StyleSheet.create({
   },
   chipText: { ...TYPE.label },
 
+  // A text button: no fill, no border, only the touch target around the word.
+  textButton: { minHeight: TOUCH, minWidth: TOUCH, justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACE.sm },
+  swatches: { flexDirection: 'row', gap: SPACE.lg, marginTop: SPACE.xs },
+  swatch: { minHeight: TOUCH, minWidth: TOUCH + SPACE.md, alignItems: 'center' },
+  swatchRing: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swatchDisc: { width: 34, height: 34, borderRadius: 17, borderWidth: 1 },
+  swatchText: { ...TYPE.caption, marginTop: SPACE.xs },
+
   sliderHit: { height: TOUCH, justifyContent: 'center' },
   track: { height: 4, borderRadius: 2 },
   trackFill: { position: 'absolute', height: 4, borderRadius: 2 },
   thumb: { position: 'absolute', width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
 
   menu: {
-    marginHorizontal: SPACE.md,
-    marginBottom: SPACE.sm,
+    position: 'absolute',
+    left: SPACE.md,
+    right: SPACE.md,
+    bottom: SPACE.sm,
     borderRadius: RADIUS.md,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
@@ -2610,7 +2865,8 @@ const styles = StyleSheet.create({
   menuText: { ...TYPE.body },
 
   tools: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.sm },
-  bar: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.xl },
+  // paddingBottom is inline (`bottomPad`): the navigation bar's height.
+  bar: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md },
   action: {
     flex: 1,
     minHeight: TOUCH + 4,
