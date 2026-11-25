@@ -866,9 +866,9 @@ function Editor() {
   const shareGen = useRef(0);
 
   const clearEditor = useCallback(() => {
-    // Discard, Close and a clean Back with nothing queued all end here (with
-    // something queued they go through leaveCard and open the next picture
-    // instead), and a card that was thrown away must not come back at the next
+    // Back always ends here, and so do Discard and Close with nothing queued
+    // (with something queued those two go through leaveCard and open the next
+    // picture instead). A card that was thrown away must not come back at the next
     // launch. A New screenshot needs no
     // clear of its own: the card that replaces it overwrites the file.
     clearSessionFile();
@@ -1893,10 +1893,15 @@ function Editor() {
     else if (a === 'abandon') abandonExport();
     else if (a === 'cancel-tool' || a === 'ask-tool') leaveTool(a);
     else if (a === 'close-tool') setEd((s) => (s ? doneTool(s) : s));
-    else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, leaveCard);
-    else if (a === 'leave') leaveCard();
+    // Back always lands on the start screen, queue or not (owner's call,
+    // 2026-11-25). Back is how a person leaves; advancing on it meant one
+    // press per waiting picture to get out of the app. The queue survives:
+    // the start screen shows the same "N waiting" chip, and Close is the
+    // route that moves on to the next card.
+    else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
+    else if (a === 'leave') clearEditor();
     return true;
-  }, [ed, menu, devOpen, busy, abandonExport, leaveTool, leaveCard, confirmDiscard, emit]);
+  }, [ed, menu, devOpen, busy, abandonExport, leaveTool, clearEditor, confirmDiscard, emit]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', goBack);
