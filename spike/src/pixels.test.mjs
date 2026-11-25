@@ -255,6 +255,21 @@ if (BREAK === 'ring_flat') {
     const s = real.regionBackground(buf, rb, w, h, crop, 16, 2);
     return { source: 'sampled', hex: s.hex, mean: s.mean, maxEdgeDiff: 0, edges: {} };
   };
+} else if (BREAK === 'vote_unanimous' || BREAK === 'vote_weak' || BREAK === 'vote_tie' || BREAK === 'vote_no_snap') {
+  // The four ways back to the old rule, or past the new one: demand all four
+  // edges (the pre-2026-11-25 unanimity), let a split strip vote, take a tie
+  // as a consensus, or fill with the cluster's mean instead of its exact value.
+  F.cropBackground = (buf, rb, w, h, crop) => {
+    const edges = {};
+    for (const [n, r] of Object.entries(real.cropEdgeStrips(crop, 8))) {
+      const e = real.regionBackground(buf, rb, w, h, r, 16, 2);
+      edges[n] = BREAK === 'vote_no_snap' && e ? { ...e, value: undefined } : e;
+    }
+    const opts = BREAK === 'vote_unanimous' ? { quorum: 4 }
+      : BREAK === 'vote_weak' ? { strong: 0 }
+      : BREAK === 'vote_tie' ? { ties: 'accept' } : {};
+    return real.decideCropBackground(edges, () => null, opts);
+  };
 } else if (BREAK === 'luma_flip') {
   F.cropBackground = (...a) => {
     const r = real.cropBackground(...a);
@@ -648,11 +663,69 @@ console.log('cropBackground: a crop straddling a boundary must NOT pick an edge'
 
 console.log('cropBackground: fallback picks Paper for a light crop');
 {
+  // A true straddle that is mostly light: 60% white over 40% black. The side
+  // strips are split, so they abstain; top and bottom tie; no consensus.
   const img = blank(200, 200, [255, 255, 255]);
-  fillRect(img, { x: 0, y: 160, w: 200, h: 40 }, [0, 0, 0]);
+  fillRect(img, { x: 0, y: 120, w: 200, h: 80 }, [0, 0, 0]);
   const r = F.cropBackground(img.buf, img.rowBytes, 200, 200, { x: 0, y: 0, w: 200, h: 200 });
   check('still a fallback', r.source === 'fallback', r.source);
   check('falls back to Paper', r.hex === real.PAPER, r.hex);
+}
+
+console.log('cropBackground: one odd edge is outvoted (a bar along the bottom)');
+{
+  // Until 2026-11-25 this was the Paper test above: a white page with a dark
+  // bar across its bottom fell back to cream. The page is white on three
+  // edges, and the frame should be white.
+  const img = blank(200, 200, [255, 255, 255]);
+  fillRect(img, { x: 0, y: 160, w: 200, h: 40 }, [0, 0, 0]);
+  const r = F.cropBackground(img.buf, img.rowBytes, 200, 200, { x: 0, y: 0, w: 200, h: 200 });
+  check('samples the page', r.source === 'sampled', JSON.stringify(r).slice(0, 140));
+  check('white, not Paper', r.hex === '#FFFFFF', r.hex);
+  check('names the edge it outvoted', Array.isArray(r.outvoted) && r.outvoted.join() === 'bottom', r.outvoted);
+}
+
+console.log('cropBackground: a scroll track down a white page is outvoted');
+{
+  // The owner's report: grey scroll track on the right of a white page gave a
+  // cream card. #F1F1F1 is 14 from white, just past the agreement threshold.
+  const img = blank(200, 200, [255, 255, 255]);
+  fillRect(img, { x: 188, y: 0, w: 12, h: 200 }, [241, 241, 241]);
+  fillRect(img, { x: 190, y: 40, w: 8, h: 50 }, [193, 193, 193]);
+  const r = F.cropBackground(img.buf, img.rowBytes, 200, 200, { x: 0, y: 0, w: 200, h: 200 });
+  check('samples the page, not the track', r.source === 'sampled' && r.hex === '#FFFFFF', r.hex);
+}
+
+console.log('cropBackground: a cream page under a dark app bar keeps its own cream');
+{
+  const img = blank(200, 300, [250, 246, 236]);
+  fillRect(img, { x: 0, y: 0, w: 200, h: 24 }, [30, 30, 30]);
+  const r = F.cropBackground(img.buf, img.rowBytes, 200, 300, { x: 0, y: 0, w: 200, h: 300 });
+  check('its exact cream, not Paper', r.hex === '#FAF6EC', r.hex);
+}
+
+console.log('cropBackground: two edges against two is a tie, not a consensus');
+{
+  // Black bands across top and bottom of a white page: each pair is strong
+  // and they disagree. Picking either is a guess.
+  const img = blank(200, 200, [255, 255, 255]);
+  fillRect(img, { x: 0, y: 0, w: 200, h: 20 }, [0, 0, 0]);
+  fillRect(img, { x: 0, y: 180, w: 200, h: 20 }, [0, 0, 0]);
+  const r = F.cropBackground(img.buf, img.rowBytes, 200, 200, { x: 0, y: 0, w: 200, h: 200 });
+  check('refuses a tie', r.source === 'fallback', JSON.stringify(r).slice(0, 140));
+}
+
+console.log('cropBackground: the fill is the page\'s exact pixel, not the cluster mean');
+{
+  // White with 1px near-white anti-aliasing (#F5F5F5) touching every edge.
+  // It shares white's histogram bucket, so the cluster's mean drifts to about
+  // #FBFBFB, the kind of off-white phase1-card-background.md measured; the
+  // exact mode stays #FFFFFF.
+  const img = blank(200, 200, [255, 255, 255]);
+  for (let x = 0; x < 200; x += 8) fillRect(img, { x, y: 0, w: 1, h: 200 }, [245, 245, 245]);
+  for (let y = 0; y < 200; y += 8) fillRect(img, { x: 0, y, w: 200, h: 1 }, [245, 245, 245]);
+  const r = F.cropBackground(img.buf, img.rowBytes, 200, 200, { x: 0, y: 0, w: 200, h: 200 });
+  check('snaps to #FFFFFF', r.hex === '#FFFFFF', r.hex);
 }
 
 console.log('cropBackground on a crop smaller than the strip thickness');

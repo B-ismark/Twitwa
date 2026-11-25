@@ -71,6 +71,16 @@ export const COPY = {
   replaceCardTitle: 'Replace this card?',
   replaceCardBody: 'The screenshot you shared takes its place, and the changes to this one will be lost.',
   replace: 'Replace',
+  // A share that arrived over unsaved work and was kept for later. The chip
+  // opens it by the same ask as a fresh share.
+  waitingOne: '1 screenshot waiting',
+
+  // --- opening a picture --------------------------------------------------
+  // While a share is copied or a pick is decoded, and while a launch looks for
+  // either. It says what is happening, not that the app is busy.
+  importing: 'Opening your screenshot',
+  // After a launch that found no share and brought back the last card.
+  restored: 'Picked up where you left off.',
 
   // --- the Style strip ----------------------------------------------------
   padding: 'Padding',
@@ -111,6 +121,11 @@ export const COPY = {
   sharedTooBig: 'That picture is too large to open.',
   sharedFirstOnly: 'Opened the first of {count} pictures. Twitwa makes one card at a time.',
   saved: 'Saved to Photos',
+  // Save tapped again on a card that has not changed since it was saved.
+  alreadySavedTitle: 'Already in Photos',
+  alreadySavedBody: 'This card is saved and nothing has changed since. Save another copy?',
+  alreadySavedOk: 'OK',
+  saveAgain: 'Save again',
   copied: 'Copied',
   // The picker's launcher does not survive the activity being recreated, and a
   // release build cannot reload itself to fix it. See src/recover.js.

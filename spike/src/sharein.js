@@ -61,3 +61,43 @@ function rejectedMessage(reason) {
   if (reason === 'too-big') return COPY.sharedTooBig;
   return COPY.sharedFailed;
 }
+
+/**
+ * What an arriving picture does to the editor and to the one waiting behind it.
+ *
+ * @param uri      the copy in our cache (a share's, or the waiting one on a
+ *                 second try from the chip)
+ * @param dirty    does the card on screen hold changes nobody kept?
+ * @param waiting  the picture already shelved, or null
+ *
+ *   { act: 'open',  waiting, drop }               nothing to lose: open it
+ *   { act: 'ask', keep: {waiting, drop},
+ *                 replace: {waiting, drop} }      ask; each answer says what
+ *                                                 happens to the shelf
+ *
+ * `drop` is a file to delete. Newest wins, so a picture that is shelved while
+ * another one is already waiting deletes the older file; one waiting copy is
+ * all the cache holds, and the native take() does the same on its side. The
+ * file shelved AGAIN (the chip, answered Keep editing a second time) is never
+ * its own `drop`, or declining twice would delete the picture.
+ *
+ * Only one picture is ever shelved, because the native module copies only the
+ * first of a multi-picture share (see the Kotlin's `copy`); a queue would have
+ * nothing to hold the rest.
+ */
+export function arrivalPlan({ uri, dirty, waiting = null }) {
+  const older = waiting && waiting !== uri ? waiting : null;
+  if (!dirty) return { act: 'open', waiting: null, drop: older };
+  return {
+    act: 'ask',
+    // Keep editing: this picture waits.
+    keep: { waiting: uri, drop: older },
+    // Replace: it opens, and any older one is gone with the card it was for.
+    replace: { waiting: null, drop: older },
+  };
+}
+
+/** The chip's label key, or null when nothing waits. */
+export function waitingChip(waiting) {
+  return waiting ? COPY.waitingOne : null;
+}

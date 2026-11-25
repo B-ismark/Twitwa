@@ -276,10 +276,40 @@ export function unsaved(state, kept) {
   return CARD_FIELDS.some((f) => !sameValue(state[f], kept[f]));
 }
 
+/**
+ * Is this exact card already in Photos? `saved` is `{ uri, card }` from the
+ * last successful Save. The picture must be the same one: two screenshots can
+ * share a crop and padding, and the second is not saved because the first was.
+ */
+export function alreadySaved(state, saved, uri) {
+  return !!(state && saved && saved.uri === uri && !unsaved(state, saved.card));
+}
+
 /** Has the open takeover tool changed anything since it opened? */
 export function toolChanged(state) {
   if (!state || !state.session) return false;
   return Object.keys(state.session).some((f) => !sameValue(state[f], state.session[f]));
+}
+
+/**
+ * How long Back waits for a card that is being made before it stops waiting.
+ *
+ * Back during an export does nothing, which is right for a render that takes a
+ * second and a trap for one that never returns (a share sheet that was dismissed
+ * without answering, a Skia surface that never finishes): `busy` is only
+ * cleared by the export coming back, so the person had no way out but killing
+ * the app. After this long Back gives up on it instead.
+ */
+export const BUSY_ABANDON_MS = 15000;
+
+/**
+ * Is the export that started at generation `started` still the one the editor
+ * is waiting for? Abandoning bumps the generation, so whatever lands afterwards
+ * is told apart from the next export and ignored: it must not clear `busy` for
+ * a newer one, put "Saved to Photos" on the screen, or mark a card kept.
+ */
+export function exportCurrent(started, current) {
+  return started === current;
 }
 
 /**
@@ -288,6 +318,7 @@ export function toolChanged(state) {
  *   'close-dev' | 'close-menu'    whatever is floating over the editor
  *   'wait'                         a card is being made; leaving now would land
  *                                  its "Saved to Photos" on the empty screen
+ *   'abandon'                      ...but it has been 15s: stop waiting for it
  *   'ask-tool'                     Crop is open and was moved: confirm, then Cancel
  *   'cancel-tool'                  Crop is open and unchanged: Cancel
  *   'close-tool'                   Style's strip is open; it keeps as it goes
@@ -298,11 +329,11 @@ export function toolChanged(state) {
  * Back from the editor lands on the empty screen rather than closing the app,
  * because the editor is the one place a second Back can still be undone from.
  */
-export function backAction(state, { menu = false, dev = false, busy = false, kept = null } = {}) {
+export function backAction(state, { menu = false, dev = false, busy = false, busyMs = 0, kept = null } = {}) {
   if (dev) return 'close-dev';
   if (menu) return 'close-menu';
   if (!state) return 'exit';
-  if (busy) return 'wait';
+  if (busy) return busyMs >= BUSY_ABANDON_MS ? 'abandon' : 'wait';
   if (state.tool) {
     if (!TOOL[state.tool].takeover) return 'close-tool';
     return toolChanged(state) ? 'ask-tool' : 'cancel-tool';

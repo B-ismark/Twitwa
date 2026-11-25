@@ -11,9 +11,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#F6F4EF",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "dev.bismark.twitwa",
@@ -74,7 +73,21 @@
       "./plugins/withReleaseSigning",
       "./plugins/withAndroidSize",
       "./plugins/withDebugSuffix",
-      "./plugins/withShareInRestore"
+      "./plugins/withShareInRestore",
+      "./plugins/withConfigChanges",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#F6F4EF",
+          "dark": {
+            "image": "./assets/splash-icon-dark.png",
+            "backgroundColor": "#15181D"
+          }
+        }
+      ]
     ]
   }
 }

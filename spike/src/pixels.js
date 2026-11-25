@@ -111,6 +111,28 @@ function modalOf(pts, tolerance) {
   if (m === 0) return null;
   const mean = [sr / m, sg / m, sb / m];
 
+  // The EXACT colour most of that cluster is. A screenshot's background is one
+  // flat pixel value, and the cluster's mean is not: the 16-wide tolerance
+  // pulls in anti-aliased text and light dividers, so a pure white page
+  // averaged to #FDFDFD/#FEFEFE (phase1-card-background.md has both), and a
+  // card framed one shade off its own screenshot shows the seam it exists to
+  // hide. When one exact value is at least half the cluster it is the
+  // background, so the fill snaps to it; a noisy (re-compressed) background
+  // with no dominant value keeps the mean.
+  const exactCount = new Map();
+  for (let i = 0; i < pts.length; i += 3) {
+    if (near(i)) {
+      const k = (pts[i] << 16) | (pts[i + 1] << 8) | pts[i + 2];
+      exactCount.set(k, (exactCount.get(k) || 0) + 1);
+    }
+  }
+  let exactKey = 0;
+  let exactBest = 0;
+  for (const [k, c] of exactCount) if (c > exactBest) { exactBest = c; exactKey = k; }
+  const value = exactBest * 2 >= m
+    ? [exactKey >> 16, (exactKey >> 8) & 0xff, exactKey & 0xff]
+    : mean;
+
   let qr = 0, qg = 0, qb = 0;
   for (let i = 0; i < pts.length; i += 3) {
     if (near(i)) {
@@ -126,6 +148,7 @@ function modalOf(pts, tolerance) {
     background: m,
     coverage: +(m / n).toFixed(4),
     mean: mean.map(Math.round),
+    value: value.map(Math.round),
     hex: rgbHex(mean),
     spread: +spread.toFixed(2),
   };
@@ -249,35 +272,58 @@ export const INK = '#15181D';
  * of the rule. Two copies of an agreement threshold is two thresholds.
  */
 export function decideCropBackground(edges, sampleWhole, opts = {}) {
-  const { agree = 12 } = opts;
+  const { agree = 12, strong = 0.8, quorum = 2, ties = 'refuse' } = opts;
   const order = ['top', 'bottom', 'left', 'right'];
-  const means = [];
-  for (const name of order) {
-    const e = edges[name];
-    if (e) means.push(e.mean);
-  }
-  if (means.length < 4) {
+  const present = order.filter((n) => edges[n]);
+  if (present.length < 4) {
     return { source: 'fallback', reason: 'could not sample all four edges', edges };
   }
 
-  // Agreement: every edge within `agree` of every other, per channel.
-  let maxDiff = 0;
-  for (let i = 0; i < means.length; i++) {
-    for (let j = i + 1; j < means.length; j++) {
-      for (let c = 0; c < 3; c++) {
-        maxDiff = Math.max(maxDiff, Math.abs(means[i][c] - means[j][c]));
-      }
-    }
+  // A VOTE, not unanimity. Until 2026-11-25 every edge had to agree, and one
+  // odd edge sent the card to Paper: a scroll track down the right of a white
+  // page (#F1F1F1 against #FFFFFF, 14 apart) or a dark app bar across the top
+  // of a cream one. Both are a single edge that is not the page, and the page
+  // is plainly the other three.
+  //
+  // An edge only votes when it is STRONG: at least `strong` of its strip is
+  // one colour. That is what keeps the original promise. A crop straddling a
+  // boundary has its two side strips split between the colours, so they
+  // abstain, the top and bottom vote one each, and a tie is not a consensus.
+  // Edges then group by agreement; the largest group wins only if it has at
+  // least two edges and no other group is as large.
+  //
+  // Four edges that agree are a consensus whatever their coverage, exactly as
+  // under the old rule: the vote only widens what counts as one, it never
+  // narrows it.
+  const valueOf = (e) => e.value || e.mean;
+  const diff = (a, b) => Math.max(...[0, 1, 2].map((c) => Math.abs(valueOf(edges[a])[c] - valueOf(edges[b])[c])));
+  const unanimous = present.every((a) => present.every((b) => diff(a, b) <= agree));
+  const voters = unanimous
+    ? present
+    : present.filter((n) => (edges[n].coverage ?? 1) >= strong);
+  let best = [];
+  let tie = false;
+  for (const a of voters) {
+    const group = voters.filter((b) => diff(a, b) <= agree);
+    if (group.length > best.length) { best = group; tie = false; }
+    else if (group.length === best.length && !group.every((g) => best.includes(g))) tie = true;
   }
 
-  if (maxDiff <= agree) {
-    const avg = [0, 1, 2].map((c) => means.reduce((a, m) => a + m[c], 0) / means.length);
+  let maxDiff = 0;
+  for (let i = 0; i < present.length; i++) {
+    for (let j = i + 1; j < present.length; j++) maxDiff = Math.max(maxDiff, diff(present[i], present[j]));
+  }
+
+  if (best.length >= quorum && !(tie && ties === 'refuse')) {
+    const avg = [0, 1, 2].map((c) => best.reduce((a, n) => a + valueOf(edges[n])[c], 0) / best.length);
     return {
       source: 'sampled',
       hex: rgbHex(avg),
       mean: avg.map(Math.round),
       maxEdgeDiff: Math.round(maxDiff),
-      spread: Math.max(...order.map((n) => edges[n].spread)),
+      votes: best.length,
+      outvoted: present.filter((n) => !best.includes(n)),
+      spread: Math.max(...best.map((n) => edges[n].spread)),
       edges,
     };
   }
@@ -286,7 +332,7 @@ export function decideCropBackground(edges, sampleWhole, opts = {}) {
   const l = whole ? luma(whole.mean) : 128;
   return {
     source: 'fallback',
-    reason: `edges disagree by ${Math.round(maxDiff)} (> ${agree})`,
+    reason: `edges disagree by ${Math.round(maxDiff)} (> ${agree}) with no majority`,
     hex: l < 128 ? INK : PAPER,
     luma: +l.toFixed(1),
     maxEdgeDiff: Math.round(maxDiff),

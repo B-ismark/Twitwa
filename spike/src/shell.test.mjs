@@ -6,7 +6,8 @@
 //            snap_constant unsaved_never unsaved_tool kept_ignored \
 //            back_crop_silent back_never_asks back_exits_editor back_menu_last \
 //            back_ignores_busy style_reset_noop style_reset_partial \
-//            style_reset_crop; do
+//            style_reset_crop abandon_never abandon_at_once abandon_early \
+//            abandon_not_busy export_stale_used export_never_current; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -35,7 +36,11 @@ import { PADDING, padPixels } from './sizing.js';
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
 
-if (BREAK === 'snapshot_shallow') {
+if (BREAK === 'saved_any_uri') {
+  F.alreadySaved = (st, sv) => !!(st && sv && !real.unsaved(st, sv.card));
+} else if (BREAK === 'saved_ignores_edit') {
+  F.alreadySaved = (st, sv, uri) => !!(st && sv && sv.uri === uri);
+} else if (BREAK === 'snapshot_shallow') {
   // Snapshot the owned fields by reference. Correct for as long as every edit
   // replaces the value, and silently wrong the first time one is edited in
   // place — which is what a gesture writing back a dragged rect looks like.
@@ -168,6 +173,28 @@ if (BREAK === 'snapshot_shallow') {
   // Back during an export: the editor goes, the export finishes, and its
   // confirmation lands on the empty screen.
   F.backAction = (state, o = {}) => real.backAction(state, { ...o, busy: false });
+} else if (BREAK === 'abandon_never') {
+  // The trap this rule exists for: Back waits on a dead export for ever.
+  F.backAction = (state, o) => {
+    const a = real.backAction(state, o);
+    return a === 'abandon' ? 'wait' : a;
+  };
+} else if (BREAK === 'abandon_at_once') {
+  // No wait at all, so Back during a normal two-second export abandons it and
+  // its "Saved to Photos" is thrown away.
+  F.backAction = (state, o = {}) => real.backAction(state, { ...o, busyMs: o.busy ? Infinity : o.busyMs });
+} else if (BREAK === 'abandon_early') {
+  // The threshold moved: 14s early.
+  F.backAction = (state, o = {}) => real.backAction(state, { ...o, busyMs: (o.busyMs || 0) + 14000 });
+} else if (BREAK === 'abandon_not_busy') {
+  // A stale clock reading with nothing in flight abandons a card that is idle.
+  F.backAction = (state, o = {}) => (state && !o.busy && !o.dev && !o.menu && o.busyMs >= real.BUSY_ABANDON_MS
+    ? 'abandon' : real.backAction(state, o));
+} else if (BREAK === 'export_stale_used') {
+  // Every export result is current, so an abandoned one lands on the next.
+  F.exportCurrent = () => true;
+} else if (BREAK === 'export_never_current') {
+  F.exportCurrent = () => false;
 } else if (BREAK === 'back_menu_last') {
   // The editor answered before what floats over it.
   F.backAction = (state, o = {}) => real.backAction(state, { ...o, menu: false, dev: false });
@@ -497,6 +524,40 @@ console.log('\nBack takes one layer off at a time');
   check('nothing leaves while a card is being made', b(moved, { busy: true }) === 'wait' && b(dragged, { busy: true }) === 'wait');
   check('an untouched card leaves for the empty screen, not the home screen', b(s) === 'leave', b(s));
   check('and the empty screen lets Android close the app', b(null) === 'exit');
+}
+
+console.log('backAction: Back during an export is a wait, and then a way out');
+{
+  const s = fresh();
+  const kept = F.cardOf(s);
+  const b = (o) => F.backAction(s, { kept, busy: true, ...o });
+  check('the wait is fifteen seconds', real.BUSY_ABANDON_MS === 15000, real.BUSY_ABANDON_MS);
+  check('just started: wait', b({ busyMs: 0 }) === 'wait', b({ busyMs: 0 }));
+  check('14.999s: still wait', b({ busyMs: 14999 }) === 'wait', b({ busyMs: 14999 }));
+  check('15s: abandon', b({ busyMs: 15000 }) === 'abandon', b({ busyMs: 15000 }));
+  check('long after: abandon', b({ busyMs: 120000 }) === 'abandon');
+  check('with a crop open it is the same', F.backAction(F.openTool(s, 'crop'), { kept, busy: true, busyMs: 20000 }) === 'abandon');
+  check('not busy, an old clock reading abandons nothing', F.backAction(s, { kept, busy: false, busyMs: 99999 }) === 'leave');
+  check('the menu still closes first', F.backAction(s, { kept, busy: true, busyMs: 99999, menu: true }) === 'close-menu');
+  check('the empty screen still exits', F.backAction(null, { busy: true, busyMs: 99999 }) === 'exit');
+}
+
+console.log('exportCurrent: an abandoned export is told apart from the next one');
+{
+  check('the same generation is current', F.exportCurrent(4, 4) === true);
+  check('after an abandon it is not', F.exportCurrent(4, 5) === false);
+  check('and an older one never becomes current', F.exportCurrent(3, 5) === false);
+}
+
+console.log('alreadySaved: Save twice on an unchanged card asks instead of saving again');
+{
+  const st = real.editorState({ x: 0, y: 0, w: 100, h: 200 });
+  const saved = { uri: 'file:///a.png', card: real.cardOf(st) };
+  check('nothing saved yet is not saved', F.alreadySaved(st, null, 'file:///a.png') === false);
+  check('the same card from the same picture is saved', F.alreadySaved(st, saved, 'file:///a.png') === true);
+  check('the same crop of ANOTHER picture is not', F.alreadySaved(st, saved, 'file:///b.png') === false);
+  const moved = { ...st, crop: { ...st.crop, w: 90 } };
+  check('an edited card is not', F.alreadySaved(moved, saved, 'file:///a.png') === false);
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);
