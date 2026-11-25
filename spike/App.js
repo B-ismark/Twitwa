@@ -90,6 +90,7 @@ import {
   barMode,
   canReset,
   cardOf,
+  alreadySaved,
   cancelTool,
   canvasShows,
   doneTool,
@@ -413,6 +414,14 @@ export default function App() {
   // Copy. Back, New screenshot and a share-in ask before discarding only a card that differs
   // from it; see unsaved in src/shell.js for why Share counts as kept.
   const kept = useRef(null);
+  // The card last saved to Photos, and the picture it came from. Tapping Save
+  // again on the same card used to write a second identical copy to the
+  // gallery every time; now it asks first (owner's report, 2026-11-25).
+  const savedTo = useRef(null);
+  // One export at a time. `busy` is state, so two taps inside one frame both
+  // read it as false and both ran: a double tap on Save saved twice. A ref is
+  // set before the first await, so the second tap sees it.
+  const working = useRef(false);
   // The editor as last rendered, for the share handler. It is subscribed once
   // (see the effect on `receive`), so a closure over `ed` would read the
   // first render's null for ever and never ask before replacing a card.
@@ -832,7 +841,9 @@ export default function App() {
   // how a card reaches WhatsApp, and expo-sharing wraps the file in its own
   // FileProvider content URI, which is what ACTION_SEND needs.
   const share = useCallback(async () => {
-    if (!src || !ed) return;
+    if (!src || !ed || working.current) return;
+    working.current = true;
+    const card = cardOf(ed);
     setProblem(null);
     setNotice(null);
     setMenu(false);
@@ -849,12 +860,13 @@ export default function App() {
       const out = await exportCard('card.png');
       if (!out) return;
       await Sharing.shareAsync(out.path, { mimeType: 'image/png', UTI: 'public.png' });
-      kept.current = cardOf(ed);
+      kept.current = card;
       emit('P1.share', { ok: true, path: out.path });
     } catch (e) {
       emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
       setProblem(COPY.shareFailed);
     } finally {
+      working.current = false;
       setBusy(false);
     }
   }, [src, ed, exportCard, emit]);
@@ -877,8 +889,21 @@ export default function App() {
    * from the file, and a gallery of identically named cards can be told apart
    * by nothing but a thumbnail.
    */
-  const save = useCallback(async () => {
-    if (!src || !ed) return;
+  const save = useCallback(async (again) => {
+    if (!src || !ed || working.current) return;
+    const card = cardOf(ed);
+    const prev = savedTo.current;
+    // `again === true`, not truthiness: as a button's onPress this receives
+    // the press event.
+    if (again !== true && alreadySaved(ed, prev, shownUri.current)) {
+      emit('P5.save', { ok: false, reason: 'already saved' });
+      Alert.alert(COPY.alreadySavedTitle, COPY.alreadySavedBody, [
+        { text: COPY.alreadySavedOk, style: 'cancel' },
+        { text: COPY.saveAgain, onPress: () => save(true) },
+      ]);
+      return;
+    }
+    working.current = true;
     setProblem(null);
     setNotice(null);
     setMenu(false);
@@ -910,7 +935,8 @@ export default function App() {
         } catch {
           // Deliberately empty; see above.
         }
-        kept.current = cardOf(ed);
+        kept.current = card;
+        savedTo.current = { uri: shownUri.current, card };
         emit('P5.save', { ok: true, api: Platform.Version, id: asset.id });
         setNotice(COPY.saved);
       }
@@ -918,6 +944,7 @@ export default function App() {
       emit('P5.save', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
       setProblem(COPY.saveFailed);
     } finally {
+      working.current = false;
       setBusy(false);
     }
     if (fallback) await share();
@@ -935,7 +962,9 @@ export default function App() {
    * made once; tools/check-fs-sync.mjs is the gate for it.
    */
   const copyImage = useCallback(async () => {
-    if (!src || !ed) return;
+    if (!src || !ed || working.current) return;
+    working.current = true;
+    const card = cardOf(ed);
     setProblem(null);
     setNotice(null);
     setMenu(false);
@@ -946,13 +975,14 @@ export default function App() {
       const png = new File(out.path);
       const b64 = await png.base64();
       await Clipboard.setImageAsync(b64);
-      kept.current = cardOf(ed);
+      kept.current = card;
       emit('P5.copy', { ok: true, api: Platform.Version, kiB: +(out.bytes / 1024).toFixed(1) });
       if (Platform.Version < 33) setNotice(COPY.copied);
     } catch (e) {
       emit('P5.copy', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
       setProblem(COPY.copyFailed);
     } finally {
+      working.current = false;
       setBusy(false);
     }
   }, [src, ed, exportCard, emit]);

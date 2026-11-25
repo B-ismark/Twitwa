@@ -276,6 +276,15 @@ export function unsaved(state, kept) {
   return CARD_FIELDS.some((f) => !sameValue(state[f], kept[f]));
 }
 
+/**
+ * Is this exact card already in Photos? `saved` is `{ uri, card }` from the
+ * last successful Save. The picture must be the same one: two screenshots can
+ * share a crop and padding, and the second is not saved because the first was.
+ */
+export function alreadySaved(state, saved, uri) {
+  return !!(state && saved && saved.uri === uri && !unsaved(state, saved.card));
+}
+
 /** Has the open takeover tool changed anything since it opened? */
 export function toolChanged(state) {
   if (!state || !state.session) return false;

@@ -35,7 +35,11 @@ import { PADDING, padPixels } from './sizing.js';
 const BREAK = process.env.BREAK || '';
 const F = { ...real };
 
-if (BREAK === 'snapshot_shallow') {
+if (BREAK === 'saved_any_uri') {
+  F.alreadySaved = (st, sv) => !!(st && sv && !real.unsaved(st, sv.card));
+} else if (BREAK === 'saved_ignores_edit') {
+  F.alreadySaved = (st, sv, uri) => !!(st && sv && sv.uri === uri);
+} else if (BREAK === 'snapshot_shallow') {
   // Snapshot the owned fields by reference. Correct for as long as every edit
   // replaces the value, and silently wrong the first time one is edited in
   // place — which is what a gesture writing back a dragged rect looks like.
@@ -497,6 +501,17 @@ console.log('\nBack takes one layer off at a time');
   check('nothing leaves while a card is being made', b(moved, { busy: true }) === 'wait' && b(dragged, { busy: true }) === 'wait');
   check('an untouched card leaves for the empty screen, not the home screen', b(s) === 'leave', b(s));
   check('and the empty screen lets Android close the app', b(null) === 'exit');
+}
+
+console.log('alreadySaved: Save twice on an unchanged card asks instead of saving again');
+{
+  const st = real.editorState({ x: 0, y: 0, w: 100, h: 200 });
+  const saved = { uri: 'file:///a.png', card: real.cardOf(st) };
+  check('nothing saved yet is not saved', F.alreadySaved(st, null, 'file:///a.png') === false);
+  check('the same card from the same picture is saved', F.alreadySaved(st, saved, 'file:///a.png') === true);
+  check('the same crop of ANOTHER picture is not', F.alreadySaved(st, saved, 'file:///b.png') === false);
+  const moved = { ...st, crop: { ...st.crop, w: 90 } };
+  check('an edited card is not', F.alreadySaved(moved, saved, 'file:///a.png') === false);
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);
