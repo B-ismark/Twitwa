@@ -23,6 +23,10 @@ README, and generating icon PNGs from SVG.
   only unfinished cards come back), `fontScale|density` in `configChanges` (`plugins/withConfigChanges.js`),
   a Close control plus Back giving up on a stuck export after 15s, and a "1 waiting" chip for a share
   that arrives mid-edit. Multi-image queueing moved to P6.5: the native module copies only the first image.
+- **P4 · Performance (1, 2, 4, 5).** Export reuses the editor's picture and its colour sample (only for the
+  exact crop it was read from), the dev log stops re-rendering in release, scroll captures past 4096px get a
+  2048px on-screen copy (the card layer drops back to the full picture whenever the copy would be soft), and
+  `tools/coldstart.sh` times cold start. Decisions in `src/perf.js`. Item 3 (Kotlin pixels) waits for a device.
 
 ## P1 · Opening and closing (the flow problems) — done, spec kept for reference
 1. **Importing state.** Add `importing` (a ref plus state) in `openImage`/`receive`, show a skeleton card
@@ -68,7 +72,7 @@ README, and generating icon PNGs from SVG.
 4. **Empty state:** the wordmark, a large tappable "Choose a screenshot" panel with the mark, and a
    line saying you can also Share into Twitwa from any app.
 
-## P4 · Performance (no change to output quality)
+## P4 · Performance (no change to output quality) — 1, 2, 4, 5 done; 3 waits for a device
 1. **Reuse the loaded image when exporting:** `build()` passes `src.img` and the `sampled` result into
    `renderCard`, so the file isn't decoded twice and the colour isn't sampled twice. Add one test to the pipeline's pure
    part to prove the preview and the export use the same fill.
@@ -79,7 +83,7 @@ README, and generating icon PNGs from SVG.
    the PNG on `Dispatchers.IO`. The JS rules (`decideCropBackground`, `planCrop`) stay as
    the single source, and Kotlin only returns pixels. This removes the whole-image read
    (the risk of running out of memory on tall captures) and the freeze during export.
-4. **Downsampled preview image** (longest side 2048) for tall captures. Export still uses
+4. **Downsampled preview image** (longest side 2048) for captures past 4096px. Export still uses
    full resolution.
 5. **Measure cold start** before and after: `adb shell am start -W`.
 

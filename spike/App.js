@@ -45,6 +45,7 @@ import {
   Alert,
   BackHandler,
   DevSettings,
+  PixelRatio,
   Platform,
   Pressable,
   StyleSheet,
@@ -112,7 +113,8 @@ import {
   PAD_MIN,
 } from './src/shell';
 import { proposeFromImage } from './src/autocrop';
-import { readRect } from './src/skia';
+import { readRect, downscaleImage } from './src/skia';
+import { stampSample, keepsLog, previewSize, cardSource } from './src/perf';
 import { planOutput, savedName } from './src/plan';
 import {
   dragCrop,
@@ -313,6 +315,8 @@ function Editor() {
   const [notice, setNotice] = useState(null);
   const [menu, setMenu] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
+  const devOpenRef = useRef(false);
+  devOpenRef.current = devOpen;
   // Dev only, and not part of the editor. The Q2 and P1 buttons put a measured
   // image on the canvas in place of the card; this holds it. It is a separate
   // piece of state rather than a mode of `ed` precisely so it cannot leak into
@@ -375,12 +379,30 @@ function Editor() {
   const exportGen = useRef(0);
   const busySince = useRef(0);
 
+  // Free the downscaled copy when the picture changes or goes. Skia images
+  // are native memory the garbage collector does not see, and a tall capture's
+  // copy is several MB. Only a copy this component made: for a small picture
+  // previewImg IS img, and img is not ours to free here.
+  useEffect(() => {
+    const p = src && src.previewImg !== src.img ? src.previewImg : null;
+    return () => {
+      if (p && typeof p.dispose === 'function') p.dispose();
+    };
+  }, [src]);
+
   const emit = useCallback((label, payload) => {
     const line = label + ' ' + JSON.stringify(payload);
     // Marker prefix so the whole run lifts off the device with:
     //   adb logcat -s ReactNativeJS:V | grep PHASE0
     console.log(LOG, line);
-    setLog((prev) => [{ label, payload }, ...prev].slice(0, 12));
+    // State only when somebody can see it: each setLog re-renders the whole
+    // editor, and in release the panel is hidden. Opened in release it starts
+    // empty, which is fine, because what came before is in logcat. The panel's
+    // state is read through a ref so this callback's identity never changes
+    // (it is a dependency of nearly everything).
+    if (keepsLog({ dev: __DEV__, panelOpen: devOpenRef.current })) {
+      setLog((prev) => [{ label, payload }, ...prev].slice(0, 12));
+    }
   }, []);
 
   const beginImport = useCallback(() => {
@@ -649,7 +671,7 @@ function Editor() {
         throw new Error('saved crop lies outside the picture');
       }
       shownUri.current = uri;
-      setSrc({ ...decoded, uri });
+      setSrc({ ...decoded, uri, previewImg: makePreview(decoded.img, decoded.width, decoded.height) });
       setOverride(null);
       const base = editorState(p.crop);
       const opened = saved
@@ -660,7 +682,7 @@ function Editor() {
       // been shared or saved before the process died is not in the file, and
       // asking once too often costs a tap where not asking costs the card.
       kept.current = saved ? null : cardOf(opened);
-      setSampled(sampleCropBackground(decoded.img, opened.crop));
+      setSampled(sampleAt(decoded.img, opened.crop));
       emit('crop.propose', {
         crop: p.crop,
         trimmed: p.trimmed,
@@ -1068,7 +1090,7 @@ function Editor() {
       // Resampled here rather than in an effect on `ed.crop`, which would fire
       // on every frame of the drag and read four strips sixty times a second.
       // Done is the moment the crop becomes the one the card is made from.
-      if (s.tool === 'crop' && src) setSampled(sampleCropBackground(src.img, s.crop));
+      if (s.tool === 'crop' && src) setSampled(sampleAt(src.img, s.crop));
       return doneTool(s);
     });
   }, [src]);
@@ -1079,7 +1101,7 @@ function Editor() {
       // Cancel restores a DIFFERENT crop from the one on screen a moment ago,
       // so the sample has to follow it. Forgetting this is a card framed in
       // the colour of a crop the user just threw away.
-      if (s.tool === 'crop' && src) setSampled(sampleCropBackground(src.img, next.crop));
+      if (s.tool === 'crop' && src) setSampled(sampleAt(src.img, next.crop));
       return next;
     });
   }, [src]);
@@ -1095,7 +1117,14 @@ function Editor() {
    */
   const build = useCallback(async (outputName) => {
     if (!src || !ed) return null;
+    // The picture the editor already decoded and the colour it already sampled,
+    // not a second decode and a second sample of the same file. src.img is
+    // decodeFromUri's MakeImageFromEncoded, the same call renderCard's own uri
+    // path makes, so it is the same pixels; `sampled` is only used by the
+    // renderer when it was taken from exactly the crop being exported.
     const out = await renderCard({
+      image: src.img,
+      background: sampled,
       uri: src.uri,
       crop: ed.crop,
       padding: ed.padding,
@@ -1104,7 +1133,7 @@ function Editor() {
       outputName,
     });
     return out;
-  }, [src, ed]);
+  }, [src, ed, sampled]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -1112,14 +1141,6 @@ function Editor() {
     return () => clearTimeout(t);
   }, [notice]);
 
-  /**
-   * Render the card for one of the ways out of the app, and report it.
-   *
-   * Share, Save and Copy all come through here, so for one editor state they
-   * hand over one composition. Three copies of this would be three chances for
-   * one of them to export a card the preview never showed, and the P4 check
-   * below is what would notice.
-   */
   // The card went somewhere (Share, Save, Copy). A finished card is not worth
   // bringing back at the next launch, so its session file goes, but only when
   // the file holds this exact card: one edited since is still unfinished work.
@@ -1133,6 +1154,14 @@ function Editor() {
     }
   }, [src]);
 
+  /**
+   * Render the card for one of the ways out of the app, and report it.
+   *
+   * Share, Save and Copy all come through here, so for one editor state they
+   * hand over one composition. Three copies of this would be three chances for
+   * one of them to export a card the preview never showed, and the P4 check
+   * below is what would notice.
+   */
   const exportCard = useCallback(async (outputName) => {
     const started = exportGen.current;
     const out = await build(outputName);
@@ -1824,7 +1853,17 @@ function Editor() {
                     part that belongs in the card. */}
                 <Group clip={skRect(shot.dest.x, shot.dest.y, shot.dest.w, shot.dest.h)}>
                   <SkiaImage
-                    image={src.img}
+                    image={
+                      cardSource({
+                        cropW: ed.crop.w,
+                        srcW: src.width,
+                        previewW: src.previewImg.width(),
+                        destW: shot.dest.w,
+                        pixelRatio: PixelRatio.get(),
+                      }) === 'preview'
+                        ? src.previewImg
+                        : src.img
+                    }
                     fit="fill"
                     x={shot.dest.x - ed.crop.x * (shot.dest.w / ed.crop.w)}
                     y={shot.dest.y - ed.crop.y * (shot.dest.h / ed.crop.h)}
@@ -1851,7 +1890,18 @@ function Editor() {
             pointerEvents={takeover ? 'auto' : 'none'}
           >
             <Canvas style={{ width: cropStage.w, height: cropStage.h }}>
-              <SkiaImage image={src.img} x={0} y={0} width={cropStage.w} height={cropStage.h} fit="contain" />
+              {/* The downscaled copy drawn into the rect the full picture
+                  would fill (fitView's), not contain-fitted: a rounded
+                  copy's aspect is a hair off a tall capture's, and that hair
+                  is a pixel or two at the bottom. */}
+              <SkiaImage
+                image={src.previewImg}
+                x={view.offsetX}
+                y={view.offsetY}
+                width={src.width * view.scale}
+                height={src.height * view.scale}
+                fit="fill"
+              />
             </Canvas>
             {ed && ed.tool === 'crop' ? (
               <GestureDetector gesture={cropGesture}>
@@ -2420,6 +2470,30 @@ function CropBands({ crop, view, bounds, on }) {
  * clip path in Skia and a matching outline in RN, two shapes to keep in
  * step; the crosshair is what says which pixel, and it is legible either way.
  */
+/**
+ * The on-screen copy of a picture: the picture itself unless its longest side
+ * is past perf.js's ceiling, then a downscaled one made once per opened image.
+ * A failure to make it is not a failure to open, so it falls back to the
+ * original. Export, sampling, autocrop and the loupe keep using `src.img`.
+ */
+function makePreview(img, width, height) {
+  const size = previewSize({ width, height });
+  if (!size.down) return img;
+  try {
+    return downscaleImage(img, size.width, size.height) || img;
+  } catch (e) {
+    return img;
+  }
+}
+
+/**
+ * The crop's edge colour, stamped with the crop it was read from, so the export
+ * can tell the sample the preview used from one taken of a crop since moved.
+ */
+function sampleAt(img, crop) {
+  return stampSample(sampleCropBackground(img, crop), crop);
+}
+
 function CropLoupe({ crop, view, stage, image, handle, on }) {
   const transform = useDerivedValue(() => {
     'worklet';

@@ -34,6 +34,7 @@ import {
   modalOfPoints,
 } from './pixels';
 import { planCard, orientedSize, needsOrientation } from './plan';
+import { pickSource, canReuseSample } from './perf';
 import { readRect } from './skia';
 import { MAX_PX, samplingFor } from './sizing';
 
@@ -323,6 +324,15 @@ function composeCard(img, plan, opts = {}) {
  *
  * @param uri          a content:// or file:// URI — what a share or the picker gives
  * @param bytes        encoded image bytes, as an alternative to `uri`
+ * @param image        an already-decoded SkImage, which wins over both: the editor
+ *                     holds one, and decoding the same file again for the export
+ *                     was pure repeat work. It must come from the same decode
+ *                     the uri path does (App's openImage uses decodeFromUri, which
+ *                     is MakeImageFromEncoded exactly like decodeUri), so the
+ *                     pixels, orientation and colour space are the same ones.
+ * @param background   the editor's own sample, stamped with its crop (perf.js
+ *                     stampSample). Used only when it was taken from exactly the
+ *                     crop this call plans; any other crop is sampled afresh.
  * @param crop         {x,y,w,h} in source pixels; omit for the whole image
  * @param padding      'snug' | 'standard' | 'roomy', or a fraction
  * @param trim         'auto' | 'always' | 'never'
@@ -333,6 +343,8 @@ function composeCard(img, plan, opts = {}) {
 export async function renderCard({
   uri,
   bytes,
+  image,
+  background,
   crop,
   padding = 'standard',
   trim = 'auto',
@@ -344,8 +356,9 @@ export async function renderCard({
   const timings = {};
   let t = now();
 
-  if (!uri && !bytes) throw new Error('renderCard needs either a uri or bytes');
-  const decoded = uri ? await decodeUri(uri) : decodeImage(bytes);
+  const from = pickSource({ image, uri, bytes });
+  if (!from) throw new Error('renderCard needs an image, a uri or bytes');
+  const decoded = from === 'image' ? image : from === 'uri' ? await decodeUri(uri) : decodeImage(bytes);
   // Orientation is baked in BEFORE planning, so plan.js sizes the card to the
   // dimensions the picture actually has. Identity for every screenshot.
   const oriented = normaliseOrientation(decoded, orientation);
@@ -396,7 +409,9 @@ export async function renderCard({
     statusBar: statusBar.detected ? statusBar : null,
     trim,
     frame,
-    sampleBackground: (rect) => sampleCropBackground(img, rect),
+    // The editor's sample is the preview's frame colour; reusing it keeps the
+    // export on the very colour the person approved and skips four strip reads.
+    sampleBackground: (rect) => (canReuseSample(background, rect) ? background : sampleCropBackground(img, rect)),
   });
   plan = planned;
   timings.planMs = +(now() - t).toFixed(2);
