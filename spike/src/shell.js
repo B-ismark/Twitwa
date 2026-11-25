@@ -21,6 +21,7 @@
 // lists in two `if`s.
 
 import { PADDING, padPixels } from './sizing.js';
+import { TONES } from './plan.js';
 
 /**
  * The tool table. `owns` is the set of state fields a tool session can change,
@@ -51,7 +52,17 @@ export const TOOLS = Object.keys(TOOL);
  * you reach for when that sample disagrees with itself. Ordering them the
  * other way round would present the fallback as the normal case.
  */
-export const BACKGROUNDS = ['match', 'paper', 'ink'];
+export const BASIC_BACKGROUNDS = ['match', 'paper', 'ink'];
+
+/**
+ * The curated tones, shown as a second row under the basics. Kept as its own
+ * list so the sheet's two rows come from the same table `BACKGROUNDS` does,
+ * and a tone added to plan.js appears on the sheet and validates everywhere
+ * (session, prefs, setBackground) without a third place being edited.
+ */
+export const TONE_BACKGROUNDS = Object.keys(TONES);
+
+export const BACKGROUNDS = [...BASIC_BACKGROUNDS, ...TONE_BACKGROUNDS];
 
 /**
  * The stops a dragged padding snaps onto, and WHY THE BAND IS NOT A CONSTANT.
@@ -105,8 +116,10 @@ const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))
 
 /**
  * What a new card's Style starts at, and what Style's Reset goes back to. One
- * table for both, so Reset cannot return a card to anything but the one the
- * editor opened on.
+ * table for both. With a remembered style (src/prefs.js) a card may OPEN on
+ * something else; Reset is still these defaults, because "put it back how a
+ * fresh card looks" is the one answer that does not depend on what was last
+ * chosen.
  */
 const STYLE_DEFAULTS = {
   padding: PADDING.standard,
@@ -277,12 +290,19 @@ export function unsaved(state, kept) {
 }
 
 /**
- * Is this exact card already in Photos? `saved` is `{ uri, card }` from the
- * last successful Save. The picture must be the same one: two screenshots can
- * share a crop and padding, and the second is not saved because the first was.
+ * Is this exact card already in Photos, in this format? `saved` is
+ * `{ uri, card, format }` from the last successful Save. The picture must be
+ * the same one: two screenshots can share a crop and padding, and the second is
+ * not saved because the first was. The FORMAT must match too: a PNG in Photos
+ * is not the JPEG the person is now asking for.
+ *
+ * Format is compared here and not made a card field (CARD_FIELDS) on purpose.
+ * `unsaved` reads those fields for "would leaving lose work", and flipping
+ * PNG to JPEG loses none, so a format card field would ask "Discard this
+ * card?" after a toggle.
  */
-export function alreadySaved(state, saved, uri) {
-  return !!(state && saved && saved.uri === uri && !unsaved(state, saved.card));
+export function alreadySaved(state, saved, uri, format = 'png') {
+  return !!(state && saved && saved.uri === uri && saved.format === format && !unsaved(state, saved.card));
 }
 
 /** Has the open takeover tool changed anything since it opened? */

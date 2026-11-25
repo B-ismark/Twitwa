@@ -75,6 +75,19 @@ if (BREAK === 'no_shape_gate') {
   F.savedName = (d) => {
     try { return real.savedName(d); } catch { return 'Twitwa-NaN.png'; }
   };
+} else if (BREAK === 'tone_as_match') {
+  // A tone treated as Match: the swatch lights and the card keeps the sample.
+  F.planOutput = (a) => real.planOutput({ ...a, frame: real.TONES[a.frame] ? 'match' : a.frame });
+  F.planCard = (a) => real.planCard({ ...a, frame: real.TONES[a.frame] ? 'match' : a.frame });
+} else if (BREAK === 'tone_alpha') {
+  // A tone with an alpha byte: a card that is not opaque, which a JPEG flattens
+  // onto black.
+  F.planOutput = (a) => {
+    const r = real.planOutput(a);
+    return real.TONES[a.frame] ? { ...r, fill: `${r.fill}CC` } : r;
+  };
+} else if (BREAK === 'saved_ext_png') {
+  F.savedName = (d) => real.savedName(d, 'png');
 } else if (BREAK === 'frame_unvalidated') {
   // An unknown frame falls through to Match instead of throwing, so a typo in
   // one call site is a card with a colour nobody chose.
@@ -465,6 +478,43 @@ console.log('a saved card is named by its local time, sortable as a string');
   } finally {
     if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone;
   }
+}
+
+console.log('the six tones: fixed fills through the same path as Paper and Ink');
+{
+  const names = ['sky', 'mint', 'sand', 'plum', 'slate', 'midnight'];
+  const crop = { x: 0, y: 0, w: 1000, h: 2000 };
+  const sampled = { source: 'sampled', hex: '#336699', luma: 90 };
+  const image = { width: 1000, height: 2000 };
+  check('exactly the six, in order', JSON.stringify(Object.keys(real.TONES)) === JSON.stringify(names));
+  for (const name of names) {
+    const out = F.planOutput({ crop, background: sampled, frame: name });
+    check(`${name} overrides a sample and is a chosen fill`, out.fill === real.TONES[name] && out.fillSource === 'chosen', out.fill);
+    check(`${name} is an opaque six-digit hex, so a JPEG needs no flattening`, /^#[0-9A-Fa-f]{6}$/.test(out.fill), out.fill);
+    check(`${name} raises no near-white or near-black warning`, out.warnings.length === 0, JSON.stringify(out.warnings));
+    // The preview asks planOutput (App's fillColour and swatchFills); the
+    // export asks planCard through renderCard. One tone, both routes.
+    const preview = F.planOutput({ crop, padding: 'roomy', background: sampled, frame: name }).fill;
+    const exported = F.planCard({ image, crop, padding: 'roomy', frame: name, sampleBackground: () => sampled }).fill;
+    check(`${name}: preview and export use the same fill`, preview === exported, `${preview} vs ${exported}`);
+  }
+  const hues = new Set(names.map((n) => real.TONES[n]));
+  check('no two tones are the same colour, nor Paper or Ink', hues.size === 6 && !hues.has(PAPER) && !hues.has(INK));
+  const lumaOf = (h) => 0.299 * parseInt(h.slice(1, 3), 16) + 0.587 * parseInt(h.slice(3, 5), 16) + 0.114 * parseInt(h.slice(5, 7), 16);
+  check('three are light and three are dark', names.filter((n) => lumaOf(real.TONES[n]) >= 128).length === 3);
+  let threw = false;
+  try { F.planOutput({ crop, frame: 'toString' }); } catch { threw = true; }
+  check('an inherited property name is not a frame', threw);
+}
+
+console.log('savedName takes its extension from the format');
+{
+  const at = new Date(2026, 0, 5, 7, 8, 9);
+  check('png by default', F.savedName(at) === 'Twitwa-20260105-070809.png');
+  check('jpeg is .jpg', F.savedName(at, 'jpeg') === 'Twitwa-20260105-070809.jpg', F.savedName(at, 'jpeg'));
+  let threw = false;
+  try { F.savedName(at, 'gif'); } catch { threw = true; }
+  check('an unknown format throws rather than naming a file wrongly', threw);
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

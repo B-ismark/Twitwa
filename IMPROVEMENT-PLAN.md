@@ -31,6 +31,9 @@ README, and generating icon PNGs from SVG.
   compresses it, keeps English resources only, turns on shrinkResources, drops WebP and Fresco's JPEG
   transcoder. Expected about 16.8 MB, unbuilt. Replacing media-library/clipboard/sharing with our own Kotlin
   is deferred with P4.3: small dex saving, and it rewrites Share/Save/Copy without a phone to test on.
+- **P6 · Features 1–4.** Remembered style (`src/prefs.js`, documents/prefs.json), six curated tones (Sky, Mint,
+  Sand, Plum, Slate, Midnight), a remembered "Save as JPEG" switch (`src/format.js`; Copy stays PNG), and
+  "Saved to Photos" with View (`src/saved.js`). Item 5, one card per image, is next.
 
 ## P1 · Opening and closing (the flow problems) — done, spec kept for reference
 1. **Importing state.** Add `importing` (a ref plus state) in `openImage`/`receive`, show a skeleton card

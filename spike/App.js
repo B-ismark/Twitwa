@@ -45,6 +45,7 @@ import {
   Alert,
   BackHandler,
   DevSettings,
+  Linking,
   PixelRatio,
   Platform,
   Pressable,
@@ -109,6 +110,8 @@ import {
   setPadding,
   unsaved,
   BACKGROUNDS,
+  BASIC_BACKGROUNDS,
+  TONE_BACKGROUNDS,
   PAD_MAX,
   PAD_MIN,
 } from './src/shell';
@@ -152,6 +155,9 @@ import {
 import { installRoute, downloadPercent, updateProblem, laterHides } from './src/update';
 import { arrivalPlan, shareOutcome, waitingChip } from './src/sharein';
 import { cropFits, readSession, serialiseSession } from './src/session';
+import { DEFAULT_PREFS, parsePrefs, serialisePrefs, startingStyle } from './src/prefs';
+import { formatFor } from './src/format';
+import { noticeMs, viewUri } from './src/saved';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
 import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
@@ -251,6 +257,34 @@ function clearSessionFile() {
   }
 }
 
+// The remembered style (src/prefs.js). In the DOCUMENT directory, not the cache:
+// the session file above is one unfinished card and goes when the card does,
+// but this is a habit and must survive both an export and Android clearing the
+// cache. Read with the async `text()` (see takeResumeFlag); expo-file-system
+// has no async twin of `write`, and a ~100 byte write is not worth a thread hop.
+const PREFS_FILE = 'prefs.json';
+
+async function readPrefsFile() {
+  try {
+    const f = new File(Paths.document, PREFS_FILE);
+    if (!f.exists) return { ...DEFAULT_PREFS };
+    return parsePrefs(await f.text());
+  } catch (e) {
+    return { ...DEFAULT_PREFS };
+  }
+}
+
+function writePrefsFile(text) {
+  try {
+    const f = new File(Paths.document, PREFS_FILE);
+    f.create({ overwrite: true });
+    f.write(text);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function fileExists(uri) {
   try {
     return new File(uri).exists;
@@ -313,6 +347,24 @@ function Editor() {
   // caption being stuck, and one that has to be dismissed is a second action
   // for a thing that already happened.
   const [notice, setNotice] = useState(null);
+  // The one button a notice may carry, `{ label, run }`: "View" after a Save.
+  // Beside `notice` rather than inside it so the many plain setNotice(text)
+  // calls stay as they are. It is shown only while `notice` is, and set with it
+  // by showNotice.
+  const [noticeAction, setNoticeAction] = useState(null);
+  const showNotice = useCallback((text, action = null) => {
+    setNotice(text);
+    setNoticeAction(action);
+  }, []);
+  // 'png' | 'jpeg', from the More menu's switch and remembered (prefs). Share
+  // and Save follow it; Copy never does (src/format.js).
+  const [format, setFormat] = useState(DEFAULT_PREFS.format);
+  // The remembered style, and the read that fills it. openImage waits on the
+  // read, so a share that starts the app cold still opens on the remembered
+  // style instead of racing the file.
+  const prefsRef = useRef({ ...DEFAULT_PREFS });
+  const prefsLoad = useRef(null);
+  const prefsText = useRef(null);
   const [menu, setMenu] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
   const devOpenRef = useRef(false);
@@ -632,6 +684,27 @@ function Editor() {
   const edRef = useRef(null);
   edRef.current = ed;
 
+  // Read once at launch. Declared before the effects that open a shared or
+  // restored picture, so the promise exists by the time openImage asks for it.
+  useEffect(() => {
+    prefsLoad.current = readPrefsFile().then((p) => {
+      prefsRef.current = p;
+      prefsText.current = JSON.stringify(serialisePrefs(p));
+      setFormat(p.format);
+      return p;
+    });
+  }, []);
+
+  // A style choice was committed (chip, slider release, swatch, the format
+  // switch): write it down. Not called for a slider's live preview, nor for
+  // Style's Reset, which is "undo on this card" and not a new habit.
+  const remember = useCallback((patch) => {
+    prefsRef.current = { ...prefsRef.current, ...patch };
+    const text = JSON.stringify(serialisePrefs(prefsRef.current));
+    if (text === prefsText.current) return;
+    if (writePrefsFile(text)) prefsText.current = text;
+  }, []);
+
   /**
    * Decode `uri`, propose a crop, and open the editor on it. Both ways in end
    * here -- the picker and a share -- so they cannot drift into two imports
@@ -644,6 +717,8 @@ function Editor() {
   const openImage = useCallback(async (uri, via, saved) => {
     const gen = ++importGen.current;
     try {
+      // A restored card keeps its own style, so it need not wait for prefs.
+      if (!saved && prefsLoad.current) await prefsLoad.current;
       const decoded = await decodeFromUri(uri);
       // The editor opens on a proposal, not on the whole screenshot. This is
       // the line that makes step 2 of the user flow true.
@@ -676,7 +751,7 @@ function Editor() {
       const base = editorState(p.crop);
       const opened = saved
         ? { ...base, crop: saved.crop, padding: saved.padding, background: saved.background }
-        : base;
+        : { ...base, ...startingStyle(prefsRef.current) };
       setEd(opened);
       // A restored card is treated as unsaved, so Back asks. Whether it had
       // been shared or saved before the process died is not in the file, and
@@ -1115,7 +1190,7 @@ function Editor() {
    * on here would let the export trim again under a crop the user chose, which
    * is the preview-disagrees-with-export failure this phase exists to remove.
    */
-  const build = useCallback(async (outputName) => {
+  const build = useCallback(async (outputName, fmt) => {
     if (!src || !ed) return null;
     // The picture the editor already decoded and the colour it already sampled,
     // not a second decode and a second sample of the same file. src.img is
@@ -1130,16 +1205,20 @@ function Editor() {
       padding: ed.padding,
       frame: ed.background,
       trim: 'never',
+      format: fmt,
       outputName,
     });
     return out;
   }, [src, ed, sampled]);
 
   useEffect(() => {
-    if (!notice) return undefined;
-    const t = setTimeout(() => setNotice(null), NOTICE_MS);
+    if (!notice) {
+      setNoticeAction(null);
+      return undefined;
+    }
+    const t = setTimeout(() => setNotice(null), noticeMs(Boolean(noticeAction)));
     return () => clearTimeout(t);
-  }, [notice]);
+  }, [notice, noticeAction]);
 
   // The card went somewhere (Share, Save, Copy). A finished card is not worth
   // bringing back at the next launch, so its session file goes, but only when
@@ -1162,9 +1241,9 @@ function Editor() {
    * one of them to export a card the preview never showed, and the P4 check
    * below is what would notice.
    */
-  const exportCard = useCallback(async (outputName) => {
+  const exportCard = useCallback(async (outputName, fmt) => {
     const started = exportGen.current;
-    const out = await build(outputName);
+    const out = await build(outputName, fmt);
     // Back gave up on this one while it ran; see abandonExport. Nothing it
     // found is news any more, and its caller treats null as "stop".
     if (!exportCurrent(started, exportGen.current)) return null;
@@ -1177,6 +1256,7 @@ function Editor() {
       out: out.width + 'x' + out.height,
       kiB: +(out.bytes / 1024).toFixed(1),
       frame: out.frame,
+      format: out.format,
       fill: out.fill,
       fillSource: out.fillSource,
       sampling: out.sampling,
@@ -1223,9 +1303,10 @@ function Editor() {
         setProblem(COPY.shareFailed);
         return;
       }
-      const out = await exportCard('card.png');
+      const spec = formatFor('share', format);
+      const out = await exportCard(`card.${spec.ext}`, spec.format);
       if (!out) return;
-      await Sharing.shareAsync(out.path, { mimeType: 'image/png', UTI: 'public.png' });
+      await Sharing.shareAsync(out.path, { mimeType: spec.mime, UTI: spec.uti });
       if (!exportCurrent(started, exportGen.current)) return;
       markKept(card);
       emit('P1.share', { ok: true, path: out.path });
@@ -1241,7 +1322,20 @@ function Editor() {
         setBusy(false);
       }
     }
-  }, [src, ed, exportCard, emit, markKept]);
+  }, [src, ed, format, exportCard, emit, markKept]);
+
+  // The notice's View button. Linking.openURL rejects when no app handles the
+  // URI; that is a short notice, not an exception on a tap handler.
+  const viewSavedCard = useCallback(async (uri) => {
+    setNotice(null);
+    try {
+      await Linking.openURL(uri);
+      emit('P6.view', { ok: true });
+    } catch (e) {
+      emit('P6.view', { ok: false, message: String(e && e.message ? e.message : e) });
+      showNotice(COPY.viewFailed);
+    }
+  }, [emit, showNotice]);
 
   /**
    * Save the card to Photos, which on Android means a MediaStore row in DCIM.
@@ -1267,7 +1361,7 @@ function Editor() {
     const prev = savedTo.current;
     // `again === true`, not truthiness: as a button's onPress this receives
     // the press event.
-    if (again !== true && alreadySaved(ed, prev, shownUri.current)) {
+    if (again !== true && alreadySaved(ed, prev, shownUri.current, format)) {
       emit('P5.save', { ok: false, reason: 'already saved' });
       Alert.alert(COPY.alreadySavedTitle, COPY.alreadySavedBody, [
         { text: COPY.alreadySavedOk, style: 'cancel' },
@@ -1296,7 +1390,8 @@ function Editor() {
         }
       }
       if (!fallback) {
-        const out = await exportCard(savedName(new Date()));
+        const spec = formatFor('save', format);
+        const out = await exportCard(savedName(new Date(), spec.format), spec.format);
         if (!out) return;
         const asset = await Asset.create(out.path);
         if (!exportCurrent(started, exportGen.current)) return;
@@ -1310,9 +1405,12 @@ function Editor() {
           // Deliberately empty; see above.
         }
         markKept(card);
-        savedTo.current = { uri: shownUri.current, card };
+        savedTo.current = { uri: shownUri.current, card, format: spec.format };
         emit('P5.save', { ok: true, api: Platform.Version, id: asset.id });
-        setNotice(COPY.saved);
+        // View opens the row we just wrote. A null URI (an id we cannot
+        // read) gives a plain notice, with no button to fail.
+        const uri = viewUri(asset.id);
+        showNotice(COPY.saved, uri ? { label: COPY.viewSaved, run: () => viewSavedCard(uri) } : null);
       }
     } catch (e) {
       if (!exportCurrent(started, exportGen.current)) return;
@@ -1325,7 +1423,7 @@ function Editor() {
       }
     }
     if (fallback) await share();
-  }, [src, ed, exportCard, share, emit, markKept]);
+  }, [src, ed, format, exportCard, share, emit, markKept, showNotice, viewSavedCard]);
 
   /**
    * Put the card on the clipboard as an image.
@@ -1348,7 +1446,9 @@ function Editor() {
     setMenu(false);
     setBusy(true);
     try {
-      const out = await exportCard('card.png');
+      // Always PNG, whatever the switch says (src/format.js).
+      const spec = formatFor('copy');
+      const out = await exportCard(`card.${spec.ext}`, spec.format);
       if (!out) return;
       const png = new File(out.path);
       const b64 = await png.base64();
@@ -1773,7 +1873,17 @@ function Editor() {
   const stopLabel = { snug: COPY.snug, standard: COPY.standard, roomy: COPY.roomy };
   // The bars' bottom padding, from the navigation bar's real height.
   const barPad = { paddingBottom: bottomPad(insets.bottom) };
-  const frameLabel = { match: COPY.matchFrame, paper: COPY.paperFrame, ink: COPY.inkFrame };
+  const frameLabel = {
+    match: COPY.matchFrame,
+    paper: COPY.paperFrame,
+    ink: COPY.inkFrame,
+    sky: COPY.skyFrame,
+    mint: COPY.mintFrame,
+    sand: COPY.sandFrame,
+    plum: COPY.plumFrame,
+    slate: COPY.slateFrame,
+    midnight: COPY.midnightFrame,
+  };
 
   return (
     <GestureHandlerRootView
@@ -2000,6 +2110,7 @@ function Editor() {
         <StyleStrip
           ed={ed}
           setEd={setEd}
+          onRemember={remember}
           palette={palette}
           stops={stops}
           stopLabel={stopLabel}
@@ -2030,6 +2141,19 @@ function Editor() {
           {src && ed && !busy ? (
             <MenuItem label={COPY.copyImage} icon="copy" palette={palette} onPress={copyImage} />
           ) : null}
+          {/* A switch, not a button: it stays open to show its new state. */}
+          <MenuItem
+            label={COPY.saveAsJpeg}
+            palette={palette}
+            role="switch"
+            checked={format === 'jpeg'}
+            stateLabel={format === 'jpeg' ? COPY.switchOn : COPY.switchOff}
+            onPress={() => {
+              const next = format === 'jpeg' ? 'png' : 'jpeg';
+              setFormat(next);
+              remember({ format: next });
+            }}
+          />
           <MenuItem label={COPY.newShot} palette={palette} onPress={newShot} />
         </View>
         </>
@@ -2066,7 +2190,13 @@ function Editor() {
         </Pressable>
         {/* A share kept while there was unsaved work. Tapping asks the same
             question a new share would. */}
-        {waiting ? (
+        {/* The notice's one button sits in the caption row's own chip slot, so
+            it moves nothing (P2: the stage never changes size). It takes the
+            waiting chip's place while it is up: both at once would squeeze the
+            caption, and the waiting chip is back in 6s. */}
+        {notice && noticeAction && !problem && !busy ? (
+          <Chip label={noticeAction.label} palette={palette} on={false} toggle={false} onPress={noticeAction.run} />
+        ) : waiting ? (
           <Chip label={waitingChip(waiting)} palette={palette} on={false} toggle={false} onPress={openWaiting} />
         ) : null}
       </View>
@@ -2171,10 +2301,6 @@ const ZERO_RECT = { x: 0, y: 0, w: 0, h: 0 };
  * and nothing in this repo can make it.
  */
 const GRID_MS = 120;
-// How long an outcome such as "Saved to Photos" stays in the caption. Long
-// enough to read a three-word sentence twice, short enough that the card's
-// size is back before the next thing anyone does.
-const NOTICE_MS = 2500;
 // How long the card must sit still before it is written to the session file.
 const SESSION_MS = 400;
 // The card's glide out from under the Style sheet, and back.
@@ -2547,7 +2673,20 @@ function CropLoupe({ crop, view, stage, image, handle, on }) {
  * control on the screen, and a second filled thing in the sheet competed with
  * it for "the thing to press".
  */
-function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, swatchFills, onSheetLayout, canReset: resettable, onReset, onDone }) {
+function StyleStrip({ ed, setEd, onRemember, palette, stops, stopLabel, frameLabel, swatchFills, onSheetLayout, canReset: resettable, onReset, onDone }) {
+  const swatch = (b) => (
+    <Swatch
+      key={b}
+      label={frameLabel[b]}
+      colour={swatchFills[b]}
+      palette={palette}
+      on={ed.background === b}
+      onPress={() => {
+        setEd((s) => ({ ...s, background: setBackground(b) }));
+        onRemember({ background: b });
+      }}
+    />
+  );
   return (
     <View
       style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}
@@ -2575,7 +2714,11 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, swatchFi
             label={stopLabel[s.key]}
             palette={palette}
             on={ed.padding === s.value}
-            onPress={() => setEd((v) => ({ ...v, padding: setPadding(s.value, v.crop.w).padding }))}
+            onPress={() => {
+              const padding = setPadding(s.value, ed.crop.w).padding;
+              setEd((v) => ({ ...v, padding }));
+              onRemember({ padding });
+            }}
           />
         ))}
       </View>
@@ -2585,26 +2728,31 @@ function StyleStrip({ ed, setEd, palette, stops, stopLabel, frameLabel, swatchFi
         max={PAD_MAX}
         palette={palette}
         label={COPY.padding}
-        onCommit={(v) => setEd((s) => ({ ...s, padding: setPadding(v, s.crop.w).padding }))}
+        onCommit={(v) => {
+          const padding = setPadding(v, ed.crop.w).padding;
+          setEd((s) => ({ ...s, padding }));
+          onRemember({ padding });
+        }}
         onPreview={(v) => setEd((s) => {
           const padding = setPadding(v, s.crop.w).padding;
           return padding === s.padding ? s : { ...s, padding };
         })}
-        onStep={(dir) => setEd((s) => ({ ...s, padding: stepPadding(s.padding, dir, s.crop.w) }))}
+        onStep={(dir) => {
+          const padding = stepPadding(ed.padding, dir, ed.crop.w);
+          setEd((s) => ({ ...s, padding }));
+          onRemember({ padding });
+        }}
       />
 
       <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.background}</Text>
+      {/* Match, Paper, Ink, then the six tones on a row of their own. The
+          tones wrap rather than shrink: at a large font scale a name like
+          Midnight outgrows its share, and a swatch under 48dp is not a target. */}
       <View style={styles.swatches}>
-        {BACKGROUNDS.map((b) => (
-          <Swatch
-            key={b}
-            label={frameLabel[b]}
-            colour={swatchFills[b]}
-            palette={palette}
-            on={ed.background === b}
-            onPress={() => setEd((s) => ({ ...s, background: setBackground(b) }))}
-          />
-        ))}
+        {BASIC_BACKGROUNDS.map(swatch)}
+      </View>
+      <View style={styles.swatchesTones}>
+        {TONE_BACKGROUNDS.map(swatch)}
       </View>
     </View>
   );
@@ -2759,11 +2907,23 @@ function Chip({ label, on, onPress, palette, disabled = false, toggle = true }) 
 }
 
 /** One row of the overflow. */
-function MenuItem({ label, icon, onPress, palette }) {
+function MenuItem({ label, icon, onPress, palette, role = 'button', checked, stateLabel }) {
+  const isSwitch = role === 'switch';
   return (
-    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={styles.menuItem}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole={role}
+      accessibilityLabel={label}
+      accessibilityState={isSwitch ? { checked: Boolean(checked) } : undefined}
+      style={styles.menuItem}
+    >
       {icon ? <Icon name={icon} color={palette.text} /> : null}
-      <Text style={[styles.menuText, { color: palette.text }]}>{label}</Text>
+      <Text style={[styles.menuText, styles.menuGrow, { color: palette.text }]}>{label}</Text>
+      {/* The state in words as well as to TalkBack: a switch with no visible
+          state is a button nobody can read. */}
+      {isSwitch ? (
+        <Text style={[styles.menuText, { color: checked ? palette.signal : palette.graphite }]}>{stateLabel}</Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -3034,6 +3194,7 @@ const styles = StyleSheet.create({
   // A text button: no fill, no border, only the touch target around the word.
   textButton: { minHeight: TOUCH, minWidth: TOUCH, justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACE.sm },
   swatches: { flexDirection: 'row', gap: SPACE.lg, marginTop: SPACE.xs },
+  swatchesTones: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', columnGap: SPACE.xs, marginTop: SPACE.xs },
   swatch: { minHeight: TOUCH, minWidth: TOUCH + SPACE.md, alignItems: 'center' },
   swatchRing: {
     width: 44,
@@ -3068,6 +3229,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACE.lg,
   },
   menuText: { ...TYPE.body },
+  menuGrow: { flex: 1 },
 
   tools: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.sm },
   // paddingBottom is inline (`bottomPad`): the navigation bar's height.

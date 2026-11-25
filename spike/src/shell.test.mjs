@@ -7,7 +7,8 @@
 //            back_crop_silent back_never_asks back_exits_editor back_menu_last \
 //            back_ignores_busy style_reset_noop style_reset_partial \
 //            style_reset_crop abandon_never abandon_at_once abandon_early \
-//            abandon_not_busy export_stale_used export_never_current; do
+//            abandon_not_busy export_stale_used export_never_current \
+//            saved_ignores_format rows_partial; do
 //     BREAK=$b node src/shell.test.mjs >/dev/null 2>&1; echo "$b -> $?"
 //   done
 //
@@ -38,6 +39,10 @@ const F = { ...real };
 
 if (BREAK === 'saved_any_uri') {
   F.alreadySaved = (st, sv) => !!(st && sv && !real.unsaved(st, sv.card));
+} else if (BREAK === 'saved_ignores_format') {
+  F.alreadySaved = (st, sv, uri) => real.alreadySaved(st, sv && { ...sv, format: 'png' }, uri, 'png');
+} else if (BREAK === 'rows_partial') {
+  F.BACKGROUNDS = real.BASIC_BACKGROUNDS;
 } else if (BREAK === 'saved_ignores_edit') {
   F.alreadySaved = (st, sv, uri) => !!(st && sv && sv.uri === uri);
 } else if (BREAK === 'snapshot_shallow') {
@@ -244,7 +249,7 @@ console.log('\nthe editor opens on a finished card');
   check('the padding starts at Standard', s.padding === PADDING.standard, String(s.padding));
   check('the background starts on Match', s.background === F.BACKGROUNDS[0], s.background);
   check('and Match is a background the strip offers', F.BACKGROUNDS.includes(s.background));
-  check('there are three of them', F.BACKGROUNDS.length === 3, F.BACKGROUNDS.join(','));
+  check('there are nine of them: three basics and six tones', F.BACKGROUNDS.length === 9, F.BACKGROUNDS.join(','));
 }
 
 console.log('\nthe background is checked against that list, not trusted');
@@ -552,12 +557,24 @@ console.log('exportCurrent: an abandoned export is told apart from the next one'
 console.log('alreadySaved: Save twice on an unchanged card asks instead of saving again');
 {
   const st = real.editorState({ x: 0, y: 0, w: 100, h: 200 });
-  const saved = { uri: 'file:///a.png', card: real.cardOf(st) };
+  const saved = { uri: 'file:///a.png', card: real.cardOf(st), format: 'png' };
   check('nothing saved yet is not saved', F.alreadySaved(st, null, 'file:///a.png') === false);
   check('the same card from the same picture is saved', F.alreadySaved(st, saved, 'file:///a.png') === true);
   check('the same crop of ANOTHER picture is not', F.alreadySaved(st, saved, 'file:///b.png') === false);
   const moved = { ...st, crop: { ...st.crop, w: 90 } };
   check('an edited card is not', F.alreadySaved(moved, saved, 'file:///a.png') === false);
+  check('the same card as a JPEG after a PNG is not', F.alreadySaved(st, saved, 'file:///a.png', 'jpeg') === false);
+  check('and a PNG after a JPEG is not', F.alreadySaved(st, { ...saved, format: 'jpeg' }, 'file:///a.png', 'png') === false);
+  check('a JPEG again after a JPEG is', F.alreadySaved(st, { ...saved, format: 'jpeg' }, 'file:///a.png', 'jpeg') === true);
+  check('format is not a card field: flipping it loses no work', F.unsaved(st, real.cardOf(st)) === false && !('format' in real.cardOf(st)));
+}
+
+console.log('the background rows cover every background, once');
+{
+  check('the basics are Match, Paper, Ink', JSON.stringify(real.BASIC_BACKGROUNDS) === '["match","paper","ink"]');
+  check('the tones are the six, after them', JSON.stringify(real.TONE_BACKGROUNDS) === '["sky","mint","sand","plum","slate","midnight"]');
+  check('BACKGROUNDS is the two rows joined', JSON.stringify(F.BACKGROUNDS) === JSON.stringify([...real.BASIC_BACKGROUNDS, ...real.TONE_BACKGROUNDS]));
+  check('Match stays the default', real.editorState({ x: 0, y: 0, w: 1, h: 1 }).background === 'match');
 }
 
 console.log(`\n${ran - fails}/${ran} checks passed${BREAK ? `  (BREAK=${BREAK})` : ''}`);

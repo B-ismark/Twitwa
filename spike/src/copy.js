@@ -37,6 +37,10 @@ export const COPY = {
   // Photos", so the verb survives the flow.
   saveShort: 'Save',
   copyImage: 'Copy image',
+  // A switch row in More. Share and Save follow it; Copy is always PNG.
+  saveAsJpeg: 'Save as JPEG',
+  switchOn: 'On',
+  switchOff: 'Off',
   // Opens the picker from the editor. Replaced "Start over", whose only other
   // job, getting back to the empty screen, Back now does.
   newShot: 'New screenshot',
@@ -98,6 +102,14 @@ export const COPY = {
   matchFrame: 'Match',
   paperFrame: 'Paper',
   inkFrame: 'Ink',
+  // The six tones on the row under them. Swatch labels are the bare name, like
+  // the three above; the swatch's selected state says the rest.
+  skyFrame: 'Sky',
+  mintFrame: 'Mint',
+  sandFrame: 'Sand',
+  plumFrame: 'Plum',
+  slateFrame: 'Slate',
+  midnightFrame: 'Midnight',
 
   // --- what is happening --------------------------------------------------
   working: 'Making your card',
@@ -125,6 +137,9 @@ export const COPY = {
   sharedTooBig: 'That picture is too large to open.',
   sharedFirstOnly: 'Opened the first of {count} pictures. Twitwa makes one card at a time.',
   saved: 'Saved to Photos',
+  // The button on that notice: opens the card in the gallery.
+  viewSaved: 'View',
+  viewFailed: 'The card could not be opened. Find it in your gallery.',
   // Save tapped again on a card that has not changed since it was saved.
   alreadySavedTitle: 'Already in Photos',
   alreadySavedBody: 'This card is saved and nothing has changed since. Save another copy?',
