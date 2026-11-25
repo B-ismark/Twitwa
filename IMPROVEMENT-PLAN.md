@@ -58,7 +58,7 @@ README, and generating icon PNGs from SVG.
 5. **Crop:** inset the handles 24dp from the screen edges, away from the back-swipe zone. Cancel asks
    when changed (the same rule as Back), and pinch-zoom comes later.
 
-## P3 · Identity
+## P3 · Identity — icon + splash done (C1 v2, `spike/tools/icon`); 3–4 remain
 1. **Icon:** whichever concept the owner picks from the concept page. Produce the adaptive foreground
    and background plus a monochrome layer at 432px, and replace `assets/*icon*` and `#E6F4FE` in `app.json`.
 2. **Splash:** `expo-splash-screen` plugin, using the icon on Ink (dark) and on Paper (light), with
