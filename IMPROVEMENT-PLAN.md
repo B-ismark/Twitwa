@@ -29,8 +29,9 @@ README, and generating icon PNGs from SVG.
   `tools/coldstart.sh` times cold start. Decisions in `src/perf.js`. Item 3 (Kotlin pixels) is built and waits for a device.
 - **P5 · Size (settings).** Measured 1.0.6 (19.1 MB): the Hermes bundle shipped Stored. `withAndroidSize` now
   compresses it, keeps English resources only, turns on shrinkResources, drops WebP and Fresco's JPEG
-  transcoder. Expected about 16.8 MB, unbuilt. Replacing media-library/clipboard/sharing with our own Kotlin
-  is deferred with P4.3: small dex saving, and it rewrites Share/Save/Copy without a phone to test on.
+  transcoder. Expected about 16.8 MB, unbuilt. Item 2's Kotlin replacement of media-library/clipboard/sharing is
+  built, uncompiled (`modules/twitwa-out`); it leaves the three libraries, their dex, resources and permissions
+  out of the APK, and still needs the device pass in `release/checklist-1.0.7.md`.
 - **P6 · Features 1–4.** Remembered style (`src/prefs.js`, documents/prefs.json), six curated tones (Sky, Mint,
   Sand, Plum, Slate, Midnight), a remembered "Save as JPEG" switch (`src/format.js`; Copy stays PNG), and
   "Saved to Photos" with View (`src/saved.js`). Item 5, one card per image, is done below.
@@ -102,8 +103,24 @@ README, and generating icon PNGs from SVG.
 ## P5 · Size — settings done; Kotlin replacements wait for a device
 1. Measure first: `unzip -v app-release.apk 'lib/*'` to get the real size of each native library.
 2. Exclude the Fresco native libraries, replace `expo-media-library`, `expo-clipboard` and `expo-sharing` with
-   three functions in our own Kotlin module, and turn on `shrinkResources` with `resConfigs "en"`.
-   Expected result: about 18.4 MB.
+   our own Kotlin module, and turn on `shrinkResources` with `resConfigs "en"`.
+   Expected result: about 18.4 MB. **Built, uncompiled and unrun on a device.** The Fresco exclusion and the
+   resource settings were already done in `withAndroidSize`; the Kotlin is `modules/twitwa-out`
+   (`share`, `copyImage`, `save`, `requestSavePermission`), with `src/out.js` for the decisions and
+   `src/out.test.mjs` for the checks and 106 mutants. Read from the three libraries' 57.x sources, it keeps
+   their behaviour and changes four things on purpose:
+   - **Saves land where they did**: `DCIM/` (the root, no album), display name `Twitwa-YYYYMMDD-HHMMSS.ext`,
+     the images collection, pending while written. Below API 29 the file is written into public DCIM and
+     scanned, as media-library's legacy factory did.
+   - **The permission line moved from 30 to 29.** From API 29 an app may insert its own image with
+     `RELATIVE_PATH` and no permission; media-library drew the line at 30 and asked Android 10 phones for
+     `WRITE_EXTERNAL_STORAGE` it did not use. The module's manifest declares it with `maxSdkVersion` 28.
+   - **Share resolves when the chooser opens**, not when it returns (expo-sharing's `startActivityForResult`).
+     App.js does nothing that depends on the return, and a promise held until return never settles if the
+     process dies behind the chooser. There is no availability check: the chooser is always there.
+   - **Copy no longer round-trips base64.** The PNG's bytes are copied into `cache/clipboard/` under a unique
+     name (older copies deleted), because Share re-exports to the same `card.png` and a clip pointing at it
+     would paste a later card.
 3. **Decision for the owner:** if the app stays Android-only for good, the only path to a much smaller
    app is a native Kotlin/Compose rebuild, at **2–5 MB**. The pure JS rules port to Kotlin with their
    tests. Recommended as v2, after P1–P4 settle the design.

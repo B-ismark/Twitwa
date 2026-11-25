@@ -7,10 +7,11 @@ const IMAGES = `${MEDIA}external/images/media/`;
 /**
  * The content URI that opens a saved card in the gallery, or null.
  *
- * In expo-media-library 57 `Asset.create` returns an Asset whose `id` on
- * Android is ALREADY the MediaStore content URI (content://media/external/
- * images/media/<n>, or external_primary on Android 10), so it is used as it
- * is. A bare number is a MediaStore row id and gets the images prefix. Anything
+ * The native out module (modules/twitwa-out) answers a save with the MediaStore
+ * content URI of the row it inserted (content://media/external/images/media/<n>,
+ * or external_primary on Android 10), the same URI expo-media-library's
+ * `Asset.id` was, so it is used as it is; src/out.js savedAnswer passes it
+ * here. A bare number is a MediaStore row id and gets the images prefix. Anything
  * else is refused: this string goes to Linking.openURL, and a URI that is not
  * MediaStore's is not one the app made.
  */
