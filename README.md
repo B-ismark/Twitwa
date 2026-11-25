@@ -139,7 +139,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/crop.js` | Phase 2's gesture arithmetic, separated from the gesture: fit, drag, resize, clamp, handle hit-testing, all in image-pixel space. Pure, so the arithmetic is testable without a finger — and every function carries `'worklet'`, an inert string in node, so the drag calls it on the UI thread |
 | `src/DevPanel.js` | The Phase 0/1 measurement harness, kept reachable because every measured number in this repository came out of its buttons. Deliberately outside `check-copy.mjs`'s view list: "Q1+Q3" is the right label for a cable, and the wrong one for a person |
 | `plugins/withReleaseSigning.js` | Signs release builds with the project's own key instead of the debug key the RN template ships. A config plugin because `android/` is generated and gitignored, so a direct edit does not survive `prebuild`. Reads the keystore path from `TWITWA_KEYSTORE_PROPERTIES`, so no path and no secret is committed |
-| `plugins/withAndroidSize.js` | The gradle properties that took the release APK from 124.5 MB down. Re-reads what it wrote, because both of the settings involved fail by silently doing nothing |
+| `plugins/withAndroidSize.js` | The gradle properties (and, from P5, one `localeFilters` line in `app/build.gradle`) that took the release APK from 124.5 MB down. Re-reads what it wrote, because the settings involved fail by silently doing nothing |
 | `plugins/withDebugSuffix.js` | Gives the debug build `applicationIdSuffix '.debug'`, so a dev client and the released app coexist on one phone. Without it they share a package name and carry different signing keys, so testing either one means uninstalling the other |
 | `tools/png.mjs` | PNG decoder built on node's `zlib`, no dependency |
 | `tools/probe.mjs` | Answers Q1, Q3 and the card background from a PNG on disk |
@@ -159,7 +159,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25 as **385** (369 plus the 16 of `perf.test.mjs`), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -416,7 +416,7 @@ cd spike && node tools/check-style-members.mjs  # 60 checks; fails on a StyleShe
 cd spike && node tools/check-call-arity.mjs     # 14 checks; fails on a call with the wrong argument count
 cd spike && node tools/check-release-manifest.mjs     # 7 checks on release/latest.json, its sha256 included
 cd spike && node plugins/withReleaseSigning.test.mjs  # 34 checks on the release-signing patch (38 after a prebuild)
-cd spike && node plugins/withAndroidSize.test.mjs     # 42 checks on the APK-size properties (44 after a prebuild)
+cd spike && node plugins/withAndroidSize.test.mjs     # 84 checks on the APK-size properties and locale filter (88 after a prebuild)
 cd spike && node plugins/withDebugSuffix.test.mjs     # 15 checks on the debug application id (18 after a prebuild)
 cd spike && node plugins/withShareInRestore.test.mjs  # 22 checks on the MainActivity restore patch (24 after a prebuild)
 cd spike && bash tools/verify-apk.sh     # which key actually signed the APK
@@ -477,7 +477,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 385 mutations (2026-11-25)
+done                                     # silence is the pass; 399 mutations (2026-11-25)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -889,6 +889,32 @@ exercised: a cold start with no crash in `logcat -b crash`, the picker, the
 editor, Share, Save to Photos and Copy image. That covers the modules this app
 reaches. It does not prove every path R8 touched; a crash in a path not
 exercised there would show on first use.
+
+#### P5, measured 2026-11-25 on 1.0.6
+
+Read off the released 1.0.6 APK (19,235,347 bytes; its zip entries sum to
+19,076,775). The savings column is **EXPECTED**, from these entries, until an
+APK built with the levers is weighed; nothing in it has been built yet.
+
+| entry in 1.0.6 | bytes | lever | expected saving |
+| --- | ---: | --- | ---: |
+| `assets/index.android.bundle`, Stored (gzip -9: 1,109,444) | 2,813,392 | `android.enableBundleCompression=true` | about 1,703,948 |
+| `lib/arm64-v8a/libstatic-webp.so` | 206,899 | `expo.webp.enabled=false` | 206,899 |
+| `lib/arm64-v8a/libnative-imagetranscoder.so` | 224,841 | `android.packagingOptions.excludes=**/libnative-imagetranscoder.so` | 224,841 |
+| `resources.arsc`, Stored and must stay so: 74 non-English locales' type chunks | 278,224 of 1,237,532 | `localeFilters += ['en']` | 278,224, plus most of the 324,612-byte global string pool |
+| `res/` | 829,698 | `android.enableShrinkResourcesInReleaseBuilds=true` | not estimated |
+
+Firm levers sum to about 2.14 MB; with the locale chunks about 2.41 MB, so
+roughly 16.8 MB if all of it lands (EXPECTED). The bundle is the big one and it
+has a price: Hermes can no longer map the bytecode out of the APK, it is inflated
+into memory at launch, so cold start may be slower. `tools/coldstart.sh` measures
+it before release. Resource shrinking strips anything reached only by name through
+`getIdentifier`, so the splash screen and the adaptive icon are to be seen on the
+phone. The excluded transcoder runs only when a React Native `<Image>` resizes or
+rotates a JPEG; this app imports no `<Image>` from `react-native` (it draws through
+Skia), but a missing `.so` fails at the moment of use, not at the build. The
+locale filter does not touch system UI such as the photo picker.
+`libimagepipeline` (3 KB) and `libnative-filters` are deliberately left in.
 
 ### Telling people there is an update
 
