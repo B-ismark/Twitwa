@@ -38,6 +38,8 @@ import { pickSource, canReuseSample } from './perf';
 import { readRect } from './skia';
 import { MAX_PX, samplingFor } from './sizing';
 import { formatSpec } from './format';
+import { pickEncoder, skiaReason, pngInfo, firstDifference, parityBands } from './encoder';
+import { nativeEncode, nativeEncodeAvailable } from './pixels-io';
 
 const STATUS_BAND_ROWS = 400;   // enough to hold any status bar; never the whole image
 const EDGE_THICKNESS = 8;       // matches pixels.js's default, kept explicit here
@@ -228,7 +230,7 @@ function sampleFallbackTiles(img, crop, tolerance = 16, tileOpts) {
 }
 
 /**
- * Compose the card and encode it.
+ * Compose the card. Encoding is a separate step, encodeCard below.
  *
  * The crop is drawn into `plan.dest`, which plan.js derived by SUBTRACTION from
  * the output width. Passing `crop.w * scale` here instead would let the two
@@ -236,8 +238,7 @@ function sampleFallbackTiles(img, crop, tolerance = 16, tileOpts) {
  * whose whole point is the frame.
  */
 function composeCard(img, plan, opts = {}) {
-  const { colorSpace, format = 'png' } = opts;
-  const spec = formatSpec(format);
+  const { colorSpace } = opts;
   const t0 = now();
 
   // A card a ceiling shrank is composed on a RASTER surface, not the GPU one.
@@ -304,25 +305,98 @@ function composeCard(img, plan, opts = {}) {
   }
 
   const drawMs = +(now() - t0).toFixed(2);
-  const t1 = now();
   const snapshot = surface.makeImageSnapshot();
-  // PNG is the same call it always was (quality 100, ignored by Skia), so
-  // the default path is byte-identical. JPEG has no alpha, and needs no
-  // flattening here: the surface was cleared to plan.fill, always an opaque
-  // six-digit hex (a test holds that), and everything after is drawn over it,
-  // so no pixel is transparent, corners included (the card has no rounded ones).
-  const png = snapshot.encodeToBytes(spec.format === 'jpeg' ? ImageFormat.JPEG : ImageFormat.PNG, spec.quality);
-  const encodeMs = +(now() - t1).toFixed(2);
 
   return {
-    png,
+    snapshot,
     width: plan.width,
     height: plan.height,
-    bytes: png ? png.length : 0,
     drawMs,
-    encodeMs,
-    totalMs: +(drawMs + encodeMs).toFixed(2),
     surface: raster ? 'raster' : 'gpu',
+  };
+}
+
+/**
+ * Encode the composed card and put it in `file`.
+ *
+ * Two encoders, chosen by src/encoder.js pickEncoder. The native one (Kotlin,
+ * Dispatchers.IO) exists because Skia's encodeToBytes and file.write run on
+ * the JS thread, and a PNG deflate of a multi-megapixel card froze the UI for
+ * the whole export. It is an optimisation that is allowed to fail: a missing
+ * module, a null readback or any rejection lands on the Skia path below, which
+ * is the code that was here before and writes the same bytes it always did.
+ * Every fallback is recorded, never swallowed, so a device run can tell "never
+ * tried" from "tried and refused".
+ *
+ * PNG is the same call it always was (quality 100, ignored by Skia), so the
+ * Skia path is byte-identical. JPEG has no alpha, and needs no flattening
+ * here: the surface was cleared to plan.fill, always an opaque six-digit hex
+ * (a test holds that), and everything after is drawn over it, so no pixel is
+ * transparent, corners included (the card has no rounded ones). That same fact
+ * is why the native side may treat the bytes as opaque.
+ *
+ * @returns `{bytes, encoder, encoderFallback, encodeMs, writeMs, readbackMs}`.
+ *          `bytes` is the size of the file on disk, from whichever path wrote it.
+ */
+async function encodeCard(snapshot, plan, file, { colorSpace, format, encoder = 'auto' }) {
+  const spec = formatSpec(format);
+  const wideGamut = Boolean(colorSpace);
+  const choice = {
+    available: nativeEncodeAvailable,
+    wideGamut,
+    format: spec.format,
+    force: encoder === 'skia' ? 'skia' : undefined,
+  };
+  let fallback = skiaReason(choice);
+  let readbackMs = null;
+
+  if (pickEncoder(choice) === 'native') {
+    const t = now();
+    try {
+      const read = readRect(snapshot, { x: 0, y: 0, w: plan.width, h: plan.height });
+      readbackMs = +(now() - t).toFixed(2);
+      if (!read || read.width !== plan.width || read.height !== plan.height) {
+        fallback = 'readback-null';
+      } else {
+        const out = await nativeEncode({
+          pixels: read.buf,
+          width: plan.width,
+          height: plan.height,
+          format: spec.format,
+          quality: spec.quality,
+          path: file.uri,
+        });
+        return {
+          bytes: out.bytes,
+          encoder: 'native',
+          encoderFallback: null,
+          encodeMs: +out.ms.toFixed(2),
+          writeMs: 0,
+          readbackMs,
+        };
+      }
+    } catch (e) {
+      // The coded error's own code when it has one (ERR_PIXELS_*), so the
+      // dev log names the refusal rather than a stack.
+      fallback = `native-rejected:${(e && (e.code || e.message)) || 'unknown'}`;
+    }
+  }
+
+  const t1 = now();
+  const png = snapshot.encodeToBytes(spec.format === 'jpeg' ? ImageFormat.JPEG : ImageFormat.PNG, spec.quality);
+  const encodeMs = +(now() - t1).toFixed(2);
+  const t2 = now();
+  // create({overwrite}) rather than delete-then-create: one call, and no window
+  // where the old file is gone and the new one does not exist yet.
+  file.create({ overwrite: true });
+  file.write(png);
+  return {
+    bytes: png ? png.length : 0,
+    encoder: 'skia',
+    encoderFallback: fallback,
+    encodeMs,
+    writeMs: +(now() - t2).toFixed(2),
+    readbackMs,
   };
 }
 
@@ -346,6 +420,9 @@ function composeCard(img, plan, opts = {}) {
  * @param frame        'match' | 'paper' | 'ink' — the Style strip's Background
  * @param colorSpace   a Skia ColorSpace, or omit for sRGB
  * @param format       'png' (default) | 'jpeg' — see src/format.js
+ * @param encoder      'auto' (default) | 'skia'. 'auto' takes the native encoder
+ *                     when src/encoder.js says it may; 'skia' forces the JS-thread
+ *                     one, which is what the dev panel's Encoder parity compares against.
  * @param outputName   basename for the written file
  */
 export async function renderCard({
@@ -360,6 +437,7 @@ export async function renderCard({
   colorSpace,
   orientation = 1,
   format = 'png',
+  encoder = 'auto',
   outputName,
 }) {
   const timings = {};
@@ -432,28 +510,30 @@ export async function renderCard({
     warnings.push(`output exceeds MAX_PX after planning (${plan.width}x${plan.height})`);
   }
 
-  const composed = composeCard(img, plan, { colorSpace, format });
+  const composed = composeCard(img, plan, { colorSpace });
   if (composed.error) {
     return { error: composed.error, plan, statusBar, source, warnings, timings };
   }
   timings.drawMs = composed.drawMs;
-  timings.encodeMs = composed.encodeMs;
 
   t = now();
   const dir = new Directory(Paths.cache, 'cards');
   if (!dir.exists) dir.create({ intermediates: true });
   const file = new File(dir, outputName || `card-${Date.now()}.${formatSpec(format).ext}`);
-  // create({overwrite}) rather than delete-then-create: one call, and no window
-  // where the old file is gone and the new one does not exist yet.
-  file.create({ overwrite: true });
-  file.write(composed.png);
-  timings.writeMs = +(now() - t).toFixed(2);
+  const dirMs = +(now() - t).toFixed(2);
+
+  const encoded = await encodeCard(composed.snapshot, plan, file, { colorSpace, format, encoder });
+  timings.encodeMs = encoded.encodeMs;
+  timings.writeMs = +(encoded.writeMs + (encoded.encoder === 'skia' ? dirMs : 0)).toFixed(2);
+  timings.readbackMs = encoded.readbackMs;
+  timings.encoder = encoded.encoder;
+  timings.encoderFallback = encoded.encoderFallback;
 
   return {
     path: file.uri,
     width: composed.width,
     height: composed.height,
-    bytes: composed.bytes,
+    bytes: encoded.bytes,
     fill: plan.fill,
     fillSource: plan.fillSource,
     fillLuma: plan.fillLuma,
@@ -475,6 +555,62 @@ export async function renderCard({
     warnings,
     timings,
   };
+}
+
+/**
+ * Render the same card twice, once on Skia and once the way 'auto' would, and
+ * say how they differ. The dev panel's "Encoder parity", and the only way to
+ * learn on a device whether the native encoder changed a pixel or added an
+ * ICC/sRGB chunk.
+ *
+ * PNG only, because only a lossless file can be asked "are the pixels the
+ * same". The sRGB card only: a wide-gamut one never goes native. Both files are
+ * decoded by Skia and compared band by band (src/encoder.js parityBands), so
+ * the question is about the decoded pixels, not the compressed bytes, which
+ * are expected to differ.
+ *
+ * Takes renderCard's arguments; format, colorSpace, encoder and outputName are
+ * set here.
+ */
+export async function renderParity(args) {
+  const base = { ...args, format: 'png', colorSpace: undefined };
+  const skia = await renderCard({ ...base, encoder: 'skia', outputName: 'card-parity-skia.png' });
+  const auto = await renderCard({ ...base, encoder: 'auto', outputName: 'card-parity-auto.png' });
+  if (skia.error || auto.error) return { error: skia.error || auto.error };
+
+  const info = async (out) => {
+    const bytes = await new File(out.path).bytes();
+    const png = pngInfo(bytes);
+    return {
+      encoder: out.timings.encoder,
+      fallback: out.timings.encoderFallback,
+      bytes: out.bytes,
+      fileBytes: bytes.length,
+      encodeMs: out.timings.encodeMs,
+      writeMs: out.timings.writeMs,
+      readbackMs: out.timings.readbackMs,
+      png: { ok: png.ok, size: `${png.width}x${png.height}`, colorType: png.colorType, iccp: png.iccp, srgb: png.srgb, chunks: png.chunks.join(',') },
+    };
+  };
+  const a = await info(skia);
+  const b = await info(auto);
+
+  const imgA = await decodeUri(skia.path);
+  const imgB = await decodeUri(auto.path);
+  let match = imgA.width() === imgB.width() && imgA.height() === imgB.height();
+  let compared = 0;
+  let firstDiff = null;
+  if (match) {
+    for (const band of parityBands(imgA.width(), imgA.height())) {
+      const ra = readRect(imgA, band);
+      const rb = readRect(imgB, band);
+      if (!ra || !rb) { match = false; firstDiff = { band, reason: 'unreadable' }; break; }
+      compared += band.w * band.h;
+      const at = firstDifference(ra.buf, rb.buf);
+      if (at !== -1) { match = false; firstDiff = { band, byte: at }; break; }
+    }
+  }
+  return { skia: a, auto: b, match, comparedPx: compared, firstDiff };
 }
 
 export { ColorSpace };
