@@ -27,6 +27,8 @@ import { COPY, fill } from './copy.js';
 
 const BREAK = process.env.BREAK || '';
 let shareOutcome = real.shareOutcome;
+let arrivalPlan = real.arrivalPlan;
+let waitingChip = real.waitingChip;
 
 if (BREAK === 'missing_is_none') {
   // A build without the module reads as "nothing shared". This is the silent
@@ -82,6 +84,57 @@ if (BREAK === 'missing_is_none') {
     const count = Number.isInteger(answer.count) ? answer.count : 1;
     return { ...r, notice: count >= 1 ? fill(COPY.sharedFirstOnly, { count }) : null };
   };
+}
+
+// arrivalPlan: a share over unsaved work is kept, not deleted.
+if (BREAK === 'plan_always_opens') {
+  // Replaces the card without asking, as a clean card would.
+  arrivalPlan = (a) => real.arrivalPlan({ ...a, dirty: false });
+} else if (BREAK === 'plan_never_asks_when_clean_inverted') {
+  // Asks over a card nobody changed.
+  arrivalPlan = (a) => real.arrivalPlan({ ...a, dirty: true });
+} else if (BREAK === 'plan_keep_forgets') {
+  // Keep editing leaves nothing waiting: the old behaviour, which deleted it.
+  arrivalPlan = (a) => {
+    const r = real.arrivalPlan(a);
+    return r.act === 'ask' ? { ...r, keep: { ...r.keep, waiting: a.waiting ?? null } } : r;
+  };
+} else if (BREAK === 'plan_oldest_wins') {
+  // The older waiting picture stays and the new one is the one dropped.
+  arrivalPlan = (a) => {
+    const r = real.arrivalPlan(a);
+    return r.act === 'ask' && a.waiting && a.waiting !== a.uri
+      ? { ...r, keep: { waiting: a.waiting, drop: a.uri } } : r;
+  };
+} else if (BREAK === 'plan_keeps_both_files') {
+  // The older file is shelved over but never deleted, so it piles up in the cache.
+  arrivalPlan = (a) => {
+    const r = real.arrivalPlan(a);
+    return r.act === 'ask' ? { ...r, keep: { ...r.keep, drop: null } } : r;
+  };
+} else if (BREAK === 'plan_drops_itself') {
+  // Shelving the same picture again deletes it.
+  arrivalPlan = (a) => {
+    const r = real.arrivalPlan(a);
+    return r.act === 'ask' ? { ...r, keep: { ...r.keep, drop: a.waiting ?? null } } : r;
+  };
+} else if (BREAK === 'plan_replace_keeps_shelf') {
+  // Replace opens the picture and leaves the chip pointing at the old one.
+  arrivalPlan = (a) => {
+    const r = real.arrivalPlan(a);
+    return r.act === 'ask' ? { ...r, replace: { ...r.replace, waiting: a.waiting ?? null } } : r;
+  };
+} else if (BREAK === 'plan_open_keeps_shelf') {
+  // A clean card opens the new picture and the chip still offers a file the
+  // native cleanup deleted.
+  arrivalPlan = (a) => {
+    const r = real.arrivalPlan(a);
+    return r.act === 'open' ? { ...r, waiting: a.waiting ?? null } : r;
+  };
+} else if (BREAK === 'chip_always') {
+  waitingChip = () => COPY.waitingOne;
+} else if (BREAK === 'chip_never') {
+  waitingChip = () => null;
 }
 
 let fails = 0;
@@ -171,6 +224,37 @@ console.log('\nevery message is a real sentence from the deck');
   check('four samples produced', samples.length === 4);
   check('each is a string in COPY', samples.every((s) => typeof s.message === 'string' && values.has(s.message)),
     samples.map((s) => s.message).join(' | '));
+}
+
+console.log('\na share over unsaved work is shelved, not deleted');
+{
+  const A = 'file:///cache/shared-in/shared-1.png';
+  const B = 'file:///cache/shared-in/shared-2.png';
+  const clean = arrivalPlan({ uri: A, dirty: false, waiting: null });
+  check('a clean card opens it', clean.act === 'open', clean.act);
+  check('...and nothing waits afterwards', clean.waiting === null && clean.drop === null, JSON.stringify(clean));
+  const dirty = arrivalPlan({ uri: A, dirty: true, waiting: null });
+  check('a changed card asks', dirty.act === 'ask', dirty.act);
+  check('Keep editing shelves the picture', dirty.keep.waiting === A, JSON.stringify(dirty.keep));
+  check('...with nothing to delete', dirty.keep.drop === null);
+  check('Replace opens it and empties the shelf', dirty.replace.waiting === null && dirty.replace.drop === null, JSON.stringify(dirty.replace));
+
+  const newer = arrivalPlan({ uri: B, dirty: true, waiting: A });
+  check('a second share while one waits: newest wins', newer.keep.waiting === B, JSON.stringify(newer.keep));
+  check('...and the older file is deleted', newer.keep.drop === A, JSON.stringify(newer.keep));
+  check('Replace over a waiting one deletes the older file too', newer.replace.drop === A && newer.replace.waiting === null, JSON.stringify(newer.replace));
+
+  const again = arrivalPlan({ uri: A, dirty: true, waiting: A });
+  check('the chip tapped and declined again keeps the same file', again.keep.waiting === A, JSON.stringify(again.keep));
+  check('...and never deletes it', again.keep.drop === null, JSON.stringify(again.keep));
+
+  const fromChip = arrivalPlan({ uri: A, dirty: false, waiting: A });
+  check('the chip on a clean card opens it and empties the shelf', fromChip.act === 'open' && fromChip.waiting === null && fromChip.drop === null, JSON.stringify(fromChip));
+  const cleanOver = arrivalPlan({ uri: B, dirty: false, waiting: A });
+  check('a fresh share on a clean card empties the shelf and drops the old file', cleanOver.act === 'open' && cleanOver.waiting === null && cleanOver.drop === A, JSON.stringify(cleanOver));
+
+  check('the chip says nothing waits as no label', waitingChip(null) === null);
+  check('and names one waiting picture otherwise', waitingChip(A) === COPY.waitingOne, waitingChip(A));
 }
 
 console.log('\nthe contract with the Kotlin');

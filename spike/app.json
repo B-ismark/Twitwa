@@ -74,7 +74,8 @@
       "./plugins/withReleaseSigning",
       "./plugins/withAndroidSize",
       "./plugins/withDebugSuffix",
-      "./plugins/withShareInRestore"
+      "./plugins/withShareInRestore",
+      "./plugins/withConfigChanges"
     ]
   }
 }

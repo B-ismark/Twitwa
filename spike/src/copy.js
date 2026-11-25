@@ -71,6 +71,16 @@ export const COPY = {
   replaceCardTitle: 'Replace this card?',
   replaceCardBody: 'The screenshot you shared takes its place, and the changes to this one will be lost.',
   replace: 'Replace',
+  // A share that arrived over unsaved work and was kept for later. The chip
+  // opens it by the same ask as a fresh share.
+  waitingOne: '1 screenshot waiting',
+
+  // --- opening a picture --------------------------------------------------
+  // While a share is copied or a pick is decoded, and while a launch looks for
+  // either. It says what is happening, not that the app is busy.
+  importing: 'Opening your screenshot',
+  // After a launch that found no share and brought back the last card.
+  restored: 'Picked up where you left off.',
 
   // --- the Style strip ----------------------------------------------------
   padding: 'Padding',

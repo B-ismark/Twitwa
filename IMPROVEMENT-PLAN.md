@@ -19,8 +19,12 @@ README, and generating icon PNGs from SVG.
   (`src/pixels.js` `decideCropBackground`, `modalOf`). Six new tests and four new mutants.
 - **P0 · Save twice.** Saving an unchanged card again now asks first (`shell.alreadySaved`), and a ref
   guards Share, Save and Copy against double taps.
+- **P1 · Opening and closing.** Importing state and fade-in, session restore (`src/session.js`,
+  only unfinished cards come back), `fontScale|density` in `configChanges` (`plugins/withConfigChanges.js`),
+  a Close control plus Back giving up on a stuck export after 15s, and a "1 waiting" chip for a share
+  that arrives mid-edit. Multi-image queueing moved to P6.5: the native module copies only the first image.
 
-## P1 · Opening and closing (the flow problems)
+## P1 · Opening and closing (the flow problems) — done, spec kept for reference
 1. **Importing state.** Add `importing` (a ref plus state) in `openImage`/`receive`, show a skeleton card
    with a spinner over the empty state, disable Choose, and fade the card in (`raw`
    from 0 to 1 with `withTiming`). The cold-share flash of the empty screen goes.

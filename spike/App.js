@@ -41,6 +41,7 @@
 // what its answer means.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   BackHandler,
   DevSettings,
@@ -59,6 +60,7 @@ import Animated, {
   runOnJS,
   useAnimatedStyle,
   useDerivedValue,
+  useReducedMotion,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
@@ -95,6 +97,7 @@ import {
   canvasShows,
   doneTool,
   editorState,
+  exportCurrent,
   openTool,
   padStops,
   resetTool,
@@ -142,7 +145,8 @@ import {
   rememberLater,
 } from './src/update-io';
 import { installRoute, downloadPercent, updateProblem, laterHides } from './src/update';
-import { shareOutcome } from './src/sharein';
+import { arrivalPlan, shareOutcome, waitingChip } from './src/sharein';
+import { cropFits, readSession, serialiseSession } from './src/session';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
 import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
@@ -153,6 +157,9 @@ const LOG = 'PHASE0';
 
 /** The cross-fade between the composed card and the raw screenshot. */
 const FADE_MS = 160;
+
+/** The card's fade-in from the empty screen. Close to FADE_MS, not equal: it is a different move. */
+const APPEAR_MS = 180;
 
 /**
  * Column subsampling for the auto-crop's profiles.
@@ -197,6 +204,48 @@ function takeResumeFlag() {
     return flag;
   } catch (e) {
     return null;
+  }
+}
+
+// The editor's card, so a killed process comes back to it. See src/session.js.
+// In the cache for the same reason as the flag above: it is a convenience, and
+// losing it costs only the card coming back.
+const SESSION_FILE = 'session.json';
+
+function writeSessionFile(text) {
+  try {
+    const f = new File(Paths.cache, SESSION_FILE);
+    f.create({ overwrite: true });
+    f.write(text);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function clearSessionFile() {
+  try {
+    const f = new File(Paths.cache, SESSION_FILE);
+    if (f.exists) f.delete();
+  } catch (e) {
+    // A file that cannot be deleted is read next launch and fails validation.
+  }
+}
+
+function fileExists(uri) {
+  try {
+    return new File(uri).exists;
+  } catch (e) {
+    return false;
+  }
+}
+
+function removeFile(uri) {
+  try {
+    const f = new File(uri);
+    if (f.exists) f.delete();
+  } catch (e) {
+    // Cache space only.
   }
 }
 
@@ -270,12 +319,51 @@ export default function App() {
   const lastConfig = useRef(null);
   const updateAsked = useRef(false);
 
+  // A pick or a share is being copied and decoded. A COUNT behind the state
+  // rather than a flag: a launch check, a share and a restore can overlap, and
+  // a flag cleared by whichever finishes first would show the empty sentence
+  // while another is still running. It starts at one for the launch check
+  // (the effect on `receive` ends it), so a cold launch with a share waiting
+  // never paints the empty screen: the native module has no synchronous "is
+  // there a share" call, so every launch starts in this state and drops to
+  // empty once it is answered.
+  const importDepth = useRef(1);
+  const [importing, setImporting] = useState(true);
+  // The picker is open or about to be. A ref, set before the first await: two
+  // taps inside one frame both read state as idle and both launched a picker.
+  const pickingRef = useRef(false);
+  // The shared picture kept for later when it arrived over unsaved work. State
+  // for the chip, ref for the share handler, which is subscribed once and
+  // would read the first render's null (see edRef).
+  const [waiting, setWaiting] = useState(null);
+  const waitingRef = useRef(null);
+  // The text last written to the session file, so an unchanged card is not
+  // written again.
+  const sessionText = useRef(null);
+  // Which export Back is still waiting for, and since when `busy` began. See
+  // backAction in src/shell.js.
+  const exportGen = useRef(0);
+  const busySince = useRef(0);
+
   const emit = useCallback((label, payload) => {
     const line = label + ' ' + JSON.stringify(payload);
     // Marker prefix so the whole run lifts off the device with:
     //   adb logcat -s ReactNativeJS:V | grep PHASE0
     console.log(LOG, line);
     setLog((prev) => [{ label, payload }, ...prev].slice(0, 12));
+  }, []);
+
+  const beginImport = useCallback(() => {
+    importDepth.current += 1;
+    setImporting(true);
+  }, []);
+  const endImport = useCallback(() => {
+    importDepth.current = Math.max(0, importDepth.current - 1);
+    setImporting(importDepth.current > 0);
+  }, []);
+  const shelve = useCallback((uri) => {
+    waitingRef.current = uri;
+    setWaiting(uri);
   }, []);
 
   const onStageLayout = useCallback((e) => {
@@ -355,6 +443,22 @@ export default function App() {
     raw.value = withTiming(wants === 'screenshot' ? 1 : 0, { duration: FADE_MS });
   }, [wants, raw]);
   const cardLayer = useAnimatedStyle(() => ({ opacity: 1 - raw.value }));
+
+  // The card fades in when it first appears, instead of replacing the empty
+  // screen in one frame. Not on a replacement: `hasSrc` stays true, so the
+  // effect does not run and a new picture swaps in as it always did. Skipped
+  // under the system's reduce-motion setting.
+  const reduceMotion = useReducedMotion();
+  const appear = useSharedValue(0);
+  const hasSrc = Boolean(src);
+  useEffect(() => {
+    if (!hasSrc) {
+      appear.value = 0;
+      return;
+    }
+    appear.value = reduceMotion ? 1 : withTiming(1, { duration: APPEAR_MS });
+  }, [hasSrc, reduceMotion, appear]);
+  const appearStyle = useAnimatedStyle(() => ({ opacity: appear.value }));
   const rawLayer = useAnimatedStyle(() => ({ opacity: raw.value }));
 
   // The stage's ground rides the same value as the two layers.
@@ -432,8 +536,12 @@ export default function App() {
    * Decode `uri`, propose a crop, and open the editor on it. Both ways in end
    * here -- the picker and a share -- so they cannot drift into two imports
    * with two sets of rules. Returns whether the editor opened.
+   *
+   * `saved` is a validated session (src/session.js) when this is the launch
+   * putting a card back: the proposal is still computed, because Reset
+   * returns to it, but the card opens on the saved crop and style.
    */
-  const openImage = useCallback(async (uri, via) => {
+  const openImage = useCallback(async (uri, via, saved) => {
     const gen = ++importGen.current;
     try {
       const decoded = await decodeFromUri(uri);
@@ -459,13 +567,22 @@ export default function App() {
       // fixing it. The invariant worth having is that src and ed are set
       // together or not at all, so there is no state in which one exists
       // without the other for a guard to paper over.
+      if (saved && !cropFits(saved.crop, decoded.width, decoded.height)) {
+        throw new Error('saved crop lies outside the picture');
+      }
       shownUri.current = uri;
       setSrc({ ...decoded, uri });
       setOverride(null);
-      const opened = editorState(p.crop);
+      const base = editorState(p.crop);
+      const opened = saved
+        ? { ...base, crop: saved.crop, padding: saved.padding, background: saved.background }
+        : base;
       setEd(opened);
-      kept.current = cardOf(opened);
-      setSampled(sampleCropBackground(decoded.img, p.crop));
+      // A restored card is treated as unsaved, so Back asks. Whether it had
+      // been shared or saved before the process died is not in the file, and
+      // asking once too often costs a tap where not asking costs the card.
+      kept.current = saved ? null : cardOf(opened);
+      setSampled(sampleCropBackground(decoded.img, opened.crop));
       emit('crop.propose', {
         crop: p.crop,
         trimmed: p.trimmed,
@@ -485,12 +602,14 @@ export default function App() {
       emit('decode.error', { via, superseded, message: String(e && e.message ? e.message : e) });
       // A newer import has taken over, and this one's file may have been
       // deleted under it. Its failure is not news to anyone.
-      if (!superseded) setProblem(via === 'share' ? COPY.sharedFailed : COPY.pickFailed);
+      // A restore that fails is silent: the person did not ask for it, and the
+      // empty screen is what they would have had without it.
+      if (!superseded && via !== 'restore') setProblem(via === 'share' ? COPY.sharedFailed : COPY.pickFailed);
       return false;
     }
   }, [emit]);
 
-  const pick = useCallback(async () => {
+  const pickFromLibrary = useCallback(async () => {
     setProblem(null);
     setMenu(false);
     // The launch is INSIDE the boundary, and reports under its own label.
@@ -530,12 +649,29 @@ export default function App() {
       return;
     }
     if (res.canceled) return;
-    await openImage(res.assets[0].uri, 'picker');
+    // From here until the card is up or an error is shown: Choose is off and
+    // the empty screen says what is happening.
+    beginImport();
+    try {
+      await openImage(res.assets[0].uri, 'picker');
+    } finally {
+      endImport();
+    }
     // staleLauncher and recoverPicker belong here. With `[emit]` alone this
     // callback kept the first render's `staleLauncher: false` for the life of
     // the component, so the proactive branch above could never fire and every
     // recreation went the long way round: launch, reject, report, recover.
-  }, [emit, staleLauncher, recoverPicker, openImage]);
+  }, [emit, staleLauncher, recoverPicker, openImage, beginImport, endImport]);
+
+  const pick = useCallback(async () => {
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    try {
+      await pickFromLibrary();
+    } finally {
+      pickingRef.current = false;
+    }
+  }, [pickFromLibrary]);
 
   // --- receiving a share ---------------------------------------------------
   //
@@ -550,60 +686,66 @@ export default function App() {
   // a Replace answered after a later take would open a file that is gone.
   const shareGen = useRef(0);
 
-  const receiveOnce = useCallback(async (why) => {
-    let answer = null;
-    const gen = ++shareGen.current;
-    try {
-      answer = await takeShare(shownUri.current);
-    } catch (e) {
-      emit('share.error', { why, message: String(e && e.message ? e.message : e) });
-      setProblem(COPY.sharedFailed);
-      return;
-    }
-    const o = shareOutcome(answer, shareInAvailable);
-    emit('share.in', {
-      why,
-      action: o.action,
-      reason: o.reason ?? null,
-      count: answer && answer.count != null ? answer.count : null,
-      bytes: answer && answer.bytes != null ? answer.bytes : null,
-    });
-    if (o.action === 'ignore') return;
-    if (o.action === 'problem') {
-      setProblem(o.message);
-      return;
-    }
+  // What happens to a picture that has been copied into our cache and is ready
+  // to show: open it, or ask first when the card on screen has unkept changes.
+  // `src/sharein.js` decides which and what becomes of the waiting one; this
+  // carries it out. Also the chip's route, so a waiting picture goes through
+  // the same ask as a fresh share.
+  const offer = useCallback(async (o, why, gen) => {
+    const { uri } = o;
     // A share replaces whatever is on screen, open tool and menus included:
-    // it is a deliberate act from another app, and there is nowhere to put it
-    // aside until the person is done.
+    // it is a deliberate act from another app.
     const apply = async () => {
-      setMenu(false);
-      setDevOpen(false);
-      setProblem(null);
-      setNotice(null);
-      const opened = await openImage(o.uri, 'share');
-      if (opened && o.notice) setNotice(o.notice);
+      beginImport();
+      try {
+        setMenu(false);
+        setDevOpen(false);
+        setProblem(null);
+        setNotice(null);
+        const opened = await openImage(uri, 'share');
+        if (opened && o.notice) setNotice(o.notice);
+      } finally {
+        endImport();
+      }
     };
-    if (!unsaved(edRef.current, kept.current)) {
+    const plan = arrivalPlan({
+      uri,
+      dirty: unsaved(edRef.current, kept.current),
+      waiting: waitingRef.current,
+    });
+    // A file to delete, and what the chip points at afterwards. Never the file
+    // on screen.
+    const settle = (r) => {
+      if (r.drop && r.drop !== shownUri.current) removeFile(r.drop);
+      shelve(r.waiting);
+    };
+    if (plan.act === 'open') {
+      settle(plan);
       await apply();
       return;
     }
     // Over a card with unsaved changes it asks first, by the same rule Back
-    // and New screenshot use. Keep editing drops the share: its copy is not on
-    // screen, so the next take cleans it up like any other.
+    // and New screenshot use. Keep editing SHELVES the picture (the chip opens
+    // it later); it used to delete it. Only for the take it answers: a later
+    // take has already deleted this copy and has its own ask, so an answer
+    // that arrives after it is ignored, as Replace always was.
     //
     // The ask does NOT hold the chain. It used to be awaited here, and a
     // dialog that never calls back (Android drops it when the activity is
     // recreated, say by a Display size change, and MainActivity restores no
     // state) left every later share queued behind it, silently, until the
     // app was killed. Found in review, 2026-09-23. Replace goes back on the
-    // chain, so its import still never overlaps a take(); and it applies only
-    // if no share has been taken since, because that take deleted this copy.
+    // chain, so its import still never overlaps a take().
+    const keep = () => {
+      const stale = gen !== shareGen.current;
+      emit('share.in.ask', { why, replace: false, stale });
+      if (!stale) settle(plan.keep);
+    };
     Alert.alert(
       COPY.replaceCardTitle,
       COPY.replaceCardBody,
       [
-        { text: COPY.keepEditing, style: 'cancel', onPress: () => emit('share.in.ask', { why, replace: false }) },
+        { text: COPY.keepEditing, style: 'cancel', onPress: keep },
         {
           text: COPY.replace,
           style: 'destructive',
@@ -611,31 +753,130 @@ export default function App() {
             receiving.current = receiving.current.then(() => {
               const stale = gen !== shareGen.current;
               emit('share.in.ask', { why, replace: true, stale });
-              return stale ? undefined : apply();
+              if (stale) return undefined;
+              settle(plan.replace);
+              return apply();
             }).catch((e) => emit('share.error', { why, message: String(e && e.message ? e.message : e) }));
           },
         },
       ],
-      { cancelable: true, onDismiss: () => emit('share.in.ask', { why, replace: false }) },
+      { cancelable: true, onDismiss: keep },
     );
-  }, [emit, openImage]);
+  }, [emit, openImage, beginImport, endImport, shelve]);
+
+  /** Resolves true when a share was there to deal with, even one that failed. */
+  const receiveOnce = useCallback(async (why) => {
+    let answer = null;
+    const gen = ++shareGen.current;
+    // From the moment a share is detected: the copy inside take() is part of
+    // the wait, and the card is not up until the decode after it.
+    beginImport();
+    try {
+      try {
+        answer = await takeShare(shownUri.current);
+      } catch (e) {
+        emit('share.error', { why, message: String(e && e.message ? e.message : e) });
+        setProblem(COPY.sharedFailed);
+        return true;
+      }
+      // take() deletes every shared copy but the one on screen, and that
+      // includes the waiting one when a new share was copied. If it is gone
+      // there is nothing for the chip to open.
+      if (waitingRef.current && !fileExists(waitingRef.current)) shelve(null);
+      const o = shareOutcome(answer, shareInAvailable);
+      emit('share.in', {
+        why,
+        action: o.action,
+        reason: o.reason ?? null,
+        count: answer && answer.count != null ? answer.count : null,
+        bytes: answer && answer.bytes != null ? answer.bytes : null,
+      });
+      if (o.action === 'ignore') return false;
+      if (o.action === 'problem') {
+        setProblem(o.message);
+        return true;
+      }
+      await offer(o, why, gen);
+      return true;
+    } finally {
+      endImport();
+    }
+  }, [emit, offer, beginImport, endImport, shelve]);
 
   const receive = useCallback((why) => {
     // receiveOnce catches what it can throw, so the chain is not left
-    // rejected; this catch is for whatever it did not see coming.
+    // rejected; this catch is for whatever it did not see coming. The value
+    // is receiveOnce's, so the launch can tell "there was a share" from not.
     receiving.current = receiving.current
       .then(() => receiveOnce(why))
       .catch((e) => emit('share.error', { why, message: String(e && e.message ? e.message : e) }));
     return receiving.current;
   }, [emit, receiveOnce]);
 
+  // The chip's tap: the waiting picture through the same ask as a new share.
+  // On the chain, so it cannot overlap a take() that would delete it.
+  const openWaiting = useCallback(() => {
+    receiving.current = receiving.current.then(() => {
+      const uri = waitingRef.current;
+      if (!uri) return undefined;
+      if (!fileExists(uri)) {
+        shelve(null);
+        setProblem(COPY.sharedFailed);
+        return undefined;
+      }
+      return offer({ uri, notice: null }, 'waiting', shareGen.current);
+    }).catch((e) => emit('share.error', { why: 'waiting', message: String(e && e.message ? e.message : e) }));
+  }, [emit, offer, shelve]);
+
+  // Put back the card a killed process left, when no share is waiting. Quiet
+  // on every failure: delete the file and show the empty screen.
+  const restoreSession = useCallback(async () => {
+    try {
+      const f = new File(Paths.cache, SESSION_FILE);
+      if (!f.exists) return;
+      // `text()` is the async one; see the note on takeResumeFlag.
+      const saved = readSession(await f.text());
+      // A card already on screen came from something the person did while
+      // this was reading, and wins.
+      if (shownUri.current) return;
+      if (!saved || !fileExists(saved.uri)) {
+        emit('session.restore', { ok: false, reason: saved ? 'picture gone' : 'unreadable' });
+        clearSessionFile();
+        return;
+      }
+      beginImport();
+      try {
+        const opened = await openImage(saved.uri, 'restore', saved);
+        emit('session.restore', { ok: opened });
+        if (opened) setNotice(COPY.restored);
+        else clearSessionFile();
+      } finally {
+        endImport();
+      }
+    } catch (e) {
+      emit('session.restore', { ok: false, message: String(e && e.message ? e.message : e) });
+      clearSessionFile();
+    }
+  }, [emit, openImage, beginImport, endImport]);
+
   // Once at launch, for a share that started the app, and then on every
   // share that arrives while it is running. The native module also catches a
   // share that recreates a destroyed activity; see its header for all three.
+  //
+  // The launch also ends the wait `importDepth` starts with, and, when there
+  // was no share, brings back the last card. The picker's own resume (below)
+  // wins over it: a pick in progress is what the person just asked for.
   useEffect(() => {
-    receive('launch');
+    (async () => {
+      try {
+        const consumed = await receive('launch');
+        if (!consumed && !pickingRef.current) await restoreSession();
+      } finally {
+        endImport();
+      }
+    })();
     return onShare(() => receive('event'));
-  }, [receive]);
+  }, [receive, restoreSession, endImport]);
 
   // Ask once per mount whether a newer APK exists. Deliberately fire-and-forget:
   // nothing waits on it, nothing is blocked by it, and a failure is a log line.
@@ -801,8 +1042,25 @@ export default function App() {
    * one of them to export a card the preview never showed, and the P4 check
    * below is what would notice.
    */
+  // The card went somewhere (Share, Save, Copy). A finished card is not worth
+  // bringing back at the next launch, so its session file goes, but only when
+  // the file holds this exact card: one edited since is still unfinished work.
+  // The next edit writes the file again through the session effect.
+  const markKept = useCallback((card) => {
+    kept.current = card;
+    const j = src ? serialiseSession(card, src.uri) : null;
+    if (j && JSON.stringify(j) === sessionText.current) {
+      clearSessionFile();
+      sessionText.current = null;
+    }
+  }, [src]);
+
   const exportCard = useCallback(async (outputName) => {
+    const started = exportGen.current;
     const out = await build(outputName);
+    // Back gave up on this one while it ran; see abandonExport. Nothing it
+    // found is news any more, and its caller treats null as "stop".
+    if (!exportCurrent(started, exportGen.current)) return null;
     if (!out || out.error) {
       emit('P1.render.error', { error: out && out.error });
       setProblem(COPY.renderFailed);
@@ -843,6 +1101,7 @@ export default function App() {
   const share = useCallback(async () => {
     if (!src || !ed || working.current) return;
     working.current = true;
+    const started = exportGen.current;
     const card = cardOf(ed);
     setProblem(null);
     setNotice(null);
@@ -860,16 +1119,22 @@ export default function App() {
       const out = await exportCard('card.png');
       if (!out) return;
       await Sharing.shareAsync(out.path, { mimeType: 'image/png', UTI: 'public.png' });
-      kept.current = card;
+      if (!exportCurrent(started, exportGen.current)) return;
+      markKept(card);
       emit('P1.share', { ok: true, path: out.path });
     } catch (e) {
+      if (!exportCurrent(started, exportGen.current)) return;
       emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
       setProblem(COPY.shareFailed);
     } finally {
-      working.current = false;
-      setBusy(false);
+      // Only the export Back is still waiting for may clear the wait: an
+      // abandoned one landing late would otherwise un-busy the next.
+      if (exportCurrent(started, exportGen.current)) {
+        working.current = false;
+        setBusy(false);
+      }
     }
-  }, [src, ed, exportCard, emit]);
+  }, [src, ed, exportCard, emit, markKept]);
 
   /**
    * Save the card to Photos, which on Android means a MediaStore row in DCIM.
@@ -904,6 +1169,7 @@ export default function App() {
       return;
     }
     working.current = true;
+    const started = exportGen.current;
     setProblem(null);
     setNotice(null);
     setMenu(false);
@@ -926,6 +1192,7 @@ export default function App() {
         const out = await exportCard(savedName(new Date()));
         if (!out) return;
         const asset = await Asset.create(out.path);
+        if (!exportCurrent(started, exportGen.current)) return;
         // MediaStore holds its own copy now. The one in the cache has a name
         // per save, so unlike Share's card.png nothing ever overwrites it, and
         // without this every save left one behind. A failure here costs cache
@@ -935,20 +1202,23 @@ export default function App() {
         } catch {
           // Deliberately empty; see above.
         }
-        kept.current = card;
+        markKept(card);
         savedTo.current = { uri: shownUri.current, card };
         emit('P5.save', { ok: true, api: Platform.Version, id: asset.id });
         setNotice(COPY.saved);
       }
     } catch (e) {
+      if (!exportCurrent(started, exportGen.current)) return;
       emit('P5.save', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
       setProblem(COPY.saveFailed);
     } finally {
-      working.current = false;
-      setBusy(false);
+      if (exportCurrent(started, exportGen.current)) {
+        working.current = false;
+        setBusy(false);
+      }
     }
     if (fallback) await share();
-  }, [src, ed, exportCard, share, emit]);
+  }, [src, ed, exportCard, share, emit, markKept]);
 
   /**
    * Put the card on the clipboard as an image.
@@ -964,6 +1234,7 @@ export default function App() {
   const copyImage = useCallback(async () => {
     if (!src || !ed || working.current) return;
     working.current = true;
+    const started = exportGen.current;
     const card = cardOf(ed);
     setProblem(null);
     setNotice(null);
@@ -975,17 +1246,21 @@ export default function App() {
       const png = new File(out.path);
       const b64 = await png.base64();
       await Clipboard.setImageAsync(b64);
-      kept.current = card;
+      if (!exportCurrent(started, exportGen.current)) return;
+      markKept(card);
       emit('P5.copy', { ok: true, api: Platform.Version, kiB: +(out.bytes / 1024).toFixed(1) });
       if (Platform.Version < 33) setNotice(COPY.copied);
     } catch (e) {
+      if (!exportCurrent(started, exportGen.current)) return;
       emit('P5.copy', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
       setProblem(COPY.copyFailed);
     } finally {
-      working.current = false;
-      setBusy(false);
+      if (exportCurrent(started, exportGen.current)) {
+        working.current = false;
+        setBusy(false);
+      }
     }
-  }, [src, ed, exportCard, emit]);
+  }, [src, ed, exportCard, emit, markKept]);
 
   // --- gestures on the raw layer ------------------------------------------
   //
@@ -1247,6 +1522,11 @@ export default function App() {
   }, [src, emit]);
 
   const clearEditor = useCallback(() => {
+    // Discard, Close and a clean Back all end here, and a card that was thrown
+    // away must not come back at the next launch. A New screenshot needs no
+    // clear of its own: the card that replaces it overwrites the file.
+    clearSessionFile();
+    sessionText.current = null;
     setSrc(null);
     setEd(null);
     setSampled(null);
@@ -1293,26 +1573,65 @@ export default function App() {
     else pick();
   }, [ed, confirmDiscard, pick]);
 
-  // Android's Back, one layer at a time. Before this there was no handler, so
-  // Back closed the activity and the card went with it, unasked. The order
-  // and the reasons are backAction's, in src/shell.js; this only carries
-  // them out. Returning false is the one case Android should handle itself.
+  // Back gave up on an export that never came back. Bumping the generation is
+  // what makes the late result harmless (see exportCurrent), and the caption
+  // says the card was not made, which is true as far as the person can tell.
+  const abandonExport = useCallback(() => {
+    exportGen.current += 1;
+    working.current = false;
+    setBusy(false);
+    setNotice(null);
+    setProblem(COPY.renderFailed);
+  }, []);
+
+  // When `busy` began, for Back's fifteen seconds. An effect rather than a
+  // write at each of the places that set it: there are four.
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      const a = backAction(ed, { menu, dev: devOpen, busy, kept: kept.current });
-      emit('back', { action: a });
-      if (a === 'exit') return false;
-      if (a === 'close-dev') setDevOpen(false);
-      else if (a === 'close-menu') setMenu(false);
-      else if (a === 'cancel-tool') cancel();
-      else if (a === 'ask-tool') confirmDiscard(COPY.discardCropTitle, COPY.discardCropBody, cancel);
-      else if (a === 'close-tool') setEd((s) => (s ? doneTool(s) : s));
-      else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
-      else if (a === 'leave') clearEditor();
-      return true;
-    });
+    busySince.current = busy ? Date.now() : 0;
+  }, [busy]);
+
+  // Android's Back, one layer at a time, and the Close control on the card
+  // view, which is the same act: one rule, so the two cannot disagree about
+  // whether to ask. Before this there was no handler, so Back closed the
+  // activity and the card went with it, unasked. The order and the reasons are
+  // backAction's, in src/shell.js; this only carries them out. Returning false
+  // is the one case Android should handle itself.
+  const goBack = useCallback(() => {
+    const busyMs = busy && busySince.current ? Date.now() - busySince.current : 0;
+    const a = backAction(ed, { menu, dev: devOpen, busy, busyMs, kept: kept.current });
+    emit('back', { action: a });
+    if (a === 'exit') return false;
+    if (a === 'close-dev') setDevOpen(false);
+    else if (a === 'close-menu') setMenu(false);
+    else if (a === 'abandon') abandonExport();
+    else if (a === 'cancel-tool') cancel();
+    else if (a === 'ask-tool') confirmDiscard(COPY.discardCropTitle, COPY.discardCropBody, cancel);
+    else if (a === 'close-tool') setEd((s) => (s ? doneTool(s) : s));
+    else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
+    else if (a === 'leave') clearEditor();
+    return true;
+  }, [ed, menu, devOpen, busy, abandonExport, cancel, clearEditor, confirmDiscard, emit]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', goBack);
     return () => sub.remove();
-  }, [ed, menu, devOpen, busy, cancel, clearEditor, confirmDiscard, emit]);
+  }, [goBack]);
+
+  // The card, written down after it settles. One effect on the editor rather
+  // than a write at each commit (crop proposed, Done, a Style change, an
+  // export): the session is the card, and the card only changes through `ed`.
+  // Debounced because the padding slider changes it on every move. A takeover
+  // tool's uncommitted edit is not in it (serialiseSession).
+  useEffect(() => {
+    if (!ed || !src) return undefined;
+    const j = serialiseSession(ed, src.uri);
+    const text = j ? JSON.stringify(j) : null;
+    if (!text || text === sessionText.current) return undefined;
+    const t = setTimeout(() => {
+      if (writeSessionFile(text)) sessionText.current = text;
+    }, SESSION_MS);
+    return () => clearTimeout(t);
+  }, [ed, src]);
 
   // --- what the caption says ----------------------------------------------
   let caption = '';
@@ -1400,15 +1719,39 @@ export default function App() {
           as an empty app. It was also unreadable: the stage colour is dark in
           BOTH themes, so in light mode that line was light-Graphite on Ink at
           2.37:1. */}
+      {/* Close, top-left, on the card view. The row stays while a takeover tool
+          is open so the stage does not change height under the person's
+          thumb; only the control goes, because Crop has its own Cancel. */}
+      {src ? (
+        <View style={styles.topBar}>
+          {takeover ? null : <Action label={COPY.close} palette={palette} fit onPress={goBack} />}
+        </View>
+      ) : null}
+
       <Animated.View
         style={[styles.stage, src ? stageGround : null]}
         onLayout={onStageLayout}
       >
         {!src ? (
           <View style={styles.empty}>
-            <Text style={[styles.emptyText, { color: palette.graphite }]}>{COPY.emptyTitle}</Text>
+            {importing ? (
+              <>
+                <ActivityIndicator color={palette.graphite} />
+                <Text
+                  style={[styles.emptyText, styles.importingText, { color: palette.graphite }]}
+                  accessibilityLiveRegion="polite"
+                >
+                  {COPY.importing}
+                </Text>
+              </>
+            ) : (
+              <Text style={[styles.emptyText, { color: palette.graphite }]}>{COPY.emptyTitle}</Text>
+            )}
           </View>
         ) : null}
+
+        {/* Everything drawn from the picture, under one fade: see `appear`. */}
+        <Animated.View style={[StyleSheet.absoluteFill, appearStyle]}>
 
         {/* Layer one: the card, exactly as it will export. */}
         {src && stage && shot && fillColour && !override ? (
@@ -1475,6 +1818,7 @@ export default function App() {
             ) : null}
           </Animated.View>
         ) : null}
+        </Animated.View>
       </Animated.View>
 
       {/* The way in to the measurement harness, and the only thing on this
@@ -1484,24 +1828,31 @@ export default function App() {
       {/* Not a TalkBack stop while it says nothing: at rest the caption is
           empty, and an empty stop reads as a control with no name. The long
           press still works for a sighted developer either way. */}
-      <Pressable
-        onLongPress={() => setDevOpen(true)}
-        delayLongPress={800}
-        style={styles.captionWrap}
-        accessible={caption !== ''}
-      >
-        {/* A live region, so TalkBack reads "Saved to Photos" and every problem
-            aloud. On Android 13 and later that caption is Save's only
-            confirmation, and before this nothing announced it. Only for those
-            two: the crop hint also lives here, and a live region would read it
-            out every time Crop opens. */}
-        <Text
-          style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}
-          accessibilityLiveRegion={problem || notice ? 'polite' : 'none'}
+      <View style={styles.captionRow}>
+        <Pressable
+          onLongPress={() => setDevOpen(true)}
+          delayLongPress={800}
+          style={[styles.captionWrap, styles.captionGrow]}
+          accessible={caption !== ''}
         >
-          {caption}
-        </Text>
-      </Pressable>
+          {/* A live region, so TalkBack reads "Saved to Photos" and every problem
+              aloud. On Android 13 and later that caption is Save's only
+              confirmation, and before this nothing announced it. Only for those
+              two: the crop hint also lives here, and a live region would read it
+              out every time Crop opens. */}
+          <Text
+            style={[styles.caption, { color: problem ? palette.text : palette.graphite }]}
+            accessibilityLiveRegion={problem || notice ? 'polite' : 'none'}
+          >
+            {caption}
+          </Text>
+        </Pressable>
+        {/* A share kept while there was unsaved work. Tapping asks the same
+            question a new share would. */}
+        {waiting ? (
+          <Chip label={waitingChip(waiting)} palette={palette} on={false} toggle={false} onPress={openWaiting} />
+        ) : null}
+      </View>
 
       {ed && ed.tool === 'style' ? (
         <StyleStrip
@@ -1531,7 +1882,7 @@ export default function App() {
 
       {!src ? (
         <View style={styles.bar}>
-          <Action label={COPY.choose} palette={palette} primary wide onPress={pick} />
+          <Action label={COPY.choose} palette={palette} primary wide disabled={importing} onPress={pick} />
         </View>
       ) : takeover ? (
         <View style={styles.bar}>
@@ -1618,6 +1969,8 @@ const GRID_MS = 120;
 // enough to read a three-word sentence twice, short enough that the card's
 // size is back before the next thing anyone does.
 const NOTICE_MS = 2500;
+// How long the card must sit still before it is written to the session file.
+const SESSION_MS = 400;
 
 /**
  * The loupe's size, its inset from the stage's corner, and how many POINTS
@@ -2086,7 +2439,7 @@ function MenuItem({ label, onPress, palette }) {
  * surface pill with a hairline. `selected` is shown by the border rather than
  * by colour alone.
  */
-function Action({ label, onPress, disabled, primary, selected, wide, palette }) {
+function Action({ label, onPress, disabled, primary, selected, wide, fit, palette }) {
   const bg = primary ? palette.signal : palette.surface;
   const fg = primary ? palette.onSignal : palette.text;
   return (
@@ -2099,6 +2452,7 @@ function Action({ label, onPress, disabled, primary, selected, wide, palette }) 
       style={[
         styles.action,
         wide && styles.actionWide,
+        fit && styles.actionFit,
         {
           backgroundColor: bg,
           borderColor: selected ? palette.signal : palette.hairline,
@@ -2132,6 +2486,7 @@ const styles = StyleSheet.create({
   // the top of the stage rather than in the middle of it.
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl },
   emptyText: { ...TYPE.body, textAlign: 'center' },
+  importingText: { marginTop: SPACE.md },
 
   scrim: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.55)' },
   // White plus a dark outline, because a coloured frame over arbitrary
@@ -2210,6 +2565,9 @@ const styles = StyleSheet.create({
     outlineColor: 'rgba(0,0,0,0.35)',
   },
 
+  topBar: { minHeight: TOUCH, paddingHorizontal: SPACE.md, paddingBottom: SPACE.xs, alignItems: 'flex-start' },
+  captionRow: { flexDirection: 'row', alignItems: 'center', paddingRight: SPACE.md },
+  captionGrow: { flex: 1 },
   captionWrap: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: SPACE.lg },
   caption: { ...TYPE.caption, textAlign: 'center' },
 
@@ -2262,6 +2620,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACE.lg,
   },
   actionWide: { flex: 3 },
+  // A control that is its own width, such as Close, rather than a share of a bar.
+  actionFit: { flex: 0, minHeight: TOUCH },
   actionOff: { opacity: 0.4 },
   actionText: { ...TYPE.label },
 });

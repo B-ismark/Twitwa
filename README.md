@@ -159,7 +159,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25 as **334**, none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -444,7 +444,8 @@ cd spike
 # were red and for mutants that were not, indiscriminately. Do not put it
 # back.
 for p in plugins/withReleaseSigning.test.mjs plugins/withAndroidSize.test.mjs \
-         plugins/withDebugSuffix.test.mjs plugins/withShareInRestore.test.mjs tools/check-copy.mjs \
+         plugins/withDebugSuffix.test.mjs plugins/withShareInRestore.test.mjs \
+         plugins/withConfigChanges.test.mjs tools/check-copy.mjs \
          tools/check-style-members.mjs tools/check-call-arity.mjs \
          src/update.test.mjs; do
   # The suite must be green unmutated first. A file that cannot load exits 1
@@ -464,14 +465,14 @@ done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
          src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
-         src/sharein.test.mjs tools/chunks.test.mjs \
+         src/sharein.test.mjs src/session.test.mjs tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
   node "$t" >/dev/null 2>&1 || echo "NOT GREEN: $t"   # as above
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 286 mutations
+done                                     # silence is the pass; 334 mutations (2026-11-25)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
