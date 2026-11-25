@@ -15,6 +15,36 @@
 // `BREAK=sample_order` in the tests asserts step 2 is fed the trimmed rect.
 import { cardSize } from './sizing.js';
 import { intersectRect, luma, PAPER, INK } from './pixels.js';
+import { formatSpec } from './format.js';
+
+/**
+ * The six curated tones on the Style sheet's second background row.
+ *
+ * Fixed fills, handled exactly like Paper and Ink: `planOutput` is the only
+ * place that turns a name into a colour, so the swatch, the preview and the
+ * exported file read one answer and cannot drift. Soft and desaturated, so
+ * they sit beside Paper #F6F4EF and Ink #15181D rather than shouting over a
+ * screenshot: three light (Sky, Mint, Sand) and three dark (Plum, Slate,
+ * Midnight). Plum is a dusky rose (named so, not "Blush", because a pale name on a dark swatch surprises); a pale one would have made
+ * four light and two dark.
+ *
+ * Every one lies between Ink and Paper in luma, so none trips the near-white
+ * or near-black warning below (a test holds that), and every one is a six-digit
+ * hex, which is what keeps the card opaque for a JPEG (see composeCard).
+ */
+export const TONES = {
+  sky: '#DCE7F2',
+  mint: '#DAEBE0',
+  sand: '#EADFCB',
+  plum: '#3E2C33',
+  slate: '#2C3541',
+  midnight: '#1B2338',
+};
+
+// Paper and Ink are chosen frames like the tones, so one table answers "is
+// this a fixed fill, and which".
+const CHOSEN = { paper: PAPER, ink: INK, ...TONES };
+const isChosen = (frame) => Object.prototype.hasOwnProperty.call(CHOSEN, frame);
 
 const hexLuma = (hex) => luma([
   parseInt(hex.slice(1, 3), 16),
@@ -128,10 +158,10 @@ export function planCrop({ image, crop, statusBar = null, trim = 'auto' }) {
  * @param crop        the crop returned by planCrop — not the user's request
  * @param padding     a PADDING key or a fraction
  * @param background  cropBackground() run on THAT crop
- * @param frame       'match' | 'paper' | 'ink' — the Style strip's choice
+ * @param frame       'match' | 'paper' | 'ink' | a TONES name — the Style strip's choice
  *
  * `frame` is the user overriding the sample, and 'match' is the product: the
- * frame is the screenshot's own edge colour, and the other two are what you
+ * frame is the screenshot's own edge colour, and every other choice is what you
  * reach for when that sample is wrong or ugly. A chosen frame skips the
  * sampling branch entirely rather than sampling and discarding, because the
  * "the edges disagreed" warning is about a decision this call did not make.
@@ -143,11 +173,11 @@ export function planOutput({ crop, padding = 'standard', background = null, fram
 
   let fill;
   let fillSource;
-  if (frame === 'paper' || frame === 'ink') {
-    fill = frame === 'paper' ? PAPER : INK;
+  if (isChosen(frame)) {
+    fill = CHOSEN[frame];
     fillSource = 'chosen';
   } else if (frame !== 'match') {
-    throw new Error(`unknown frame: ${String(frame)}. Known: match, paper, ink`);
+    throw new Error(`unknown frame: ${String(frame)}. Known: match, ${Object.keys(CHOSEN).join(', ')}`);
   } else if (background && background.source === 'sampled' && background.hex) {
     fill = background.hex;
     fillSource = 'sampled';
@@ -243,15 +273,19 @@ export function orientedSize(width, height, orientation = 1) {
  * it goes wrong are both invisible on most days: `getMonth()` is zero-based,
  * and an unpadded field only shows itself before the tenth of the month or
  * the tenth hour.
+ *
+ * The extension is the format's (src/format.js): MediaStore picks the MIME
+ * type from it, so a JPEG named .png would show in a gallery as a PNG and
+ * be refused by an app that checks.
  */
-export function savedName(date) {
+export function savedName(date, format = 'png') {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
     throw new Error(`plan: savedName needs a valid Date, got ${String(date)}`);
   }
   const two = (n) => String(n).padStart(2, '0');
   const day = `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}`;
   const time = `${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
-  return `Twitwa-${day}-${time}.png`;
+  return `Twitwa-${day}-${time}.${formatSpec(format).ext}`;
 }
 
 /** Whether an orientation needs any work at all. 1 and anything unknown mean no. */

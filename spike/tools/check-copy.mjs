@@ -61,6 +61,8 @@ const LABEL_KEYS = new Set([
   'padding', 'background',
   'snug', 'standard', 'roomy',
   'matchFrame', 'paperFrame', 'inkFrame',
+  'skyFrame', 'mintFrame', 'sandFrame', 'plumFrame', 'slateFrame', 'midnightFrame',
+  'viewSaved', 'saveAsJpeg', 'switchOn', 'switchOff',
   'updateGet', 'updateLater', 'devTitle',
   'saveShort', 'copyImage', 'discard', 'keepEditing', 'replace',
 ]);

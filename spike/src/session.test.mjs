@@ -136,7 +136,7 @@ console.log('readSession: a good file comes back');
     check(`the ${name} stop is accepted`, F.readSession({ ...good, padding: p }) !== null);
   }
   check('so is a slider value between stops', F.readSession({ ...good, padding: 0.0731 }) !== null);
-  for (const b of ['match', 'paper', 'ink']) {
+  for (const b of ['match', 'paper', 'ink', 'sky', 'mint', 'sand', 'plum', 'slate', 'midnight']) {
     check(`background ${b} is accepted`, F.readSession({ ...good, background: b }) !== null);
   }
   check('the result is a copy, not the input', (() => {

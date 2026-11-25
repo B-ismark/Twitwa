@@ -37,6 +37,7 @@ import { planCard, orientedSize, needsOrientation } from './plan';
 import { pickSource, canReuseSample } from './perf';
 import { readRect } from './skia';
 import { MAX_PX, samplingFor } from './sizing';
+import { formatSpec } from './format';
 
 const STATUS_BAND_ROWS = 400;   // enough to hold any status bar; never the whole image
 const EDGE_THICKNESS = 8;       // matches pixels.js's default, kept explicit here
@@ -235,7 +236,8 @@ function sampleFallbackTiles(img, crop, tolerance = 16, tileOpts) {
  * whose whole point is the frame.
  */
 function composeCard(img, plan, opts = {}) {
-  const { colorSpace } = opts;
+  const { colorSpace, format = 'png' } = opts;
+  const spec = formatSpec(format);
   const t0 = now();
 
   // A card a ceiling shrank is composed on a RASTER surface, not the GPU one.
@@ -304,7 +306,12 @@ function composeCard(img, plan, opts = {}) {
   const drawMs = +(now() - t0).toFixed(2);
   const t1 = now();
   const snapshot = surface.makeImageSnapshot();
-  const png = snapshot.encodeToBytes(ImageFormat.PNG, 100);
+  // PNG is the same call it always was (quality 100, ignored by Skia), so
+  // the default path is byte-identical. JPEG has no alpha, and needs no
+  // flattening here: the surface was cleared to plan.fill, always an opaque
+  // six-digit hex (a test holds that), and everything after is drawn over it,
+  // so no pixel is transparent, corners included (the card has no rounded ones).
+  const png = snapshot.encodeToBytes(spec.format === 'jpeg' ? ImageFormat.JPEG : ImageFormat.PNG, spec.quality);
   const encodeMs = +(now() - t1).toFixed(2);
 
   return {
@@ -338,6 +345,7 @@ function composeCard(img, plan, opts = {}) {
  * @param trim         'auto' | 'always' | 'never'
  * @param frame        'match' | 'paper' | 'ink' — the Style strip's Background
  * @param colorSpace   a Skia ColorSpace, or omit for sRGB
+ * @param format       'png' (default) | 'jpeg' — see src/format.js
  * @param outputName   basename for the written file
  */
 export async function renderCard({
@@ -351,6 +359,7 @@ export async function renderCard({
   frame = 'match',
   colorSpace,
   orientation = 1,
+  format = 'png',
   outputName,
 }) {
   const timings = {};
@@ -423,7 +432,7 @@ export async function renderCard({
     warnings.push(`output exceeds MAX_PX after planning (${plan.width}x${plan.height})`);
   }
 
-  const composed = composeCard(img, plan, { colorSpace });
+  const composed = composeCard(img, plan, { colorSpace, format });
   if (composed.error) {
     return { error: composed.error, plan, statusBar, source, warnings, timings };
   }
@@ -433,7 +442,7 @@ export async function renderCard({
   t = now();
   const dir = new Directory(Paths.cache, 'cards');
   if (!dir.exists) dir.create({ intermediates: true });
-  const file = new File(dir, outputName || `card-${Date.now()}.png`);
+  const file = new File(dir, outputName || `card-${Date.now()}.${formatSpec(format).ext}`);
   // create({overwrite}) rather than delete-then-create: one call, and no window
   // where the old file is gone and the new one does not exist yet.
   file.create({ overwrite: true });
@@ -452,6 +461,7 @@ export async function renderCard({
     dest: plan.dest,
     pad: plan.pad,
     frame,
+    format,
     scale: plan.scale,
     sampling: samplingFor(plan.crop, plan.dest),
     surface: composed.surface,

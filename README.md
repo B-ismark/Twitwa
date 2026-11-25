@@ -159,7 +159,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), and after P6 items 1-4 as **430** (102 and 328), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -395,16 +395,19 @@ cd spike && node src/pixels.test.mjs     # 196 checks on the pixel math
 cd spike && node src/read.test.mjs       # 61 checks on the shared sub-rect read
 cd spike && node src/recover.test.mjs    # 49 checks on the picker-recovery policy
 cd spike && node src/sizing.test.mjs     # 92 checks on the output sizing
-cd spike && node src/plan.test.mjs       # 92 checks on the decision layer
+cd spike && node src/plan.test.mjs       # 123 checks on the decision layer, tones included
 cd spike && node src/crop.test.mjs       # 135 checks on the crop-gesture arithmetic
 cd spike && node src/compose.test.mjs    # 66 checks that the preview and the export are one composition
 cd spike && node src/layout.test.mjs     # 36 checks on the stage-stays-still numbers: caption slot, crop gutter, insets, TalkBack padding step
-cd spike && node src/shell.test.mjs      # 93 checks on the editor's tool sessions, Style controls and Back
+cd spike && node src/shell.test.mjs      # 123 checks on the editor's tool sessions, Style controls and Back
 cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 142 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
 cd spike && node src/sharein.test.mjs    # 60 checks on what a received share means, and its contract with the Kotlin
 cd spike && node src/icons.test.mjs      # 94 checks: every icon the app names exists, every path parses, icon-only controls keep 44dp
 cd spike && node src/mark.test.mjs       # 26 checks: the mark stays in the launcher's safe circle, and art.mjs draws from it
+cd spike && node src/format.test.mjs     # 13 checks on P6's export format: extension, MIME, quality, and which outputs follow the choice (Copy never does)
+cd spike && node src/prefs.test.mjs      # 31 checks on the remembered style: validated one field at a time, a corrupt file is all defaults, never throws
+cd spike && node src/saved.test.mjs      # 19 checks on the Saved-to-Photos View URI rule and how long an actionable notice stays
 cd spike && node src/perf.test.mjs       # 54 checks on P4's decisions: export reuses the editor's picture and sample only when it is the same crop, the dev log is kept only when seen, the preview copy's size
 cd spike && node tools/check-imports.mjs # 125 imports + 7 self-checks on its own rule
 cd spike && node tools/check-dead.mjs    # 165 exports + 7 self-checks on its own rule
@@ -470,14 +473,15 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
          src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
          src/sharein.test.mjs src/session.test.mjs src/layout.test.mjs \
-         src/icons.test.mjs src/mark.test.mjs src/perf.test.mjs tools/chunks.test.mjs \
+         src/icons.test.mjs src/mark.test.mjs src/perf.test.mjs \
+         src/format.test.mjs src/prefs.test.mjs src/saved.test.mjs tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
   node "$t" >/dev/null 2>&1 || echo "NOT GREEN: $t"   # as above
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 399 mutations (2026-11-25)
+done                                     # silence is the pass; 430 mutations (2026-11-25, after P6.1-4)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
