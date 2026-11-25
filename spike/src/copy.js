@@ -22,7 +22,11 @@
 
 export const COPY = {
   // --- the empty state ----------------------------------------------------
-  emptyTitle: 'Share in a screenshot, or pick one to get started.',
+  // The app's name, set large over the panel. A word the screen says, so it is here.
+  wordmark: 'Twitwa',
+  // In the welcome panel: points at the one Choose button, and names the other
+  // way in (sharing), which nothing else on the screen shows.
+  emptyShareHint: 'Choose one below, or share a screenshot to Twitwa from any app.',
 
   // --- actions ------------------------------------------------------------
   choose: 'Choose screenshot',

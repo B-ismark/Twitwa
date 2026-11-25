@@ -55,6 +55,7 @@ import {
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import { StatusBar } from 'expo-status-bar';
+import Svg, { G, Line, Path, Rect as SvgRect } from 'react-native-svg';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
@@ -152,6 +153,8 @@ import { cropFits, readSession, serialiseSession } from './src/session';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
 import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
+import { ICONS, ICON_GAP, ICON_GRID, ICON_ONLY, ICON_SIZE, ICON_STROKE } from './src/icons';
+import { BAR, CARD, CENTRE, LINE, coloursFor } from './src/mark';
 import {
   CAPTION_LINE,
   CAPTION_LINES,
@@ -1762,19 +1765,46 @@ function Editor() {
       >
         {!src ? (
           <View style={styles.empty}>
-            {importing ? (
-              <>
-                <ActivityIndicator color={palette.graphite} />
-                <Text
-                  style={[styles.emptyText, styles.importingText, { color: palette.graphite }]}
-                  accessibilityLiveRegion="polite"
-                >
-                  {COPY.importing}
+            {/* ONE way to choose, and it is the bar's filled button: in the
+                thumb's reach, and in the place Share takes once a card is open.
+                A second "Choose a screenshot" button in the middle read as two
+                different actions. This panel is the welcome instead: the mark,
+                the name and the other way in (sharing), with a dashed edge that
+                echoes the mark's cut line. A tap on it still picks, because a
+                big target that does nothing is a trap, but it is not a TalkBack
+                stop of its own: the bar is that route, and two buttons with one
+                name are noise. The panel stays up while a picture opens, with
+                the spinner in the hint's place, so a cold share does not swap
+                the whole screen. The mark gives way first on a short stage. */}
+            <Pressable
+              onPress={pick}
+              disabled={importing}
+              accessible={false}
+              importantForAccessibility="no"
+              style={[styles.panel, { borderColor: palette.hairline }]}
+            >
+              <View style={styles.markBox} accessible={false} importantForAccessibility="no-hide-descendants">
+                <Mark mode={scheme === 'light' ? 'light' : 'dark'} />
+              </View>
+              <Text style={[styles.wordmark, { color: palette.text }]} accessibilityRole="header">
+                {COPY.wordmark}
+              </Text>
+              {importing ? (
+                <View style={styles.importingRow}>
+                  <ActivityIndicator color={palette.graphite} />
+                  <Text
+                    style={[styles.emptyText, styles.importingText, { color: palette.graphite }]}
+                    accessibilityLiveRegion="polite"
+                  >
+                    {COPY.importing}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[styles.emptyText, styles.emptyHint, { color: palette.graphite }]}>
+                  {COPY.emptyShareHint}
                 </Text>
-              </>
-            ) : (
-              <Text style={[styles.emptyText, { color: palette.graphite }]}>{COPY.emptyTitle}</Text>
-            )}
+              )}
+            </Pressable>
           </View>
         ) : null}
 
@@ -1913,7 +1943,7 @@ function Editor() {
           own Cancel and the corner is a crop handle's. */}
       {src && !takeover ? (
         <View style={styles.closeFloat} pointerEvents="box-none">
-          <Action label={COPY.close} palette={palette} fit onPress={goBack} />
+          <Action label={COPY.close} icon="close" iconOnly palette={palette} fit onPress={goBack} />
         </View>
       ) : null}
       {ed && ed.tool === 'style' ? (
@@ -1948,7 +1978,7 @@ function Editor() {
               here either: it is for us, not for the people Twitwa is handed
               to, and the long press on the caption is its way in. */}
           {src && ed && !busy ? (
-            <MenuItem label={COPY.copyImage} palette={palette} onPress={copyImage} />
+            <MenuItem label={COPY.copyImage} icon="copy" palette={palette} onPress={copyImage} />
           ) : null}
           <MenuItem label={COPY.newShot} palette={palette} onPress={newShot} />
         </View>
@@ -1991,6 +2021,12 @@ function Editor() {
         ) : null}
       </View>
 
+      {/* Kept under the panel rather than removed. The panel is the big target,
+          but the bar is where every other screen of the app keeps its one
+          primary, so the thumb finds Choose in the same place; and taking
+          the bar out would hand the stage ~60dp the moment a picture opens, so
+          the empty screen would grow and then shrink. Its slot is the one
+          size the stage already has here. */}
       {!src ? (
         <View style={[styles.bar, barPad]}>
           <Action label={COPY.choose} palette={palette} primary wide disabled={importing} onPress={pick} />
@@ -2016,6 +2052,7 @@ function Editor() {
               <Action
                 key={t}
                 label={toolLabel[t]}
+                icon={t}
                 palette={palette}
                 selected={ed.tool === t}
                 onPress={() => (TOOL[t].takeover ? open(t) : toggle(t))}
@@ -2023,15 +2060,15 @@ function Editor() {
             ))}
           </View>
           <View style={[styles.bar, barPad]}>
-            <Action label={COPY.share} palette={palette} primary wide disabled={busy} onPress={share} />
+            <Action label={COPY.share} icon="share" palette={palette} primary wide disabled={busy} onPress={share} />
             {/* Save beside Share, and only here. The owner asked for it on
                 the share sheet itself; Android lets an app add its own action
                 there only from 14 on, and expo-sharing cannot, so it is here. */}
-            <Action label={COPY.saveShort} palette={palette} disabled={busy} onPress={save} />
+            <Action label={COPY.saveShort} icon="save" palette={palette} disabled={busy} onPress={save} />
             {/* Disabled while busy, as Share is. Open during an export, the menu
                 lacked Copy with no reason given, and leaving the card from it
                 let "Saved to Photos" land on the empty screen. */}
-            <Action label={COPY.more} palette={palette} selected={menu} disabled={busy} onPress={() => setMenu((v) => !v)} />
+            <Action label={COPY.more} icon="more" iconOnly palette={palette} selected={menu} disabled={busy} onPress={() => setMenu((v) => !v)} />
           </View>
         </>
       )}
@@ -2648,11 +2685,68 @@ function Chip({ label, on, onPress, palette, disabled = false, toggle = true }) 
 }
 
 /** One row of the overflow. */
-function MenuItem({ label, onPress, palette }) {
+function MenuItem({ label, icon, onPress, palette }) {
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={styles.menuItem}>
+      {icon ? <Icon name={icon} color={palette.text} /> : null}
       <Text style={[styles.menuText, { color: palette.text }]}>{label}</Text>
     </Pressable>
+  );
+}
+
+/**
+ * A glyph from src/icons.js. Decorative by design: whatever it sits in carries
+ * the accessibility label, so TalkBack never meets a second, unnamed node.
+ */
+function Icon({ name, color, size = ICON_SIZE }) {
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${ICON_GRID} ${ICON_GRID}`}
+      fill="none"
+      stroke={color}
+      strokeWidth={ICON_STROKE}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      pointerEvents="none"
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+    >
+      {ICONS[name].map((d, i) => (
+        <Path key={i} d={d} />
+      ))}
+    </Svg>
+  );
+}
+
+/** The mark from src/mark.js, the same shapes the launcher icon is drawn from. */
+function Mark({ mode }) {
+  const c = coloursFor(mode);
+  const rect = (r, i) => (
+    <SvgRect key={i} x={r.x} y={r.y} width={r.width} height={r.height} rx={r.rx} fill={c[r.fill]} />
+  );
+  const { deg, cx, cy } = BAR.rotate;
+  return (
+    // Framed on the middle 72 units (the launcher's visible area), not the 108
+    // canvas: the launcher needs that margin for its masks, a screen does not,
+    // and with it the mark filled barely half of its box. Not the 66-unit safe
+    // circle: drawn at full size here (no LAUNCHER_SCALE), the mark reaches
+    // ~35 units from the centre, and 66 would clip the bar's corners.
+    <Svg width="100%" height="100%" viewBox={`${CENTRE - 36} ${CENTRE - 36} 72 72`}>
+      <G transform={`rotate(${deg} ${cx} ${cy})`}>{BAR.rects.map(rect)}</G>
+      <Line
+        x1={LINE.x1}
+        y1={LINE.y1}
+        x2={LINE.x2}
+        y2={LINE.y2}
+        stroke={c[LINE.fill]}
+        strokeWidth={LINE.strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={LINE.dash}
+      />
+      {CARD.map(rect)}
+    </Svg>
   );
 }
 
@@ -2661,7 +2755,10 @@ function MenuItem({ label, onPress, palette }) {
  * surface pill with a hairline. `selected` is shown by the border rather than
  * by colour alone.
  */
-function Action({ label, onPress, disabled, primary, selected, wide, fit, palette }) {
+// `iconOnly` drops the visible label and keeps the name for TalkBack. It is a
+// fixed square (see ICON_ONLY): with no word to give it width, a flex child
+// would collapse to the glyph and fall under the touch floor.
+function Action({ label, icon, iconOnly, onPress, disabled, primary, selected, wide, fit, palette }) {
   const bg = primary ? palette.signal : palette.surface;
   const fg = primary ? palette.onSignal : palette.text;
   return (
@@ -2675,6 +2772,13 @@ function Action({ label, onPress, disabled, primary, selected, wide, fit, palett
         styles.action,
         wide && styles.actionWide,
         fit && styles.actionFit,
+        icon && styles.actionIcon,
+        icon && iconOnly && {
+          flex: 0,
+          width: fit ? ICON_ONLY.fit : ICON_ONLY.bar,
+          height: fit ? ICON_ONLY.fit : ICON_ONLY.bar,
+          paddingHorizontal: 0,
+        },
         {
           backgroundColor: bg,
           borderColor: selected ? palette.signal : palette.hairline,
@@ -2683,7 +2787,8 @@ function Action({ label, onPress, disabled, primary, selected, wide, fit, palett
         disabled && styles.actionOff,
       ]}
     >
-      <Text style={[styles.actionText, { color: fg }]}>{label}</Text>
+      {icon ? <Icon name={icon} color={fg} /> : null}
+      {icon && iconOnly ? null : <Text style={[styles.actionText, { color: fg }]}>{label}</Text>}
     </Pressable>
   );
 }
@@ -2721,6 +2826,26 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl },
   emptyText: { ...TYPE.body, textAlign: 'center' },
   importingText: { marginTop: SPACE.md },
+  // 96dp, and the first thing to give when the stage is short: flexShrink with
+  // a floor, so the panel and the hint (which a person reads) keep their size.
+  markBox: { width: 96, height: 96, flexShrink: 1, minHeight: 40 },
+  wordmark: { ...TYPE.wordmark, marginTop: SPACE.md },
+  // The welcome panel: a dashed edge, no fill, so it reads as a place rather
+  // than a second button (see the empty state). No fixed height: a larger font
+  // only makes it taller.
+  panel: {
+    alignSelf: 'stretch',
+    maxWidth: 360,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: SPACE.xl,
+    paddingHorizontal: SPACE.lg,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+  },
+  importingRow: { alignItems: 'center', marginTop: SPACE.md },
+  emptyHint: { marginTop: SPACE.md },
 
   scrim: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.55)' },
   // White plus a dark outline, because a coloured frame over arbitrary
@@ -2861,7 +2986,13 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
-  menuItem: { minHeight: TOUCH + 4, justifyContent: 'center', paddingHorizontal: SPACE.lg },
+  menuItem: {
+    minHeight: TOUCH + 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ICON_GAP + SPACE.xs,
+    paddingHorizontal: SPACE.lg,
+  },
   menuText: { ...TYPE.body },
 
   tools: { flexDirection: 'row', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingBottom: SPACE.sm },
@@ -2878,6 +3009,8 @@ const styles = StyleSheet.create({
   actionWide: { flex: 3 },
   // A control that is its own width, such as Close, rather than a share of a bar.
   actionFit: { flex: 0, minHeight: TOUCH },
+  // Icon left of the label: a row, with the gap between them.
+  actionIcon: { flexDirection: 'row', gap: ICON_GAP },
   actionOff: { opacity: 0.4 },
   actionText: { ...TYPE.label },
 });

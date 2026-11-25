@@ -86,6 +86,9 @@ export const TYPE = {
   body: { fontSize: 15, fontWeight: '400' },
   label: { fontSize: 15, fontWeight: '600' },
   caption: { fontSize: 13, fontWeight: '400' },
+  // The name on the empty screen. Larger than a title because it is the one
+  // place the app introduces itself; at font scale 1.3 it is 36dp, still one line.
+  wordmark: { fontSize: 28, fontWeight: '700' },
   mono: { fontSize: 10, fontFamily: 'monospace' },
 };
 
