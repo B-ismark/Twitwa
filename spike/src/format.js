@@ -12,10 +12,9 @@
 // the product. Quality 92 is the knee the plan chose; below it text edges in a
 // screenshot start to ring.
 //
-// WHY COPY IS NOT ON THE LIST. The clipboard path goes through
-// Clipboard.setImageAsync(base64), which hands the receiving app a PNG whatever
-// the file was. Encoding a JPEG there would be a second, lossy encode of
-// something the clipboard converts anyway.
+// WHY COPY IS NOT ON THE LIST. The clipboard path copies the card's PNG bytes
+// onto the clipboard (modules/twitwa-out refuses a file that is not a PNG), so
+// the receiving app gets a PNG whatever the person chose for Share and Save.
 
 const FORMATS = ['png', 'jpeg'];
 export const DEFAULT_FORMAT = 'png';

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exactly the two directories OutModule writes into and hands out of: the
+     exported cards (Share) and the clipboard copies (Copy). Nothing else in the
+     cache, and nothing outside it, can be named through this provider. -->
+<paths>
+  <cache-path name="twitwa_cards" path="cards/" />
+  <cache-path name="twitwa_clipboard" path="clipboard/" />
+</paths>

@@ -5,7 +5,7 @@
 the APK is published. The steps follow `release/README.md`.
 
 This release carries more untested native and build change than any before
-it: new Kotlin in the share-in module and in a new pixels module that encodes the card off the JS thread, five new size settings and a locale
+it: new Kotlin in the share-in module, in a new pixels module that encodes the card off the JS thread, and in a new out module that replaces `expo-sharing`, `expo-clipboard` and `expo-media-library` (Share, Save and Copy), five new size settings and a locale
 filter in Gradle, and three new native dependencies (splash screen, safe area,
 SVG). None of it has been compiled. **Install and run it on a phone before
 publishing.**
@@ -27,6 +27,14 @@ P5 section's EXPECTED numbers with measured ones. The expected size is about
 16.8 MB, down from 19,235,347 bytes. Look in the `unzip -v` output for:
 
 - `assets/index.android.bundle` showing **Defl:N**, not Stored
+- no `expo.modules.sharing`, `expo.modules.clipboard` or `expo.modules.medialibrary` classes. They are in the
+  dex, not the zip listing, so check the dex: `unzip -o app-release.apk 'classes*.dex' -d /tmp/dex && for d in /tmp/dex/classes*.dex; do strings "$d" | grep -E 'expo/modules/(sharing|clipboard|medialibrary)/'; done` prints nothing
+  (an unminified build would show the names; R8 may rename them, so also confirm `dev/bismark/twitwa/out/OutModule` is present, and compare dex sizes with 1.0.6)
+- the permissions: `aapt2 dump permissions app-release.apk` (or the merged manifest in
+  `android/app/build/intermediates/merged_manifests/release*/`) lists `WRITE_EXTERNAL_STORAGE` **only with
+  `maxSdkVersion`** (the out module declares 28; expo-file-system and expo-image-picker declare 32 and the merger
+  decides which wins, so read what it kept: either is fine, a bare declaration is not), no `READ_EXTERNAL_STORAGE`
+  without one, and none of `READ_MEDIA_*` / `ACCESS_MEDIA_LOCATION`
 - no `libstatic-webp.so` and no `libnative-imagetranscoder.so`
 - a much smaller `resources.arsc`
 
@@ -56,6 +64,16 @@ P5 section's EXPECTED numbers with measured ones. The expected size is about
 - [ ] Dev panel (long-press), Encoder parity: it reports that pixels match, `auto.encoder` is `native` with no fallback, and shows whether an iCCP or sRGB chunk was added on either side.
 - [ ] Save as JPEG still arrives as .jpg, from Share and from Save.
 - [ ] `adb logcat` shows no `TwitwaPixels` or `ERR_PIXELS_*` errors, and Render P3 in the dev panel still logs `encoder: skia`.
+
+**Share, Save and Copy (new Kotlin, `modules/twitwa-out`)**
+- [ ] On a phone with Android 13 or later: Share opens the chooser and the card arrives in a chat app (with its preview in the chooser); Save shows "Saved to Photos" with View; Copy puts the card on the clipboard and pastes into a chat app.
+- [ ] Copy a card, Share a *different* card, then paste: the pasted card is the one that was **copied**, not the shared one.
+- [ ] Saved cards appear in the **same album** as 1.0.6's: `DCIM/`, beside `Twitwa-2026...png` files saved by 1.0.6 (install 1.0.7 over 1.0.6 and look in the gallery and in `adb shell ls /sdcard/DCIM`).
+- [ ] Save as JPEG: the file in `DCIM/` is `.jpg`, and Share as JPEG arrives as `.jpg`.
+- [ ] Save twice within one second (double tap, "Save again"): both land, neither is lost, and no half-written (pending) row is left.
+- [ ] **Android 10 (API 29), if you can:** Save asks for nothing and works.
+- [ ] **Android 9 or older (API 28 and below), a phone or an emulator:** the first Save shows the storage permission prompt, Allow saves into `DCIM/` and the notice's View opens it; on a second install, Deny falls back to the share sheet with no error message. Revoke the permission in Settings and Save again to see the prompt return.
+- [ ] `adb logcat` shows no `TwitwaOut` or `ERR_OUT_*` errors, and `adb shell run-as dev.bismark.twitwa ls cache/clipboard` shows exactly one file after several Copies.
 
 **Sharing in (new Kotlin)**
 - [ ] Share 1 screenshot from Photos, cold and with Twitwa already open.

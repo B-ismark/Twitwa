@@ -55,14 +55,6 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-sharing",
-      [
-        "expo-media-library",
-        {
-          "granularPermissions": [],
-          "isAccessMediaLocationEnabled": false
-        }
-      ],
       [
         "expo-image-picker",
         {

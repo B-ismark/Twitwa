@@ -77,9 +77,8 @@ import {
   rect as skRect,
 } from '@shopify/react-native-skia';
 import * as ImagePicker from 'expo-image-picker';
-import * as Sharing from 'expo-sharing';
-import * as Clipboard from 'expo-clipboard';
-import { Asset, requestPermissionsAsync } from 'expo-media-library';
+import { shareCard, copyCardImage, saveCard, requestSavePermission } from './src/out-io';
+import { needsSavePermission, permissionGranted, failure, savedAnswer } from './src/out';
 
 import {
   decodeFromUri,
@@ -158,7 +157,7 @@ import { keepList, takeNext, waitingLabel } from './src/queue';
 import { cropFits, readSession, serialiseSession } from './src/session';
 import { DEFAULT_PREFS, parsePrefs, serialisePrefs, startingStyle } from './src/prefs';
 import { formatFor } from './src/format';
-import { noticeMs, viewUri } from './src/saved';
+import { noticeMs } from './src/saved';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
 import { COPY, fill } from './src/copy';
 import { RADIUS, SPACE, TOUCH, TYPE, paletteFor } from './src/theme';
@@ -1355,8 +1354,9 @@ function Editor() {
   }, [build, shot, emit]);
 
   // Hand the PNG to the system sheet. The path the product exists for: this is
-  // how a card reaches WhatsApp, and expo-sharing wraps the file in its own
-  // FileProvider content URI, which is what ACTION_SEND needs.
+  // how a card reaches WhatsApp. The native out module wraps the file in a
+  // FileProvider content URI, which is what ACTION_SEND needs, and opens the
+  // chooser (modules/twitwa-out).
   const share = useCallback(async () => {
     if (!src || !ed || working.current) return;
     working.current = true;
@@ -1367,25 +1367,21 @@ function Editor() {
     setMenu(false);
     setBusy(true);
     try {
-      // Asked, not assumed. A device with no sharing target throws from
-      // shareAsync, and "nothing happened" is the worst possible answer.
-      const can = await Sharing.isAvailableAsync();
-      if (!can) {
-        emit('P1.share', { ok: false, reason: 'no sharing target' });
-        setProblem(COPY.shareFailed);
-        return;
-      }
+      // No "is there a sharing target" question first: the chooser is the
+      // answer to that, and it exists on every Android. A refusal from the
+      // module (or a build without it) lands in the catch below.
       const spec = formatFor('share', format);
       const out = await exportCard(`card.${spec.ext}`, spec.format);
       if (!out) return;
-      await Sharing.shareAsync(out.path, { mimeType: spec.mime, UTI: spec.uti });
+      await shareCard(out.path, spec.mime);
       if (!exportCurrent(started, exportGen.current)) return;
       markKept(card);
       emit('P1.share', { ok: true, path: out.path });
     } catch (e) {
       if (!exportCurrent(started, exportGen.current)) return;
-      emit('P1.share', { ok: false, message: String(e && e.message ? e.message : e) });
-      setProblem(COPY.shareFailed);
+      const f = failure('share', e);
+      emit('P1.share', { ok: false, reason: f.reason, message: String(e && e.message ? e.message : e) });
+      setProblem(f.message);
     } finally {
       // Only the export Back is still waiting for may clear the wait: an
       // abandoned one landing late would otherwise un-busy the next.
@@ -1412,13 +1408,13 @@ function Editor() {
   /**
    * Save the card to Photos, which on Android means a MediaStore row in DCIM.
    *
-   * WHY IT ASKS FOR NOTHING ON ANDROID 11 AND LATER. From API 30 an app may
-   * insert its own image into MediaStore with no permission at all, and
-   * expo-media-library's modern path does exactly that. A prompt for access
-   * the app does not need is how a person learns to deny the one it does, so
-   * the prompt exists only where the platform requires it.
+   * WHY IT ASKS FOR NOTHING ON ANDROID 10 AND LATER. From API 29 an app may
+   * insert its own image into MediaStore with no permission at all, and the
+   * native out module does exactly that. A prompt for access the app does not
+   * need is how a person learns to deny the one it does, so the prompt exists
+   * only where the platform requires it (src/out.js needsSavePermission).
    *
-   * Android 10 and earlier need WRITE_EXTERNAL_STORAGE. If that is refused
+   * Android 9 and earlier need WRITE_EXTERNAL_STORAGE. If that is refused
    * the card goes to the share sheet instead, where the person can still save
    * it, rather than to a message telling them to go and change a setting.
    * That is Phase 5's "falls back to the share sheet silently".
@@ -1449,23 +1445,24 @@ function Editor() {
     setBusy(true);
     let fallback = false;
     try {
-      if (Platform.Version < 30) {
-        const perm = await requestPermissionsAsync(true);
+      if (needsSavePermission(Platform.Version)) {
+        const perm = await requestSavePermission();
         // No `return` here. A return inside `try` runs `finally` and then
         // leaves the function, so the share fallback after the try/finally
         // never ran: the first version of this did exactly that, and logged
         // `fallback: 'share'` for a sheet that never opened. Found in review
         // on 2026-09-22; nothing had run it, since the test phone is API 37.
-        if (!perm.granted) {
+        if (!permissionGranted(perm)) {
           emit('P5.save', { ok: false, reason: 'permission', api: Platform.Version, fallback: 'share' });
           fallback = true;
         }
       }
       if (!fallback) {
         const spec = formatFor('save', format);
-        const out = await exportCard(savedName(new Date(), spec.format), spec.format);
+        const name = savedName(new Date(), spec.format);
+        const out = await exportCard(name, spec.format);
         if (!out) return;
-        const asset = await Asset.create(out.path);
+        const saved = savedAnswer(await saveCard(out.path, spec.mime, name));
         if (!exportCurrent(started, exportGen.current)) return;
         // MediaStore holds its own copy now. The one in the cache has a name
         // per save, so unlike Share's card.png nothing ever overwrites it, and
@@ -1478,16 +1475,17 @@ function Editor() {
         }
         markKept(card);
         savedTo.current = { uri: shownUri.current, card, format: spec.format };
-        emit('P5.save', { ok: true, api: Platform.Version, id: asset.id });
-        // View opens the row we just wrote. A null URI (an id we cannot
-        // read) gives a plain notice, with no button to fail.
-        const uri = viewUri(asset.id);
+        emit('P5.save', { ok: true, api: Platform.Version, id: saved.uri });
+        // View opens the row we just wrote. A null URI (one we cannot read)
+        // gives a plain notice, with no button to fail.
+        const uri = saved.view;
         showNotice(COPY.saved, uri ? { label: COPY.viewSaved, run: () => viewSavedCard(uri) } : null);
       }
     } catch (e) {
       if (!exportCurrent(started, exportGen.current)) return;
-      emit('P5.save', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
-      setProblem(COPY.saveFailed);
+      const f = failure('save', e);
+      emit('P5.save', { ok: false, api: Platform.Version, reason: f.reason, message: String(e && e.message ? e.message : e) });
+      setProblem(f.message);
     } finally {
       if (exportCurrent(started, exportGen.current)) {
         working.current = false;
@@ -1504,9 +1502,10 @@ function Editor() {
    * its own clipboard preview there and two confirmations of one copy read as
    * two copies. Below 13 nothing else says it happened, so the app does.
    *
-   * `base64()` is the async one. expo-file-system has a sync twin, and calling
-   * an AsyncFunction as if it were sync is a mistake this codebase has already
-   * made once; tools/check-fs-sync.mjs is the gate for it.
+   * The native module copies the exported PNG's bytes under a name of its own
+   * (never `card.png`, which the next Share overwrites, so a clip pointing at
+   * it would paste a LATER card). The file used to be read to base64 and handed
+   * over only because expo-clipboard wanted a string.
    */
   const copyImage = useCallback(async () => {
     if (!src || !ed || working.current) return;
@@ -1522,17 +1521,16 @@ function Editor() {
       const spec = formatFor('copy');
       const out = await exportCard(`card.${spec.ext}`, spec.format);
       if (!out) return;
-      const png = new File(out.path);
-      const b64 = await png.base64();
-      await Clipboard.setImageAsync(b64);
+      await copyCardImage(out.path);
       if (!exportCurrent(started, exportGen.current)) return;
       markKept(card);
       emit('P5.copy', { ok: true, api: Platform.Version, kiB: +(out.bytes / 1024).toFixed(1) });
       if (Platform.Version < 33) setNotice(COPY.copied);
     } catch (e) {
       if (!exportCurrent(started, exportGen.current)) return;
-      emit('P5.copy', { ok: false, api: Platform.Version, message: String(e && e.message ? e.message : e) });
-      setProblem(COPY.copyFailed);
+      const f = failure('copy', e);
+      emit('P5.copy', { ok: false, api: Platform.Version, reason: f.reason, message: String(e && e.message ? e.message : e) });
+      setProblem(f.message);
     } finally {
       if (exportCurrent(started, exportGen.current)) {
         working.current = false;
@@ -2341,7 +2339,7 @@ function Editor() {
             <Action label={COPY.share} icon="share" palette={palette} primary wide disabled={busy} onPress={share} />
             {/* Save beside Share, and only here. The owner asked for it on
                 the share sheet itself; Android lets an app add its own action
-                there only from 14 on, and expo-sharing cannot, so it is here. */}
+                there only from 14 on, and the chooser we start cannot, so it is here. */}
             <Action label={COPY.saveShort} icon="save" palette={palette} disabled={busy} onPress={save} />
             {/* Disabled while busy, as Share is. Open during an export, the menu
                 lacked Copy with no reason given, and leaving the card from it

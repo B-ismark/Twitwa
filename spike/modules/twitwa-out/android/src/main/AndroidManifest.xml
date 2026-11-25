@@ -1,0 +1,24 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Only for saving to Photos on Android 9 and older (API 24-28), where an
+       app has no other way to write into the public DCIM folder. From Android
+       10 (API 29) an app inserts its OWN image into MediaStore with no
+       permission at all, so the declaration ends at 28 and the app never asks
+       above it. The number is OutModule.LEGACY_BELOW_API minus one;
+       src/out.test.mjs fails if the two drift. Other libraries in the build
+       declare this permission too, with a higher maxSdkVersion, and the
+       manifest merger decides what wins: read the merged manifest. -->
+  <uses-permission
+      android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+      android:maxSdkVersion="28" />
+  <application>
+    <provider
+        android:name=".TwitwaOutProvider"
+        android:authorities="${applicationId}.TwitwaOutProvider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+      <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/twitwa_out_paths" />
+    </provider>
+  </application>
+</manifest>

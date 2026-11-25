@@ -129,6 +129,9 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `plugins/withShareInRestore.js` | Patches the generated `MainActivity.kt` so a share replayed after process death is not imported twice. The Expo template calls `super.onCreate(null)`, which hides the saved state from every lifecycle listener; the call goes in just before that line |
 | `src/update-io.js` | The JS face of `modules/twitwa-updater`. Optional like share-in: without the module, Get it falls back to the browser |
 | `modules/twitwa-updater/` | Native module of our own. Kotlin: downloads the release APK into `cache/update/`, checks its sha256 against the manifest, checks it again, and opens Android's installer through a FileProvider. Adds `REQUEST_INSTALL_PACKAGES` |
+| `src/out.js` | What the native out module's answers mean: when Save has to ask for a permission (Android 9 and older only), what a failed Share, Save or Copy says and how it is logged, and which URI View opens. Pure |
+| `src/out-io.js` | The JS face of `modules/twitwa-out`. Optional, so a build without the module fails Share, Save and Copy with their ordinary sentence rather than crashing |
+| `modules/twitwa-out/` | Native module of our own, replacing `expo-sharing`, `expo-media-library` and `expo-clipboard`. Kotlin: opens the system chooser for a card, copies a card onto the clipboard under a unique name, inserts it into MediaStore in `DCIM/`, and asks for `WRITE_EXTERNAL_STORAGE` on Android 9 and older only. Its own FileProvider exposes only `cache/cards/` and `cache/clipboard/`. **Uncompiled and unrun on a device**; see `release/checklist-1.0.7.md` |
 | `src/read.js` | One clamped sub-rect read, shared by the pipeline and the measurement harness. Was two copies returning the same values under different field names — `{width, height}` in one, `{w, h}` in the other. Pure: the colour constants arrive as an argument, so it loads in node and has a test |
 | `src/skia.js` | The one `RGBA` colour shape and the one two-argument `readRect`. Both were written privately in `pipeline.js` AND `measure.js`, and App.js had neither — which is exactly why it called the three-argument `readSubRect` with two and crashed every import for a day. A function that binds the colour cannot be called without it |
 | `src/pipeline.js` | The whole pipeline as one `renderCard()` call. **Run on device four times**, most recently 2026-09-18 after the `readRect` merge, and byte-identical again: `sha256 f9fbb1b4…`, 584991 bytes |
@@ -160,7 +163,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), after P6 items 1-4 as **430** (102 and 328), after P6 item 5 as **461** (102 and 359), and after P4.3's native encoder as **506** (102 and 404; the grep loop was 359 before this and 360 by this count, one more than the line above recorded), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), after P6 items 1-4 as **430** (102 and 328), after P6 item 5 as **461** (102 and 359), after P4.3's native encoder as **506** (102 and 404; the grep loop was 359 before this and 360 by this count, one more than the line above recorded), and after P5's out module (Share, Save and Copy in our own Kotlin) as **612** (102 and 510), and after its review fix plus `tools/check-fresco.mjs` as **621** (102 and 519), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -405,6 +408,7 @@ cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor open
 cd spike && node src/update.test.mjs     # 142 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
 cd spike && node src/sharein.test.mjs    # 98 checks on what a received share means, the queue plans, and its contract with the Kotlin
 cd spike && node src/encoder.test.mjs    # 71 checks on which encoder writes the card, the PNG chunk reader, and the contract with the pixels Kotlin
+cd spike && node src/out.test.mjs        # 117 checks on when Save asks for a permission, what a failed Share/Save/Copy says, and the contract with the out Kotlin, its manifest and App.js
 cd spike && node src/queue.test.mjs      # 38 checks on the multi-image queue: cap, order, the keep list, the chip and skipped wording
 cd spike && node src/icons.test.mjs      # 94 checks: every icon the app names exists, every path parses, icon-only controls keep 44dp
 cd spike && node src/mark.test.mjs       # 26 checks: the mark stays in the launcher's safe circle, and art.mjs draws from it
@@ -414,6 +418,7 @@ cd spike && node src/saved.test.mjs      # 19 checks on the Saved-to-Photos View
 cd spike && node src/perf.test.mjs       # 54 checks on P4's decisions: export reuses the editor's picture and sample only when it is the same crop, the dev log is kept only when seen, the preview copy's size
 cd spike && node tools/check-imports.mjs # 125 imports + 7 self-checks on its own rule
 cd spike && node tools/check-dead.mjs    # 165 exports + 7 self-checks on its own rule
+cd spike && node tools/check-fresco.mjs  # nothing of ours reaches Fresco, whose WebP and JPEG-transcoder .so are excluded
 cd spike && node tools/check-copy.mjs    # 49 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
@@ -477,14 +482,14 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
          src/sharein.test.mjs src/queue.test.mjs src/session.test.mjs src/layout.test.mjs \
          src/icons.test.mjs src/mark.test.mjs src/perf.test.mjs \
-         src/format.test.mjs src/prefs.test.mjs src/saved.test.mjs src/encoder.test.mjs tools/chunks.test.mjs \
+         src/format.test.mjs src/prefs.test.mjs src/saved.test.mjs src/encoder.test.mjs src/out.test.mjs tools/chunks.test.mjs \
          tools/png.test.mjs \
-         tools/check-imports.mjs tools/check-dead.mjs; do
+         tools/check-imports.mjs tools/check-dead.mjs tools/check-fresco.mjs; do
   node "$t" >/dev/null 2>&1 || echo "NOT GREEN: $t"   # as above
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 506 mutations (2026-11-25, after P4.3)
+done                                     # silence is the pass; 621 mutations (2026-11-25, after P5's out module and check-fresco)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
@@ -921,7 +926,7 @@ phone. The excluded transcoder runs only when a React Native `<Image>` resizes o
 rotates a JPEG; this app imports no `<Image>` from `react-native` (it draws through
 Skia), but a missing `.so` fails at the moment of use, not at the build. The
 locale filter does not touch system UI such as the photo picker.
-`libimagepipeline` (3 KB) and `libnative-filters` are deliberately left in.
+`libimagepipeline` (3 KB) and `libnative-filters` are deliberately left in. `tools/check-fresco.mjs` keeps the exclusion honest: audited on 2026-11-25, nothing in `App.js` or `src/` renders a React Native `<Image>`, an svg `<Image>` (react-native-svg's only Fresco path) or a `blurRadius`, and the gate goes red the day something does.
 
 ### Telling people there is an update
 
