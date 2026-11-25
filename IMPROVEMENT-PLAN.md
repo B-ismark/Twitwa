@@ -44,7 +44,7 @@ README, and generating icon PNGs from SVG.
    `cache/shared-in`, and a "1 waiting" chip opens it later. Multi-image share
    queues the rest (a chip with N waiting) rather than dropping them.
 
-## P2 · A layout that stays still
+## P2 · A layout that stays still — done
 1. Turn the update banner, the More menu and the Style strip into **overlays/bottom sheets**
    (absolute, over the stage), so the stage's size never changes. Give the caption a fixed one-line slot
    (`numberOfLines={2}` and a fixed height) and send errors to a toast.
