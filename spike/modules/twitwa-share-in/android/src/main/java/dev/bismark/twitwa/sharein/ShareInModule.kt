@@ -7,7 +7,8 @@
 // module and not a line of JS.
 //
 // WHAT IT DOES, and deliberately no more: it holds the newest unread share,
-// copies that one picture into the cache, and hands JS a file:// URI. The
+// copies its pictures (up to MAX_ITEMS, each one by the same rules) into the
+// cache, and hands JS their file:// URIs, in the order they were shared. The
 // decision about what to do with the answer lives in src/sharein.js, which is
 // pure and has a test; this file cannot be run anywhere but a phone.
 //
@@ -40,6 +41,7 @@
 package dev.bismark.twitwa.sharein
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -65,14 +67,16 @@ class ShareInModule : Module() {
       if (absorb(appContext.currentActivity)) sendEvent(EVENT, mapOf<String, Any>())
     }
 
-    // `keep` is the file:// URI the editor is showing, or null. Every other
-    // copy in the directory is deleted, so shared pictures do not pile up in
-    // the cache, and the one on screen is not pulled out from under an export.
-    AsyncFunction("take") { keep: String? ->
+    // `keep` is every file:// URI JS still needs: the one the editor is
+    // showing and every one still queued behind it, or null. Every other copy
+    // in the directory is deleted, so shared pictures do not pile up in the
+    // cache, and nothing on screen or waiting is pulled out from under an
+    // export or the next card.
+    AsyncFunction("take") { keep: List<String>? ->
       absorb(appContext.currentActivity)
       val intent = synchronized(lock) { pending.also { pending = null } }
         ?: return@AsyncFunction mapOf("status" to "none")
-      copy(intent, keep)
+      copy(intent, keep ?: emptyList())
     }
   }
 
@@ -137,26 +141,86 @@ class ShareInModule : Module() {
   private fun rejected(reason: String, count: Int = 0) =
     mapOf("status" to "rejected", "reason" to reason, "count" to count)
 
-  private fun copy(intent: Intent, keep: String?): Map<String, Any?> {
+  /**
+   * One stream, copied or refused. `file` is null exactly when `reason` is set.
+   * A refusal here is never fatal to the share: the caller skips the item and
+   * keeps going, and reports the FIRST reason only if nothing at all copied.
+   */
+  private class Copy(val file: File?, val mime: String, val bytes: Long, val reason: String?)
+
+  private fun failed(reason: String) = Copy(null, "", 0L, reason)
+
+  private fun copy(intent: Intent, keep: List<String>): Map<String, Any?> {
     val context = appContext.reactContext ?: return rejected("no-context")
-    val uris = streams(intent)
-    val uri = uris.firstOrNull() ?: return rejected("no-stream")
-    // content:// only. A file:// URI from another app could name one of
-    // Twitwa's own private files, and Android has refused to send file:// URIs
-    // between apps since 7.0, so nothing legitimate is lost.
-    if (uri.scheme != "content") return rejected("scheme", uris.size)
+    val streams = streams(intent)
+    if (streams.isEmpty()) return rejected("no-stream")
     val resolver = context.contentResolver
-    val mime = try { resolver.getType(uri) } catch (e: Exception) { null } ?: intent.type ?: ""
-    if (!mime.startsWith("image/")) return rejected("not-image", uris.size)
 
     val dir = File(context.cacheDir, DIR)
     dir.mkdirs()
-    val keepPath = keep?.let { Uri.parse(it).path }
-    dir.listFiles()?.forEach { if (it.absolutePath != keepPath) it.delete() }
+    val keepPaths = keep.mapNotNull { Uri.parse(it).path }.toSet()
+    dir.listFiles()?.forEach { if (it.absolutePath !in keepPaths) it.delete() }
 
-    val out = File(dir, "shared-${System.currentTimeMillis()}.${extension(mime)}")
+    // One timestamp for the whole share, and the stream's index after it: two
+    // copies inside the same millisecond would otherwise take the same name.
+    val stamp = System.currentTimeMillis()
+    val uris = mutableListOf<String>()
+    var firstMime = ""
+    var firstBytes = 0L
+    var firstFailure: String? = null
+    for ((index, uri) in streams.withIndex()) {
+      // Past the cap the rest are not even opened. They count as skipped.
+      if (uris.size >= MAX_ITEMS) break
+      val c = copyOne(resolver, uri, intent.type, dir, stamp, index)
+      val file = c.file
+      if (file == null) {
+        if (firstFailure == null) firstFailure = c.reason
+        continue
+      }
+      if (uris.isEmpty()) {
+        firstMime = c.mime
+        firstBytes = c.bytes
+      }
+      uris.add(Uri.fromFile(file).toString())
+    }
+    if (uris.isEmpty()) return rejected(firstFailure ?: "unreadable", streams.size)
+    return mapOf(
+      "status" to "ok",
+      "uris" to uris,
+      "uri" to uris[0],
+      "mime" to firstMime,
+      "bytes" to firstBytes.toDouble(),
+      "count" to streams.size,
+      "skipped" to streams.size - uris.size,
+    )
+  }
+
+  private fun copyOne(
+    resolver: ContentResolver,
+    uri: Uri,
+    fallbackType: String?,
+    dir: File,
+    stamp: Long,
+    index: Int,
+  ): Copy {
+    // content:// only. A file:// URI from another app could name one of
+    // Twitwa's own private files, and Android has refused to send file:// URIs
+    // between apps since 7.0, so nothing legitimate is lost.
+    if (uri.scheme != "content") return failed("scheme")
+    val mime = try { resolver.getType(uri) } catch (e: Exception) { null } ?: fallbackType ?: ""
+    if (!mime.startsWith("image/")) return failed("not-image")
+
+    // Never over a file that survived the clean-up: that is a picture still
+    // queued in JS, and a share landing in the same millisecond as an earlier
+    // one would otherwise write the new picture over it.
+    var out = File(dir, "shared-$stamp-$index.${extension(mime)}")
+    var n = 0
+    while (out.exists()) {
+      n += 1
+      out = File(dir, "shared-$stamp-$index-$n.${extension(mime)}")
+    }
     return try {
-      val input = resolver.openInputStream(uri) ?: return rejected("unreadable", uris.size)
+      val input = resolver.openInputStream(uri) ?: return failed("unreadable")
       var total = 0L
       input.use { src ->
         out.outputStream().use { dst ->
@@ -171,22 +235,16 @@ class ShareInModule : Module() {
         }
       }
       when {
-        total > MAX_BYTES -> { out.delete(); rejected("too-big", uris.size) }
-        total == 0L -> { out.delete(); rejected("empty", uris.size) }
-        else -> mapOf(
-          "status" to "ok",
-          "uri" to Uri.fromFile(out).toString(),
-          "mime" to mime,
-          "bytes" to total.toDouble(),
-          "count" to uris.size,
-        )
+        total > MAX_BYTES -> { out.delete(); failed("too-big") }
+        total == 0L -> { out.delete(); failed("empty") }
+        else -> Copy(out, mime, total, null)
       }
     } catch (e: Exception) {
       // SecurityException when the sender's grant does not cover us, and
       // IOException from a provider that goes away mid-read. Both mean the same
       // thing to the person holding the phone.
       out.delete()
-      rejected("unreadable", uris.size)
+      failed("unreadable")
     }
   }
 
@@ -208,5 +266,8 @@ class ShareInModule : Module() {
     // those, and small enough that a mistaken share of a video-sized file
     // cannot fill the cache before it is refused.
     private const val MAX_BYTES = 64L * 1024 * 1024
+    // The most pictures one share copies. The JS queue (src/queue.js) holds
+    // the same number; a share past it reports the rest as skipped.
+    private const val MAX_ITEMS = 10
   }
 }

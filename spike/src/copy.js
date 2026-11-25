@@ -79,9 +79,15 @@ export const COPY = {
   replaceCardTitle: 'Replace this card?',
   replaceCardBody: 'The screenshot you shared takes its place, and the changes to this one will be lost.',
   replace: 'Replace',
-  // A share that arrived over unsaved work and was kept for later. The chip
-  // opens it by the same ask as a fresh share.
+  // Pictures from a share that are queued behind the one on screen (several
+  // at once, or one kept over unsaved work). The chip opens the next by the
+  // same ask as a fresh share. Chosen by waitingLabel in src/queue.js.
   waitingOne: '1 screenshot waiting',
+  waitingMany: '{count} screenshots waiting',
+  // A multi-picture share where some could not be copied. The English reads
+  // the same at 1 and at 3, so there is one sentence; skippedNotice in
+  // src/queue.js leaves it out at zero.
+  skipped: "Skipped {count} that couldn't be opened",
 
   // --- opening a picture --------------------------------------------------
   // While a share is copied or a pick is decoded, and while a launch looks for
@@ -135,7 +141,6 @@ export const COPY = {
   sharedFailed: 'The shared picture could not be opened. Choose it here instead.',
   sharedNotImage: 'Twitwa can only make a card from a picture.',
   sharedTooBig: 'That picture is too large to open.',
-  sharedFirstOnly: 'Opened the first of {count} pictures. Twitwa makes one card at a time.',
   saved: 'Saved to Photos',
   // The button on that notice: opens the card in the gallery.
   viewSaved: 'View',

@@ -153,7 +153,8 @@ import {
   rememberLater,
 } from './src/update-io';
 import { installRoute, downloadPercent, updateProblem, laterHides } from './src/update';
-import { arrivalPlan, shareOutcome, waitingChip } from './src/sharein';
+import { advancePlan, arrivalPlan, shareOutcome } from './src/sharein';
+import { keepList, takeNext, waitingLabel } from './src/queue';
 import { cropFits, readSession, serialiseSession } from './src/session';
 import { DEFAULT_PREFS, parsePrefs, serialisePrefs, startingStyle } from './src/prefs';
 import { formatFor } from './src/format';
@@ -418,11 +419,14 @@ function Editor() {
   // The picker is open or about to be. A ref, set before the first await: two
   // taps inside one frame both read state as idle and both launched a picker.
   const pickingRef = useRef(false);
-  // The shared picture kept for later when it arrived over unsaved work. State
-  // for the chip, ref for the share handler, which is subscribed once and
-  // would read the first render's null (see edRef).
-  const [waiting, setWaiting] = useState(null);
-  const waitingRef = useRef(null);
+  // The pictures queued behind the card on screen: the rest of a multi-image
+  // share, or a share kept over unsaved work (src/queue.js). State for the
+  // chip, ref for the share handler, which is subscribed once and would read
+  // the first render's [] (see edRef). In memory only: a restored session
+  // (P1) does not bring the queue back, because those files may be gone, and
+  // the first take() after a launch deletes any that are not on the keep list.
+  const [queue, setQueueState] = useState([]);
+  const queueRef = useRef([]);
   // The text last written to the session file, so an unchanged card is not
   // written again.
   const sessionText = useRef(null);
@@ -465,9 +469,9 @@ function Editor() {
     importDepth.current = Math.max(0, importDepth.current - 1);
     setImporting(importDepth.current > 0);
   }, []);
-  const shelve = useCallback((uri) => {
-    waitingRef.current = uri;
-    setWaiting(uri);
+  const setQueue = useCallback((next) => {
+    queueRef.current = next;
+    setQueueState(next);
   }, []);
 
   const onStageLayout = useCallback((e) => {
@@ -861,49 +865,60 @@ function Editor() {
   // a Replace answered after a later take would open a file that is gone.
   const shareGen = useRef(0);
 
-  // What happens to a picture that has been copied into our cache and is ready
-  // to show: open it, or ask first when the card on screen has unkept changes.
-  // `src/sharein.js` decides which and what becomes of the waiting one; this
-  // carries it out. Also the chip's route, so a waiting picture goes through
-  // the same ask as a fresh share.
-  const offer = useCallback(async (o, why, gen) => {
-    const { uri } = o;
+  const clearEditor = useCallback(() => {
+    // Discard, Close and a clean Back with nothing queued all end here (with
+    // something queued they go through leaveCard and open the next picture
+    // instead), and a card that was thrown away must not come back at the next
+    // launch. A New screenshot needs no
+    // clear of its own: the card that replaces it overwrites the file.
+    clearSessionFile();
+    sessionText.current = null;
+    setSrc(null);
+    setEd(null);
+    setSampled(null);
+    setOverride(null);
+    setProblem(null);
+    setMenu(false);
+  }, []);
+
+  // What happens to the pictures of a share that are copied into our cache and
+  // ready to show: open the first, or ask first when the card on screen has
+  // unkept changes. `src/sharein.js` decides which, and what becomes of the
+  // queue; this carries it out. Also the chip's route (advancePlan), so a
+  // queued picture goes through the same ask as a fresh share.
+  const offer = useCallback(async (plan, why, gen) => {
     // A share replaces whatever is on screen, open tool and menus included:
     // it is a deliberate act from another app.
-    const apply = async () => {
+    const apply = async (leaf) => {
       beginImport();
       try {
         setMenu(false);
         setDevOpen(false);
         setProblem(null);
         setNotice(null);
-        const opened = await openImage(uri, 'share');
-        if (opened && o.notice) setNotice(o.notice);
+        const opened = await openImage(leaf.open, 'share');
+        if (opened && leaf.notice) setNotice(leaf.notice);
       } finally {
         endImport();
       }
     };
-    const plan = arrivalPlan({
-      uri,
-      dirty: unsaved(edRef.current, kept.current),
-      waiting: waitingRef.current,
-    });
-    // A file to delete, and what the chip points at afterwards. Never the file
-    // on screen.
-    const settle = (r) => {
-      if (r.drop && r.drop !== shownUri.current) removeFile(r.drop);
-      shelve(r.waiting);
+    // Files to delete (what the queue's cap refused), and what the queue is
+    // afterwards. Never the file on screen.
+    const settle = (leaf) => {
+      for (const f of leaf.drop) if (f !== shownUri.current) removeFile(f);
+      setQueue(leaf.queue);
     };
+    if (plan.act === 'none') return;
     if (plan.act === 'open') {
       settle(plan);
-      await apply();
+      await apply(plan);
       return;
     }
     // Over a card with unsaved changes it asks first, by the same rule Back
-    // and New screenshot use. Keep editing SHELVES the picture (the chip opens
-    // it later); it used to delete it. Only for the take it answers: a later
-    // take has already deleted this copy and has its own ask, so an answer
-    // that arrives after it is ignored, as Replace always was.
+    // and New screenshot use. Keep editing QUEUES the pictures (the chip opens
+    // them later); it used to delete them. Only for the take it answers: a
+    // later take has already deleted these copies and has its own ask, so an
+    // answer that arrives after it is ignored, as Replace always was.
     //
     // The ask does NOT hold the chain. It used to be awaited here, and a
     // dialog that never calls back (Android drops it when the activity is
@@ -914,7 +929,9 @@ function Editor() {
     const keep = () => {
       const stale = gen !== shareGen.current;
       emit('share.in.ask', { why, replace: false, stale });
-      if (!stale) settle(plan.keep);
+      if (stale) return;
+      settle(plan.keep);
+      if (plan.keep.notice) setNotice(plan.keep.notice);
     };
     Alert.alert(
       COPY.replaceCardTitle,
@@ -930,14 +947,22 @@ function Editor() {
               emit('share.in.ask', { why, replace: true, stale });
               if (stale) return undefined;
               settle(plan.replace);
-              return apply();
+              return apply(plan.replace);
             }).catch((e) => emit('share.error', { why, message: String(e && e.message ? e.message : e) }));
           },
         },
       ],
       { cancelable: true, onDismiss: keep },
     );
-  }, [emit, openImage, beginImport, endImport, shelve]);
+  }, [emit, openImage, beginImport, endImport, setQueue]);
+
+  // Queued pictures whose files are gone, dropped. Resolves the live queue.
+  const pruneQueue = useCallback(() => {
+    const before = queueRef.current;
+    const live = before.filter(fileExists);
+    if (live.length !== before.length) setQueue(live);
+    return live;
+  }, [setQueue]);
 
   /** Resolves true when a share was there to deal with, even one that failed. */
   const receiveOnce = useCallback(async (why) => {
@@ -948,22 +973,22 @@ function Editor() {
     beginImport();
     try {
       try {
-        answer = await takeShare(shownUri.current);
+        answer = await takeShare(keepList(shownUri.current, queueRef.current));
       } catch (e) {
         emit('share.error', { why, message: String(e && e.message ? e.message : e) });
         setProblem(COPY.sharedFailed);
         return true;
       }
-      // take() deletes every shared copy but the one on screen, and that
-      // includes the waiting one when a new share was copied. If it is gone
-      // there is nothing for the chip to open.
-      if (waitingRef.current && !fileExists(waitingRef.current)) shelve(null);
+      // take() keeps the picture on screen and the queue's files, so they
+      // should all still be there; one that is not has nothing to open.
+      pruneQueue();
       const o = shareOutcome(answer, shareInAvailable);
       emit('share.in', {
         why,
         action: o.action,
         reason: o.reason ?? null,
         count: answer && answer.count != null ? answer.count : null,
+        skipped: answer && answer.skipped != null ? answer.skipped : null,
         bytes: answer && answer.bytes != null ? answer.bytes : null,
       });
       if (o.action === 'ignore') return false;
@@ -971,12 +996,21 @@ function Editor() {
         setProblem(o.message);
         return true;
       }
-      await offer(o, why, gen);
+      await offer(
+        arrivalPlan({
+          uris: o.uris,
+          skipped: o.skipped,
+          dirty: unsaved(edRef.current, kept.current),
+          queue: queueRef.current,
+        }),
+        why,
+        gen,
+      );
       return true;
     } finally {
       endImport();
     }
-  }, [emit, offer, beginImport, endImport, shelve]);
+  }, [emit, offer, pruneQueue, beginImport, endImport]);
 
   const receive = useCallback((why) => {
     // receiveOnce catches what it can throw, so the chain is not left
@@ -988,23 +1022,61 @@ function Editor() {
     return receiving.current;
   }, [emit, receiveOnce]);
 
-  // The chip's tap: the waiting picture through the same ask as a new share.
-  // On the chain, so it cannot overlap a take() that would delete it.
+  // The chip's tap: the next queued picture through the same ask as a new
+  // share. On the chain, so it cannot overlap a take() that would delete it.
   const openWaiting = useCallback(() => {
     receiving.current = receiving.current.then(() => {
-      const uri = waitingRef.current;
-      if (!uri) return undefined;
-      if (!fileExists(uri)) {
-        shelve(null);
-        setProblem(COPY.sharedFailed);
+      const had = queueRef.current.length;
+      const live = pruneQueue();
+      if (live.length === 0) {
+        if (had > 0) setProblem(COPY.sharedFailed);
         return undefined;
       }
-      return offer({ uri, notice: null }, 'waiting', shareGen.current);
+      return offer(
+        advancePlan({ dirty: unsaved(edRef.current, kept.current), queue: live }),
+        'waiting',
+        shareGen.current,
+      );
     }).catch((e) => emit('share.error', { why: 'waiting', message: String(e && e.message ? e.message : e) }));
-  }, [emit, offer, shelve]);
+  }, [emit, offer, pruneQueue]);
+
+  // A card was finished with (Close, Back, Discard): the next queued picture
+  // opens in its place instead of the empty screen. No ask here: the caller
+  // has already asked, or the card had nothing to lose. On the chain, like
+  // every take(), because the file it opens is one a take would keep only
+  // while it is still queued. A picture that will not open leaves the empty
+  // screen with the rest still queued behind the chip, rather than the card
+  // that was just closed.
+  const advanceQueue = useCallback(() => {
+    receiving.current = receiving.current.then(async () => {
+      const { next, rest } = takeNext(pruneQueue());
+      if (next === null) {
+        clearEditor();
+        return;
+      }
+      const before = shownUri.current;
+      setQueue(rest);
+      beginImport();
+      try {
+        setMenu(false);
+        setDevOpen(false);
+        setProblem(null);
+        setNotice(null);
+        const opened = await openImage(next, 'share');
+        emit('queue.advance', { opened, left: rest.length });
+        if (!opened && shownUri.current === before) {
+          clearEditor();
+          setProblem(COPY.sharedFailed);
+        }
+      } finally {
+        endImport();
+      }
+    }).catch((e) => emit('share.error', { why: 'advance', message: String(e && e.message ? e.message : e) }));
+  }, [emit, openImage, pruneQueue, clearEditor, setQueue, beginImport, endImport]);
 
   // Put back the card a killed process left, when no share is waiting. Quiet
-  // on every failure: delete the file and show the empty screen.
+  // on every failure: delete the file and show the empty screen. The queue is
+  // not restored (it is not in the session file): its files may be gone.
   const restoreSession = useCallback(async () => {
     try {
       const f = new File(Paths.cache, SESSION_FILE);
@@ -1728,20 +1800,6 @@ function Editor() {
     emit('Q5.fullread', stressFullRead(src.img));
   }, [src, emit]);
 
-  const clearEditor = useCallback(() => {
-    // Discard, Close and a clean Back all end here, and a card that was thrown
-    // away must not come back at the next launch. A New screenshot needs no
-    // clear of its own: the card that replaces it overwrites the file.
-    clearSessionFile();
-    sessionText.current = null;
-    setSrc(null);
-    setEd(null);
-    setSampled(null);
-    setOverride(null);
-    setProblem(null);
-    setMenu(false);
-  }, []);
-
   // Keep editing is the cancel button, so tapping outside the dialog or
   // pressing Back on it keeps the card too. Only the button that names the
   // loss can cause it.
@@ -1773,7 +1831,9 @@ function Editor() {
   // Another screenshot, from the editor, in one tap. It asks before the
   // picker rather than after it: a picker cancelled after Discard leaves the
   // card where it was, because nothing replaced it, which is the safe way
-  // round. Replaces Start over, whose other job Back now does.
+  // round. Replaces Start over, whose other job Back now does. The queue is
+  // not touched: the picked picture takes this card's place and the queued
+  // ones stay behind it.
   const newShot = useCallback(() => {
     setMenu(false);
     if (unsaved(ed, kept.current)) confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, pick);
@@ -1815,6 +1875,14 @@ function Editor() {
   );
   const cancelCrop = useCallback(() => leaveTool(backAction(ed)), [ed, leaveTool]);
 
+  // Close, Back and Discard all finish a card here, so they cannot disagree:
+  // with pictures queued the next one opens, otherwise the empty screen. The
+  // ask before discarding is the caller's, and comes first.
+  const leaveCard = useCallback(() => {
+    if (queueRef.current.length === 0) clearEditor();
+    else advanceQueue();
+  }, [clearEditor, advanceQueue]);
+
   const goBack = useCallback(() => {
     const busyMs = busy && busySince.current ? Date.now() - busySince.current : 0;
     const a = backAction(ed, { menu, dev: devOpen, busy, busyMs, kept: kept.current });
@@ -1825,10 +1893,10 @@ function Editor() {
     else if (a === 'abandon') abandonExport();
     else if (a === 'cancel-tool' || a === 'ask-tool') leaveTool(a);
     else if (a === 'close-tool') setEd((s) => (s ? doneTool(s) : s));
-    else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, clearEditor);
-    else if (a === 'leave') clearEditor();
+    else if (a === 'ask') confirmDiscard(COPY.discardCardTitle, COPY.discardCardBody, leaveCard);
+    else if (a === 'leave') leaveCard();
     return true;
-  }, [ed, menu, devOpen, busy, abandonExport, leaveTool, clearEditor, confirmDiscard, emit]);
+  }, [ed, menu, devOpen, busy, abandonExport, leaveTool, leaveCard, confirmDiscard, emit]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', goBack);
@@ -2188,16 +2256,17 @@ function Editor() {
             {caption}
           </Text>
         </Pressable>
-        {/* A share kept while there was unsaved work. Tapping asks the same
-            question a new share would. */}
+        {/* Pictures queued behind this card (the rest of a multi-image share, or a
+            share kept over unsaved work). Tapping asks the same question a new
+            share would. */}
         {/* The notice's one button sits in the caption row's own chip slot, so
             it moves nothing (P2: the stage never changes size). It takes the
             waiting chip's place while it is up: both at once would squeeze the
             caption, and the waiting chip is back in 6s. */}
         {notice && noticeAction && !problem && !busy ? (
           <Chip label={noticeAction.label} palette={palette} on={false} toggle={false} onPress={noticeAction.run} />
-        ) : waiting ? (
-          <Chip label={waitingChip(waiting)} palette={palette} on={false} toggle={false} onPress={openWaiting} />
+        ) : queue.length > 0 ? (
+          <Chip label={waitingLabel(queue)} palette={palette} on={false} toggle={false} onPress={openWaiting} />
         ) : null}
       </View>
 

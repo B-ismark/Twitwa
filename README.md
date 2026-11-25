@@ -123,6 +123,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 | `src/sizing.js` | Output size: the crop 1:1 plus padding, never resampled except past the surface and encode ceilings, no long-edge cap |
 | `src/recover.js` | When the photo picker's launcher has died and what to do about it: detect the recreation, recognise the rejection, bound the resume flag, and reload at most once. Pure, so the policy is testable without a phone |
 | `src/sharein.js` | What the native share-in module's answer means: open a `file://` copy, show a sentence, or do nothing. Pure, and it tells "no share" apart from "the module is not in this build", which look the same on screen |
+| `src/queue.js` | The pictures of a multi-image share waiting behind the card on screen: cap of 10, order, the keep list native `take` is told, the chip's plural and the skipped sentence. Pure |
 | `src/sharein-io.js` | The JS face of `modules/twitwa-share-in`. Optional, so a build without the module reads as no share rather than a crash |
 | `modules/twitwa-share-in/` | Native module of our own. Kotlin: holds the newest unread `ACTION_SEND` or `ACTION_SEND_MULTIPLE`, copies the picture into `cache/shared-in/`, and emits `onShare` when one arrives while running. Autolinked from `modules/`. Run on the owner's Pixel on 2026-09-23: cold, warm, after Back, two pictures, a refused file, from Recents |
 | `plugins/withShareInRestore.js` | Patches the generated `MainActivity.kt` so a share replayed after process death is not imported twice. The Expo template calls `super.onCreate(null)`, which hides the saved state from every lifecycle listener; the call goes in just before that line |
@@ -159,7 +160,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), and after P6 items 1-4 as **430** (102 and 328), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), after P6 items 1-4 as **430** (102 and 328), and after P6 item 5 as **461** (102 and 359), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -402,7 +403,8 @@ cd spike && node src/layout.test.mjs     # 36 checks on the stage-stays-still nu
 cd spike && node src/shell.test.mjs      # 123 checks on the editor's tool sessions, Style controls and Back
 cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 142 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
-cd spike && node src/sharein.test.mjs    # 60 checks on what a received share means, and its contract with the Kotlin
+cd spike && node src/sharein.test.mjs    # 98 checks on what a received share means, the queue plans, and its contract with the Kotlin
+cd spike && node src/queue.test.mjs      # 38 checks on the multi-image queue: cap, order, the keep list, the chip and skipped wording
 cd spike && node src/icons.test.mjs      # 94 checks: every icon the app names exists, every path parses, icon-only controls keep 44dp
 cd spike && node src/mark.test.mjs       # 26 checks: the mark stays in the launcher's safe circle, and art.mjs draws from it
 cd spike && node src/format.test.mjs     # 13 checks on P6's export format: extension, MIME, quality, and which outputs follow the choice (Copy never does)
@@ -411,7 +413,7 @@ cd spike && node src/saved.test.mjs      # 19 checks on the Saved-to-Photos View
 cd spike && node src/perf.test.mjs       # 54 checks on P4's decisions: export reuses the editor's picture and sample only when it is the same crop, the dev log is kept only when seen, the preview copy's size
 cd spike && node tools/check-imports.mjs # 125 imports + 7 self-checks on its own rule
 cd spike && node tools/check-dead.mjs    # 165 exports + 7 self-checks on its own rule
-cd spike && node tools/check-copy.mjs    # 48 checks on the app's words and where they live
+cd spike && node tools/check-copy.mjs    # 49 checks on the app's words and where they live
 cd spike && node tools/png.test.mjs      # 16 checks on the PNG decoder
 cd spike && node tools/chunks.test.mjs   # 51 checks on the PNG chunk/ICC reader
 cd spike && node tools/check-fs-sync.mjs  # 4 files scanned + 21 self-checks on its own rule
@@ -472,7 +474,7 @@ done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
          src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
-         src/sharein.test.mjs src/session.test.mjs src/layout.test.mjs \
+         src/sharein.test.mjs src/queue.test.mjs src/session.test.mjs src/layout.test.mjs \
          src/icons.test.mjs src/mark.test.mjs src/perf.test.mjs \
          src/format.test.mjs src/prefs.test.mjs src/saved.test.mjs tools/chunks.test.mjs \
          tools/png.test.mjs \
@@ -481,7 +483,7 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 430 mutations (2026-11-25, after P6.1-4)
+done                                     # silence is the pass; 461 mutations (2026-11-25, after P6.5)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

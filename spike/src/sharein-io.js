@@ -16,10 +16,14 @@ const Native = requireOptionalNativeModule('TwitwaShareIn');
 
 export const shareInAvailable = Native != null;
 
-/** The newest unread share, copied into the cache. See src/sharein.js. */
-export async function takeShare(keepUri) {
+/**
+ * The newest unread share, copied into the cache. See src/sharein.js.
+ * `keepUris` is every file:// copy still in use (src/queue.js keepList): the
+ * native side deletes every other copy.
+ */
+export async function takeShare(keepUris) {
   if (!Native) return null;
-  return Native.take(keepUri ?? null);
+  return Native.take(keepUris ?? null);
 }
 
 /** Call `listener` whenever a share arrives. Returns an unsubscribe function. */

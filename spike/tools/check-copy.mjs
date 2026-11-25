@@ -37,10 +37,11 @@ import { COPY, fill } from '../src/copy.js';
 // cable, and "Q3" is exactly the label this gate exists to stop everywhere
 // else. Its buttons take `name` rather than `label` so the boundary is visible
 // in the source and not only in this comment.
+// src/queue.js picks the plural of the waiting chip and the skipped notice.
 // src/sharein.js and src/update.js are here because each chooses which
 // sentence a failure shows -- a share, an update download. They pick from the
 // deck like App.js does, and a key used only there would otherwise read as dead.
-const VIEWS = ['App.js', 'src/sharein.js', 'src/update.js'];
+const VIEWS = ['App.js', 'src/sharein.js', 'src/queue.js', 'src/update.js'];
 
 const EM_DASH = '—';
 const EN_DASH = '–';

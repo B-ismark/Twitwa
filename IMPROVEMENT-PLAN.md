@@ -22,7 +22,7 @@ README, and generating icon PNGs from SVG.
 - **P1 · Opening and closing.** Importing state and fade-in, session restore (`src/session.js`,
   only unfinished cards come back), `fontScale|density` in `configChanges` (`plugins/withConfigChanges.js`),
   a Close control plus Back giving up on a stuck export after 15s, and a "1 waiting" chip for a share
-  that arrives mid-edit. Multi-image queueing moved to P6.5: the native module copies only the first image.
+  that arrives mid-edit. Multi-image queueing moved to P6.5 and is done there.
 - **P4 · Performance (1, 2, 4, 5).** Export reuses the editor's picture and its colour sample (only for the
   exact crop it was read from), the dev log stops re-rendering in release, scroll captures past 4096px get a
   2048px on-screen copy (the card layer drops back to the full picture whenever the copy would be soft), and
@@ -33,7 +33,7 @@ README, and generating icon PNGs from SVG.
   is deferred with P4.3: small dex saving, and it rewrites Share/Save/Copy without a phone to test on.
 - **P6 · Features 1–4.** Remembered style (`src/prefs.js`, documents/prefs.json), six curated tones (Sky, Mint,
   Sand, Plum, Slate, Midnight), a remembered "Save as JPEG" switch (`src/format.js`; Copy stays PNG), and
-  "Saved to Photos" with View (`src/saved.js`). Item 5, one card per image, is next.
+  "Saved to Photos" with View (`src/saved.js`). Item 5, one card per image, is done below.
 
 ## P1 · Opening and closing (the flow problems) — done, spec kept for reference
 1. **Importing state.** Add `importing` (a ref plus state) in `openImage`/`receive`, show a skeleton card
@@ -108,7 +108,11 @@ README, and generating icon PNGs from SVG.
 2. Custom background swatches, as one row in the Style sheet.
 3. JPEG export option for chat apps (quality 92). PNG stays the default.
 4. A "Saved to Photos" toast with a View action (open the MediaStore URI).
-5. One card per image for multi-image shares (builds on the P1 queue).
+5. ~~One card per image for multi-image shares (builds on the P1 queue).~~ **Done, unbuilt.** The native
+   module copies up to 10 images (`take(keep)` keeps the card on screen and the queue); `src/queue.js` holds the
+   queue (cap 10, overflow counted as skipped), `src/sharein.js` plans arrivals and advances. The "N waiting"
+   chip opens the next; Close, Back and Discard open the next queued image instead of the empty state. The
+   Kotlin is uncompiled and untested on a device, and the queue is not restored after a process death.
 
 ## Release
 For each phase, an adversarial review of the diff, then the gates, then bump `versionCode`/`version`,
