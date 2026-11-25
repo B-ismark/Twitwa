@@ -40,6 +40,31 @@ const MUTANTS = {
   // .so go back to Stored, which is where 110 MB of the original APK came from.
   packaging_not_legacy: ["key: 'expo.useLegacyPackaging',\n    value: 'true'", "key: 'expo.useLegacyPackaging',\n    value: 'false'"],
   gif_left_on: ["key: 'expo.gif.enabled',\n    value: 'false'", "key: 'expo.gif.enabled',\n    value: 'true'"],
+  // P5 levers. Each gets a value mutant and a name mutant: the value one is a
+  // lever left off, the name one is the "guide's spelling that this template
+  // never reads" trap that already bit R8.
+  bundle_compression_off: ["key: 'android.enableBundleCompression',\n    value: 'true'", "key: 'android.enableBundleCompression',\n    value: 'false'"],
+  bundle_compression_wrong_name: ["key: 'android.enableBundleCompression',", "key: 'android.enableBundleCompress',"],
+  shrink_resources_off: ["key: 'android.enableShrinkResourcesInReleaseBuilds',\n    value: 'true'", "key: 'android.enableShrinkResourcesInReleaseBuilds',\n    value: 'false'"],
+  shrink_resources_wrong_name: ["key: 'android.enableShrinkResourcesInReleaseBuilds',", "key: 'android.shrinkResources',"],
+  // Fresco's WebP decoder (206,899 bytes) stays in.
+  webp_left_on: ["key: 'expo.webp.enabled',\n    value: 'false'", "key: 'expo.webp.enabled',\n    value: 'true'"],
+  webp_wrong_name: ["key: 'expo.webp.enabled',", "key: 'expo.webp.enable',"],
+  // The exclude names the wrong library: the transcoder (224,841 bytes) stays
+  // in, and libimagepipeline, which Fresco's memory pools can load, goes.
+  excludes_wrong_lib: ["value: '**/libnative-imagetranscoder.so',", "value: '**/libimagepipeline.so',"],
+  excludes_wrong_name: ["key: 'android.packagingOptions.excludes',", "key: 'android.packagingOptions.exclude',"],
+  // Locales. The anchor stops matching the template's block: the plugin would
+  // throw on every real prebuild.
+  locale_anchor_wrong: ['androidResources[ \\t]*\\{', 'androidResourcez[ \\t]*\\{'],
+  // A second run adds a second line instead of recognising the first.
+  locale_not_idempotent: ['const present = out.split', 'const present = false && out.split'],
+  // The plugin stops checking what it wrote.
+  locale_readback_dead: ['if (lines.length !== 1 ||', 'if (false &&'],
+  // Some other locale list.
+  locale_wrong: ['const LOCALE_LINE = "localeFilters += [\'en\']";', 'const LOCALE_LINE = "localeFilters += [\'fr\']";'],
+  // The insert swallows the character after it.
+  locale_eats_next_char: ['m[2] + out.slice(at);', 'm[2] + out.slice(at + 1);'],
   // A second entry for the same key instead of a replacement. Gradle reads the
   // last one, so this happens to work -- until the order changes.
   duplicate_instead_of_replace: ['else out[at] = { ...out[at], value };', 'else out.push({ type: \'property\', key, value });'],
@@ -85,7 +110,7 @@ if (BREAK && MUTANTS[BREAK]) {
   plugin = require('./withAndroidSize.js');
 }
 
-const { apply, PROPERTIES } = plugin;
+const { apply, applyLocales, PROPERTIES } = plugin;
 
 // The values this plugin is supposed to produce, written down HERE rather than
 // read from PROPERTIES. Reading them from the module is the mistake that let
@@ -101,6 +126,11 @@ const EXPECTED = {
   'expo.useLegacyPackaging': 'true',
   'expo.gif.enabled': 'false',
   'android.enableMinifyInReleaseBuilds': 'true',
+  // P5, 2026-11-25.
+  'android.enableBundleCompression': 'true',
+  'android.enableShrinkResourcesInReleaseBuilds': 'true',
+  'expo.webp.enabled': 'false',
+  'android.packagingOptions.excludes': '**/libnative-imagetranscoder.so',
 };
 const EXPECTED_KEYS = Object.keys(EXPECTED);
 
@@ -122,7 +152,11 @@ function vals(items, key) {
 function prop(key, value) { return { type: 'property', key, value }; }
 
 // The template as Expo SDK 57 generates it, recorded from android/gradle.properties
-// on 2026-09-18. Kept here as a literal so the suite runs in a clone, where
+// on 2026-09-18 and re-checked 2026-11-25 against the unpacked SDK 57 template
+// package (android/gradle.properties): same 13 keys, same values. The one extra
+// here, expo.inlineModules.watchedDirectories, is not in the raw template: it is
+// added by @expo/prebuild-config's withInlineModules, so it is in the live file
+// and belongs in this fixture for the live comparison below. Kept here as a literal so the suite runs in a clone, where
 // android/ does not exist; the check further down compares it against the real
 // file whenever there IS one, so the two cannot drift silently.
 // A FUNCTION, not an array. As an array it was shared across blocks, and the
@@ -149,14 +183,14 @@ const TEMPLATE_ITEMS = [
   { type: 'empty' },
 ];
 
-console.log('the four properties land with the intended values');
+console.log('the eight properties land with the intended values');
 {
   const out = apply(template());
   for (const key of EXPECTED_KEYS) {
     check(`${key} == ${EXPECTED[key]}`, vals(out, key).join('|') === EXPECTED[key], vals(out, key).join('|'));
   }
   check(
-    'the plugin sets exactly these four keys and no others',
+    'the plugin sets exactly these eight keys and no others',
     JSON.stringify(PROPERTIES.map((p) => p.key).sort()) === JSON.stringify(EXPECTED_KEYS.slice().sort()),
     PROPERTIES.map((p) => p.key).join(',')
   );
@@ -178,12 +212,23 @@ console.log('replacement, not accumulation');
   for (const key of EXPECTED_KEYS) {
     check(`${key} appears exactly once`, vals(out, key).length === 1, vals(out, key).length);
   }
-  // Three keys are already in the template and get replaced; the R8 key is not
-  // (the template reads it with a `?: false` default) and gets appended. The
-  // count is derived, so a key that moves into or out of the template shows up
-  // here as a changed number rather than as a silent duplicate.
+  // Four keys are already in the template and get replaced (the ABI list,
+  // legacy packaging, gif, webp); the other four are not, because the template
+  // reads each with a `?: false` or empty default, and get appended: R8, bundle
+  // compression, resource shrinking and packagingOptions.excludes. The set is
+  // derived and asserted exactly, so a key that moves into or out of the
+  // template shows up here as a changed set rather than as a silent duplicate.
   const absent = EXPECTED_KEYS.filter((key) => vals(template(), key).length === 0);
-  check('exactly one key is absent from the template, and it is R8', absent.join() === 'android.enableMinifyInReleaseBuilds', absent.join());
+  check(
+    'exactly four keys are absent from the template: R8, bundle compression, shrinkResources, excludes',
+    JSON.stringify(absent.slice().sort()) === JSON.stringify([
+      'android.enableBundleCompression',
+      'android.enableMinifyInReleaseBuilds',
+      'android.enableShrinkResourcesInReleaseBuilds',
+      'android.packagingOptions.excludes',
+    ]),
+    absent.join()
+  );
   check(
     'the list grows by exactly the keys the template lacked',
     out.length === template().length + absent.length,
@@ -279,6 +324,98 @@ console.log('every property carries a reason a later reader can check');
   );
 }
 
+console.log('the P5 reasons carry their measurements and their honest costs');
+{
+  const why = (k) => PROPERTIES.find((p) => p.key === k).why;
+  check('bundle compression cites 1,109,444 and the cold-start cost',
+    why('android.enableBundleCompression').includes('1,109,444') && /cold start/.test(why('android.enableBundleCompression')));
+  check('shrinkResources names the splash screen and the adaptive icon',
+    /splash/.test(why('android.enableShrinkResourcesInReleaseBuilds')) && /adaptive icon/.test(why('android.enableShrinkResourcesInReleaseBuilds')));
+  check('webp cites libstatic-webp 206,899', why('expo.webp.enabled').includes('206,899'));
+  check('excludes cites 224,841 and says a missing .so fails at use',
+    why('android.packagingOptions.excludes').includes('224,841') && /fails at the\s+moment of use/.test(why('android.packagingOptions.excludes')));
+  check('excludes does not name libnative-filters or libimagepipeline as excluded',
+    !/libimagepipeline|libnative-filters/.test(PROPERTIES.find((p) => p.key === 'android.packagingOptions.excludes').value));
+}
+
+// The androidResources block of the Expo SDK 57 template's android/app/build.gradle
+// with the lines around it (lines 112-133), recorded 2026-11-25 from the
+// unpacked template package. As with TEMPLATE_ITEMS, a literal so the suite runs
+// in a clone; the live-tree block below compares it with the real file.
+const BUILD_GRADLE_EXCERPT = `        release {
+            // Caution! In production, you need to generate your own keystore file.
+            // see https://reactnative.dev/docs/signed-apk-android.
+            signingConfig signingConfigs.debug
+            def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
+            shrinkResources enableShrinkResources.toBoolean()
+            minifyEnabled enableMinifyInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
+            crunchPngs enablePngCrunchInRelease.toBoolean()
+        }
+    }
+    packagingOptions {
+        jniLibs {
+            def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
+            useLegacyPackaging enableLegacyPackaging.toBoolean()
+        }
+    }
+    androidResources {
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+`;
+const LOCALE = "localeFilters += ['en']";
+const localeCount = (t) => t.split('\n').filter((l) => l.includes('localeFilters')).length;
+const attempt = (text) => { try { applyLocales(text); return null; } catch (e) { return e; } };
+
+console.log('English-only resources: localeFilters lands once, inside androidResources');
+{
+  const out = applyLocales(BUILD_GRADLE_EXCERPT);
+  check('exactly one localeFilters line', localeCount(out) === 1, localeCount(out));
+  const lines = out.split('\n');
+  const at = lines.findIndex((l) => l.trim() === LOCALE);
+  check("the line is localeFilters += ['en']", at !== -1, at);
+  check('it sits directly under `androidResources {`', at > 0 && lines[at - 1].trim() === 'androidResources {', lines[at - 1]);
+  check('indented like its sibling line', at > 0 && lines[at] === '        ' + LOCALE, JSON.stringify(lines[at]));
+  check('the ignoreAssetsPattern line is still inside the block', at > 0 && String(lines[at + 1]).trim().startsWith('ignoreAssetsPattern'), lines[at + 1]);
+}
+
+console.log('English-only resources: nothing else changes');
+{
+  const out = applyLocales(BUILD_GRADLE_EXCERPT);
+  const without = out.split('\n').filter((l) => l.trim() !== LOCALE).join('\n');
+  check('removing the one line gives back the input byte for byte', without === BUILD_GRADLE_EXCERPT);
+  check('length grew by exactly one line', out.length === BUILD_GRADLE_EXCERPT.length + ('        ' + LOCALE + '\n').length, out.length - BUILD_GRADLE_EXCERPT.length);
+  const crlf = BUILD_GRADLE_EXCERPT.replace(/\n/g, '\r\n');
+  const outCrlf = applyLocales(crlf);
+  check('a CRLF file stays CRLF and otherwise identical', !/[^\r]\n/.test(outCrlf) && outCrlf.replace(/ +localeFilters[^\r]*\r\n/, '') === crlf);
+}
+
+console.log('English-only resources: idempotent, because prebuild runs the mods again');
+{
+  const once = applyLocales(BUILD_GRADLE_EXCERPT);
+  const twice = applyLocales(once);
+  check('applyLocales(applyLocales(x)) === applyLocales(x)', twice === once);
+  check('still exactly one localeFilters line after two passes', localeCount(twice) === 1, localeCount(twice));
+}
+
+console.log('English-only resources: refuses rather than building at the wrong size');
+{
+  const none = attempt('android {\n    compileSdk 36\n}\n');
+  check('no androidResources block throws', none !== null);
+  check('the message names the block and the size consequence', none !== null && /androidResources/.test(none.message) && /size/i.test(none.message), none && none.message);
+  check('a commented-out block is not an anchor', attempt('android {\n    // androidResources {\n    // }\n}\n') !== null);
+  const stray = attempt(BUILD_GRADLE_EXCERPT.replace('androidResources {\n', "androidResources {\n        localeFilters += ['fr']\n"));
+  check('a different localeFilters already there throws at read-back', stray !== null && /localeFilters/.test(stray.message), stray && stray.message);
+  const lone = attempt(BUILD_GRADLE_EXCERPT.replace('androidResources {\n', "androidResources {\n        localeFilters = ['en', 'fr']\n"));
+  check('a hand-written localeFilters = [...] throws at read-back', lone !== null);
+  const text = 'android {}';
+  attempt(text);
+  check('the input string is not altered', text === 'android {}');
+  check('two blocks still yield exactly one line (first block only)', localeCount(applyLocales(BUILD_GRADLE_EXCERPT + '\n' + BUILD_GRADLE_EXCERPT)) === 1);
+}
+
 // --- against the real generated tree, when there is one ---------------------
 console.log('the recorded template matches the one Expo actually generates');
 if (!existsSync(LIVE_PROPERTIES)) {
@@ -304,6 +441,18 @@ if (!existsSync(LIVE_PROPERTIES)) {
     EXPECTED_KEYS.every((key) => vals(applied, key).join('|') === EXPECTED[key]),
     EXPECTED_KEYS.map((key) => `${key}=${vals(applied, key).join('|')}`).join(' ')
   );
+}
+
+const LIVE_BUILD_GRADLE = 'android/app/build.gradle';
+if (!existsSync(LIVE_BUILD_GRADLE)) {
+  skip('BUILD_GRADLE_EXCERPT still matches android/app/build.gradle', `${LIVE_BUILD_GRADLE} needs a prebuild`);
+  skip('the live build.gradle carries exactly one localeFilters line', `${LIVE_BUILD_GRADLE} needs a prebuild`);
+} else {
+  const liveText = readFileSync(LIVE_BUILD_GRADLE, 'utf8').replace(/\r\n/g, '\n');
+  const stripped = liveText.split('\n').filter((l) => l.trim() !== LOCALE).join('\n');
+  check('BUILD_GRADLE_EXCERPT still matches android/app/build.gradle', stripped.includes(BUILD_GRADLE_EXCERPT));
+  check('the live build.gradle carries exactly one localeFilters line, and applying again changes nothing',
+    localeCount(liveText) === 1 && applyLocales(liveText) === liveText);
 }
 
 const tail = skipped ? `, ${skipped} SKIPPED (run: npx expo prebuild -p android)` : '';

@@ -27,6 +27,10 @@ README, and generating icon PNGs from SVG.
   exact crop it was read from), the dev log stops re-rendering in release, scroll captures past 4096px get a
   2048px on-screen copy (the card layer drops back to the full picture whenever the copy would be soft), and
   `tools/coldstart.sh` times cold start. Decisions in `src/perf.js`. Item 3 (Kotlin pixels) waits for a device.
+- **P5 · Size (settings).** Measured 1.0.6 (19.1 MB): the Hermes bundle shipped Stored. `withAndroidSize` now
+  compresses it, keeps English resources only, turns on shrinkResources, drops WebP and Fresco's JPEG
+  transcoder. Expected about 16.8 MB, unbuilt. Replacing media-library/clipboard/sharing with our own Kotlin
+  is deferred with P4.3: small dex saving, and it rewrites Share/Save/Copy without a phone to test on.
 
 ## P1 · Opening and closing (the flow problems) — done, spec kept for reference
 1. **Importing state.** Add `importing` (a ref plus state) in `openImage`/`receive`, show a skeleton card
@@ -87,7 +91,7 @@ README, and generating icon PNGs from SVG.
    full resolution.
 5. **Measure cold start** before and after: `adb shell am start -W`.
 
-## P5 · Size
+## P5 · Size — settings done; Kotlin replacements wait for a device
 1. Measure first: `unzip -v app-release.apk 'lib/*'` to get the real size of each native library.
 2. Exclude the Fresco native libraries, replace `expo-media-library`, `expo-clipboard` and `expo-sharing` with
    three functions in our own Kotlin module, and turn on `shrinkResources` with `resConfigs "en"`.

@@ -29,6 +29,10 @@
 //
 // Because both traps are "the build succeeds and the setting did nothing", this
 // plugin re-reads what it wrote and throws if any value is not what it intended.
+//
+// P5 (2026-11-25) added five more levers, measured on the released 1.0.6 APK
+// (19,235,347 bytes; zip entries sum to 19,076,775). Their expected savings are
+// EXPECTED, not measured, until a build with them is weighed.
 
 const PROPERTIES = [
   {
@@ -74,7 +78,92 @@ const PROPERTIES = [
       'module that resolves by reflection at startup and is no longer there. ' +
       'Every release built with it therefore gets launched on a phone first.',
   },
+  {
+    key: 'android.enableBundleCompression',
+    value: 'true',
+    why:
+      'Compresses assets/index.android.bundle. React Native\'s Gradle plugin ' +
+      'adds "bundle" to noCompress unless this is set (ReactPlugin.kt ' +
+      'configureResources), so the 2,813,392-byte bundle ships Stored; gzip -9 ' +
+      'of it is 1,109,444 bytes, about 1.70 MB saved. The tradeoff is real: ' +
+      'Hermes can no longer mmap the bytecode straight out of the APK, it is ' +
+      'inflated into memory at launch, so cold start may be slower. ' +
+      'tools/coldstart.sh measures it before release.',
+  },
+  {
+    key: 'android.enableShrinkResourcesInReleaseBuilds',
+    value: 'true',
+    why:
+      'Turns on resource shrinking for the release build (it needs R8, which is ' +
+      'already on). res/ is 829,698 bytes compressed and resources.arsc ' +
+      '1,237,532 bytes, Stored, and has to stay Stored. The risk is the usual ' +
+      'one: a resource reached only by name through getIdentifier is stripped ' +
+      'and nothing fails until it is looked up. Two things to see on the phone ' +
+      'before release: the expo-splash-screen splash and the adaptive icon.',
+  },
+  {
+    key: 'expo.webp.enabled',
+    value: 'false',
+    why:
+      'Removes Fresco\'s webpsupport, and with it ' +
+      'lib/arm64-v8a/libstatic-webp.so (206,899 bytes compressed). Android ' +
+      'decodes WebP natively anyway, and this app never draws a React Native ' +
+      '<Image> (App.js and src/ import none from react-native; everything is ' +
+      'drawn through Skia), so the Fresco decoder has no caller.',
+  },
+  {
+    key: 'android.packagingOptions.excludes',
+    value: '**/libnative-imagetranscoder.so',
+    why:
+      'Excludes Fresco\'s JPEG resize/rotate transcoder, ' +
+      'lib/arm64-v8a/libnative-imagetranscoder.so (224,841 bytes compressed). ' +
+      'It only runs when an <Image> resizes or rotates a JPEG, and Twitwa draws ' +
+      'everything through Skia. The tradeoff: a missing .so fails at the ' +
+      'moment of use, not at the build, so a path that did reach it would ' +
+      'crash on first use. libimagepipeline (3 KB, which Fresco\'s memory pools ' +
+      'can load) and libnative-filters are deliberately NOT excluded.',
+  },
 ];
+
+// English only, through `localeFilters`, which needs a block in app/build.gradle
+// and so cannot be a gradle.properties line. The template ships every locale
+// the AndroidX/Material/Expo libraries carry translations for: on 1.0.6, 74
+// non-English locales' type chunks are 278,224 bytes of resources.arsc, and
+// most of the 324,612-byte global string pool holds their translated strings.
+// resources.arsc must stay Stored, so every byte removed there is a byte off
+// the APK. The app's own words are English only (src/copy.js), so nothing it
+// shows is lost. System UI such as the photo picker belongs to the OS and is
+// not affected. AGP 8.9+ spells it `localeFilters`; resConfigs /
+// resourceConfigurations are the deprecated names for the same thing.
+const LOCALE_LINE = "localeFilters += ['en']";
+const LOCALE_ANCHOR = /^([ \t]*)androidResources[ \t]*\{[ \t]*(\r?\n)/m;
+const LOCALE_ANY = /^[ \t]*localeFilters\b.*$/gm;
+
+function applyLocales(gradleText) {
+  let out = gradleText;
+  const present = out.split(/\r?\n/).some((l) => l.trim() === LOCALE_LINE);
+  if (!present) {
+    const m = LOCALE_ANCHOR.exec(out);
+    if (!m) {
+      throw new Error(
+        'withAndroidSize found no `androidResources {` block in app/build.gradle ' +
+          'to put localeFilters in, so the release APK would silently be built ' +
+          'with every locale and at the wrong size.'
+      );
+    }
+    const at = m.index + m[0].length;
+    out = out.slice(0, at) + m[1] + '    ' + LOCALE_LINE + m[2] + out.slice(at);
+  }
+  const lines = out.match(LOCALE_ANY) || [];
+  if (lines.length !== 1 || lines[0].trim() !== LOCALE_LINE) {
+    throw new Error(
+      'withAndroidSize could not set localeFilters as intended, so the release ' +
+        'APK would silently be built at the wrong size: expected exactly one ' +
+        `\`${LOCALE_LINE}\` line, read back ${JSON.stringify(lines.map((l) => l.trim()))}`
+    );
+  }
+  return out;
+}
 
 function apply(items) {
   const out = items.slice();
@@ -100,12 +189,18 @@ function apply(items) {
 }
 
 module.exports = function withAndroidSize(config) {
-  const { withGradleProperties } = require('@expo/config-plugins');
-  return withGradleProperties(config, (cfg) => {
+  const { withGradleProperties, withAppBuildGradle } = require('@expo/config-plugins');
+  config = withGradleProperties(config, (cfg) => {
     cfg.modResults = apply(cfg.modResults);
+    return cfg;
+  });
+  return withAppBuildGradle(config, (cfg) => {
+    cfg.modResults.contents = applyLocales(cfg.modResults.contents);
     return cfg;
   });
 };
 
 module.exports.apply = apply;
+module.exports.applyLocales = applyLocales;
+module.exports.LOCALE_LINE = LOCALE_LINE;
 module.exports.PROPERTIES = PROPERTIES;
