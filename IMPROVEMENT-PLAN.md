@@ -26,7 +26,7 @@ README, and generating icon PNGs from SVG.
 - **P4 · Performance (1, 2, 4, 5).** Export reuses the editor's picture and its colour sample (only for the
   exact crop it was read from), the dev log stops re-rendering in release, scroll captures past 4096px get a
   2048px on-screen copy (the card layer drops back to the full picture whenever the copy would be soft), and
-  `tools/coldstart.sh` times cold start. Decisions in `src/perf.js`. Item 3 (Kotlin pixels) waits for a device.
+  `tools/coldstart.sh` times cold start. Decisions in `src/perf.js`. Item 3 (Kotlin pixels) is built and waits for a device.
 - **P5 · Size (settings).** Measured 1.0.6 (19.1 MB): the Hermes bundle shipped Stored. `withAndroidSize` now
   compresses it, keeps English resources only, turns on shrinkResources, drops WebP and Fresco's JPEG
   transcoder. Expected about 16.8 MB, unbuilt. Replacing media-library/clipboard/sharing with our own Kotlin
@@ -79,17 +79,22 @@ README, and generating icon PNGs from SVG.
 4. **Empty state:** the wordmark, a large tappable "Choose a screenshot" panel with the mark, and a
    line saying you can also Share into Twitwa from any app.
 
-## P4 · Performance (no change to output quality) — 1, 2, 4, 5 done; 3 waits for a device
+## P4 · Performance (no change to output quality) — 1, 2, 4, 5 done; 3 built, waits for a device
 1. **Reuse the loaded image when exporting:** `build()` passes `src.img` and the `sampled` result into
    `renderCard`, so the file isn't decoded twice and the colour isn't sampled twice. Add one test to the pipeline's pure
    part to prove the preview and the export use the same fill.
 2. **Turn off the test-panel logging in release:** make `emit` a no-op for state when `!__DEV__ && !devOpen` (logcat
    only). That removes a full re-render per event.
-3. **Native pixel work:** a Kotlin module (`modules/twitwa-pixels`) that uses
-   `BitmapRegionDecoder` to read only the edge strips and the status-bar band, and encodes
-   the PNG on `Dispatchers.IO`. The JS rules (`decideCropBackground`, `planCrop`) stay as
-   the single source, and Kotlin only returns pixels. This removes the whole-image read
-   (the risk of running out of memory on tall captures) and the freeze during export.
+3. **Native encode (built, uncompiled, awaiting the device pass):** `modules/twitwa-pixels` (Kotlin) takes the
+   finished card's RGBA pixels, builds an sRGB Bitmap, and compresses it to PNG or JPEG on `Dispatchers.IO`
+   into a temp file that is renamed over the target, so the export no longer holds the JS thread for the
+   length of the deflate. `src/encoder.js` decides when it is used (only with the module present, only for
+   sRGB, only png/jpeg; a Display P3 card stays on Skia, which embeds the profile) and `src/pipeline.js`
+   falls back to the old Skia encode and write on any rejection, recording `encoder` and `encoderFallback`
+   in the timings. The dev panel's "Encoder parity" renders a card both ways and compares decoded pixels,
+   file sizes and iCCP/sRGB chunks. Region reads (`BitmapRegionDecoder`) were dropped: the editor decodes
+   the whole image in Skia to show it anyway, so a second decoder would add orientation and colour-space
+   parity risk for no memory win. Needs the device pass in `release/checklist-1.0.7.md`.
 4. **Downsampled preview image** (longest side 2048) for captures past 4096px. Export still uses
    full resolution.
 5. **Measure cold start** before and after: `adb shell am start -W`.

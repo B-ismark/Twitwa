@@ -5,7 +5,7 @@
 the APK is published. The steps follow `release/README.md`.
 
 This release carries more untested native and build change than any before
-it: new Kotlin in the share-in module, five new size settings and a locale
+it: new Kotlin in the share-in module and in a new pixels module that encodes the card off the JS thread, five new size settings and a locale
 filter in Gradle, and three new native dependencies (splash screen, safe area,
 SVG). None of it has been compiled. **Install and run it on a phone before
 publishing.**
@@ -50,6 +50,12 @@ P5 section's EXPECTED numbers with measured ones. The expected size is about
 - [ ] Turn on Save as JPEG, then Share to a chat app: the file arrives as .jpg.
 - [ ] Save the same card again: it asks first. Save it as PNG, then as JPEG: it doesn't ask.
 - [ ] Pick a colour, force-stop, share a new screenshot in: it opens with that colour.
+
+**Export (new Kotlin)**
+- [ ] A long 10-screen capture's Share does not freeze the UI: the spinner keeps moving while the card is made.
+- [ ] Dev panel (long-press), Encoder parity: it reports that pixels match, `auto.encoder` is `native` with no fallback, and shows whether an iCCP or sRGB chunk was added on either side.
+- [ ] Save as JPEG still arrives as .jpg, from Share and from Save.
+- [ ] `adb logcat` shows no `TwitwaPixels` or `ERR_PIXELS_*` errors, and Render P3 in the dev panel still logs `encoder: skia`.
 
 **Sharing in (new Kotlin)**
 - [ ] Share 1 screenshot from Photos, cold and with Twitwa already open.

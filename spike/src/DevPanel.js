@@ -52,10 +52,12 @@ export default function DevPanel({
   onStress,
   onCompose,
   onRender,
+  onParity,
   onBackToSource,
   onClose,
   title,
   hint,
+  parityLabel,
   closeLabel,
 }) {
   const hasSrc = Boolean(src);
@@ -82,6 +84,11 @@ export default function DevPanel({
       </View>
       <View style={styles.row}>
         <DevBtn name="Render" onPress={() => onRender()} disabled={!live} palette={palette} />
+      </View>
+      <View style={styles.row}>
+        {/* The native encoder against Skia's, on the card as it stands. Logs
+            sizes, timings, PNG chunk tables and whether decoded pixels match. */}
+        <DevBtn name={parityLabel} onPress={onParity} disabled={!live} palette={palette} />
       </View>
       <View style={styles.row}>
         {/* Q4 through the real pipeline. The "P3" button above drives Phase 0's

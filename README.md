@@ -160,7 +160,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), after P6 items 1-4 as **430** (102 and 328), and after P6 item 5 as **461** (102 and 359), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25, after P5, as **399** (102 from the `--list-mutants` loop and 297 from the grep loop), after P6 items 1-4 as **430** (102 and 328), after P6 item 5 as **461** (102 and 359), and after P4.3's native encoder as **506** (102 and 404; the grep loop was 359 before this and 360 by this count, one more than the line above recorded), none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -404,6 +404,7 @@ cd spike && node src/shell.test.mjs      # 123 checks on the editor's tool sessi
 cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 142 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
 cd spike && node src/sharein.test.mjs    # 98 checks on what a received share means, the queue plans, and its contract with the Kotlin
+cd spike && node src/encoder.test.mjs    # 71 checks on which encoder writes the card, the PNG chunk reader, and the contract with the pixels Kotlin
 cd spike && node src/queue.test.mjs      # 38 checks on the multi-image queue: cap, order, the keep list, the chip and skipped wording
 cd spike && node src/icons.test.mjs      # 94 checks: every icon the app names exists, every path parses, icon-only controls keep 44dp
 cd spike && node src/mark.test.mjs       # 26 checks: the mark stays in the launcher's safe circle, and art.mjs draws from it
@@ -476,14 +477,14 @@ for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
          src/sharein.test.mjs src/queue.test.mjs src/session.test.mjs src/layout.test.mjs \
          src/icons.test.mjs src/mark.test.mjs src/perf.test.mjs \
-         src/format.test.mjs src/prefs.test.mjs src/saved.test.mjs tools/chunks.test.mjs \
+         src/format.test.mjs src/prefs.test.mjs src/saved.test.mjs src/encoder.test.mjs tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
   node "$t" >/dev/null 2>&1 || echo "NOT GREEN: $t"   # as above
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 461 mutations (2026-11-25, after P6.5)
+done                                     # silence is the pass; 506 mutations (2026-11-25, after P4.3)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting

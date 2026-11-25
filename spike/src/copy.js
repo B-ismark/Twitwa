@@ -175,6 +175,7 @@ export const COPY = {
   // take on trust. Hidden, because it is not part of the app.
   devTitle: 'Developer tools',
   devHint: 'Phase 0 and Phase 1 measurements. Not part of the app.',
+  devParity: 'Encoder parity',
 };
 
 /**

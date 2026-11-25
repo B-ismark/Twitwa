@@ -88,7 +88,7 @@ import {
   measureRoundTrip,
   stressFullRead,
 } from './src/measure';
-import { renderCard, decodeUri, sampleCropBackground } from './src/pipeline';
+import { renderCard, renderParity, decodeUri, sampleCropBackground } from './src/pipeline';
 import { composition, project, MIN_PROJECT } from './src/compose';
 import {
   TOOL,
@@ -1795,6 +1795,30 @@ function Editor() {
     [src, ed, emit],
   );
 
+  // Renders the current card on Skia and natively and logs how they differ
+  // (src/pipeline.js renderParity). Dev only; it leaves the live card alone.
+  const parity = useCallback(async () => {
+    if (!src || !ed) return;
+    const gen = importGen.current;
+    setProblem(null);
+    setBusy(true);
+    try {
+      const out = await renderParity({
+        uri: src.uri,
+        crop: ed.crop,
+        padding: ed.padding,
+        frame: ed.background,
+        trim: 'never',
+      });
+      if (gen !== importGen.current) return;
+      emit('P4.3.parity', out);
+    } catch (e) {
+      emit('P4.3.parity.error', { message: String(e && e.message ? e.message : e) });
+    } finally {
+      setBusy(false);
+    }
+  }, [src, ed, emit]);
+
   const stress = useCallback(() => {
     if (!src) return;
     emit('Q5.fullread', stressFullRead(src.img));
@@ -2338,10 +2362,12 @@ function Editor() {
           onStress={stress}
           onCompose={compose}
           onRender={render}
+          onParity={parity}
           onBackToSource={() => setOverride(null)}
           onClose={() => setDevOpen(false)}
           title={COPY.devTitle}
           hint={COPY.devHint}
+          parityLabel={COPY.devParity}
           closeLabel={COPY.close}
         />
       ) : null}
