@@ -20,7 +20,7 @@
 // and this same constant privately — two copies of each, which is the same
 // smell one step earlier. A two-argument function cannot be called with two
 // arguments wrongly.
-import { ColorType, AlphaType } from '@shopify/react-native-skia';
+import { Skia, ColorType, AlphaType, FilterMode, MipmapMode, TileMode } from '@shopify/react-native-skia';
 
 import { readSubRect } from './read';
 
@@ -42,3 +42,24 @@ export const RGBA = { colorType: ColorType.RGBA_8888, alphaType: AlphaType.Unpre
  * is what makes an unchecked caller fail one layer away from the cause.
  */
 export const readRect = (img, box) => readSubRect(img, box, RGBA);
+
+/**
+ * A smaller copy of `img`, for drawing on screen only. Null if Skia cannot make
+ * the surface, and the caller then simply draws the original.
+ *
+ * Composed on a RASTER surface through a mipmapped image shader, the same way
+ * pipeline.js shrinks an oversized card and for the same two reasons: a plain
+ * drawImageRect from 10x down skips rows and shimmers, and a GPU shader over a
+ * source past the texture limit draws nothing. Made once per opened image, so
+ * the cost is paid at import and never while a finger is moving.
+ */
+export function downscaleImage(img, width, height) {
+  const surface = Skia.Surface.Make(width, height);
+  if (!surface) return null;
+  const m = Skia.Matrix();
+  m.scale(width / img.width(), height / img.height());
+  const paint = Skia.Paint();
+  paint.setShader(img.makeShaderOptions(TileMode.Clamp, TileMode.Clamp, FilterMode.Linear, MipmapMode.Linear, m));
+  surface.getCanvas().drawRect(Skia.XYWHRect(0, 0, width, height), paint);
+  return surface.makeImageSnapshot();
+}
