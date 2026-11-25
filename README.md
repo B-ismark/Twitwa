@@ -159,7 +159,7 @@ Started: `spike/`. An Expo SDK 57 project holding the Phase 0 spike.
 decode, orientation, status bar, crop, sample, compose, encode, write — with every
 decision delegated to `plan.js`/`sizing.js`/`pixels.js`/`read.js`, which is why
 those carry 411 checks and 78 mutations between them while the renderer carries
-none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25 as **356**, none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
+none (**1719 checks and 286 mutations** as of 2026-09-24 — mutations re-derived 2026-11-25 as **369**, none surviving; the check total is due a re-count on a prebuilt tree — counting the two PNG tools, all four
 config plugins, the update module, the share-in decision and the seven rule-checking gates). Eight of them
 are not pixel work at all: `recover.js` is the picker's self-repair policy,
 `plugins/withReleaseSigning.js` is the release-signing patch, `update.js`
@@ -403,6 +403,8 @@ cd spike && node src/shell.test.mjs      # 93 checks on the editor's tool sessio
 cd spike && node src/autocrop.test.mjs   # 84 checks on the crop the editor opens on
 cd spike && node src/update.test.mjs     # 142 checks on the update check, Later, its URL allowlist, and its contract with the Kotlin
 cd spike && node src/sharein.test.mjs    # 60 checks on what a received share means, and its contract with the Kotlin
+cd spike && node src/icons.test.mjs      # 94 checks: every icon the app names exists, every path parses, icon-only controls keep 44dp
+cd spike && node src/mark.test.mjs       # 26 checks: the mark stays in the launcher's safe circle, and art.mjs draws from it
 cd spike && node tools/check-imports.mjs # 125 imports + 7 self-checks on its own rule
 cd spike && node tools/check-dead.mjs    # 165 exports + 7 self-checks on its own rule
 cd spike && node tools/check-copy.mjs    # 48 checks on the app's words and where they live
@@ -466,14 +468,15 @@ done
 for t in src/pixels.test.mjs src/read.test.mjs src/recover.test.mjs \
          src/plan.test.mjs src/sizing.test.mjs src/crop.test.mjs \
          src/compose.test.mjs src/shell.test.mjs src/autocrop.test.mjs \
-         src/sharein.test.mjs src/session.test.mjs src/layout.test.mjs tools/chunks.test.mjs \
+         src/sharein.test.mjs src/session.test.mjs src/layout.test.mjs \
+         src/icons.test.mjs src/mark.test.mjs tools/chunks.test.mjs \
          tools/png.test.mjs \
          tools/check-imports.mjs tools/check-dead.mjs; do
   node "$t" >/dev/null 2>&1 || echo "NOT GREEN: $t"   # as above
   for b in $(grep -o "BREAK [!=]== '[a-z_0-9]*'" "$t" | sed "s/.*'\\(.*\\)'/\\1/" | sort -u); do
     BREAK=$b node "$t" >/dev/null 2>&1; [ $? = 1 ] || echo "NOT RED: $t $b"
   done
-done                                     # silence is the pass; 356 mutations (2026-11-25)
+done                                     # silence is the pass; 369 mutations (2026-11-25)
 ```
 
 Two things this loop had wrong, both of which hid mutations rather than reporting
