@@ -4,6 +4,7 @@
 - **Several screenshots at once.** Share up to 10 into Twitwa and each one gets its own card. A "waiting" chip shows how many are left, and Close takes you to the next one.
 - **Your style is remembered.** Padding, background and file format carry over to the next screenshot.
 - **Six new backgrounds:** Sky, Mint, Sand, Plum, Slate and Midnight.
+- **Your own colours.** Tap + under the backgrounds to mix one with Hue, Strength and Shade, and watch the card change as you drag. Your last four stay in a row of their own; long-press one to remove it.
 - **Save as JPEG**, a switch in More, for chat apps that handle PNG badly. Copy stays PNG.
 - **Saved to Photos now has View**, which opens the card in your gallery.
 

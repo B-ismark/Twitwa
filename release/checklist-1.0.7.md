@@ -106,9 +106,9 @@ gh release create v1.0.7 /path/to/twitwa-1.0.7.apk \
 ## 4. Only now, `latest.json`
 
 Set `versionCode` 8, `versionName` "1.0.7", the v1.0.7 URL and the APK's
-`sha256`. For `notes`, use this text (337 characters; the reader's limit is 500):
+`sha256`. For `notes`, use this text (358 characters; the reader's limit is 500):
 
-> Share several screenshots at once, one card each. Twitwa remembers your padding, background and format. Six new backgrounds, Save as JPEG for chat apps, and View after Save. A new icon and splash, a steadier layout, better colour on white and cream screenshots, and a smaller download. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.6.
+> Share several screenshots at once, one card each. Twitwa remembers your padding, background and format. Six new backgrounds and your own colours, Save as JPEG for chat apps, and View after Save. A new icon and splash, a steadier layout, better colour on white and cream screenshots, and a smaller download. Needs a 64-bit phone. Installs over 1.0.1 to 1.0.6.
 
 Then run `cd spike && node tools/check-release-manifest.mjs`, commit, and
 follow README steps 6 and 7: verify the published asset, then watch the update
