@@ -126,8 +126,10 @@ README, and generating icon PNGs from SVG.
    app is a native Kotlin/Compose rebuild, at **2–5 MB**. The pure JS rules port to Kotlin with their
    tests. Recommended as v2, after P1–P4 settle the design.
 
-## P6 · Features not yet built
-1. Remembered settings (padding and background), via the session file from P1.
+## P6 · Features — all built, awaiting the device pass
+1. ~~Remembered settings (padding and background), via the session file from P1.~~ **Done, unbuilt.** Not via the
+   session file, which is deleted once a card has gone somewhere: its own file, `documents/prefs.json`
+   (`src/prefs.js`), so the habit outlives every export. It also remembers the format and the custom colours.
 2. ~~Custom background swatches, as one row in the Style sheet.~~ **Done, unbuilt.** A third row under the tones:
    Add plus up to four saved colours (newest first, 48dp discs with no caption). Add swaps the Background block for
    a mixer (Hue, Strength, Shade tracks drawn as colour gradients) that previews live on the card; Cancel, Done,
@@ -137,8 +139,9 @@ README, and generating icon PNGs from SVG.
    the session reader and prefs (`custom`, still v1) accept it. Long-press, or TalkBack's action, removes a colour;
    the card on screen keeps it, and a removed colour no longer starts new cards. Device checks are in
    `release/checklist-1.0.7.md`.
-3. JPEG export option for chat apps (quality 92). PNG stays the default.
-4. A "Saved to Photos" toast with a View action (open the MediaStore URI).
+3. ~~JPEG export option for chat apps (quality 92). PNG stays the default.~~ **Done, unbuilt.** A remembered
+   "Save as JPEG" switch in More (`src/format.js`). Share and Save follow it; Copy stays PNG.
+4. ~~A "Saved to Photos" toast with a View action (open the MediaStore URI).~~ **Done, unbuilt.** `src/saved.js`.
 5. ~~One card per image for multi-image shares (builds on the P1 queue).~~ **Done, unbuilt.** The native
    module copies up to 10 images (`take(keep)` keeps the card on screen and the queue); `src/queue.js` holds the
    queue (cap 10, overflow counted as skipped), `src/sharein.js` plans arrivals and advances. The "N waiting"
