@@ -116,6 +116,20 @@ export const COPY = {
   plumFrame: 'Plum',
   slateFrame: 'Slate',
   midnightFrame: 'Midnight',
+  // The custom row under the tones. Its discs carry no caption (a hex under a
+  // 48dp disc would outgrow it at the largest font), so these are what
+  // TalkBack says. {hex} is filled by `fill` as the six digits, #RRGGBB.
+  addColour: 'Add a colour',
+  customColour: 'Your colour, {hex}',
+  removeColourTitle: 'Remove this colour?',
+  removeColour: 'Remove',
+  removeColourAction: 'Remove this colour',
+  // The mixer that replaces the Background block while a colour is made.
+  newColour: 'New colour',
+  add: 'Add',
+  hue: 'Hue',
+  strength: 'Strength',
+  shade: 'Shade',
 
   // --- what is happening --------------------------------------------------
   working: 'Making your card',

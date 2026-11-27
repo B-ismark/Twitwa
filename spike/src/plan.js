@@ -16,6 +16,7 @@
 import { cardSize } from './sizing.js';
 import { intersectRect, luma, PAPER, INK } from './pixels.js';
 import { formatSpec } from './format.js';
+import { isCustom } from './custom.js';
 
 /**
  * The six curated tones on the Style sheet's second background row.
@@ -158,7 +159,7 @@ export function planCrop({ image, crop, statusBar = null, trim = 'auto' }) {
  * @param crop        the crop returned by planCrop — not the user's request
  * @param padding     a PADDING key or a fraction
  * @param background  cropBackground() run on THAT crop
- * @param frame       'match' | 'paper' | 'ink' | a TONES name — the Style strip's choice
+ * @param frame       'match' | 'paper' | 'ink' | a TONES name | a custom #RRGGBB — the Style strip's choice
  *
  * `frame` is the user overriding the sample, and 'match' is the product: the
  * frame is the screenshot's own edge colour, and every other choice is what you
@@ -176,8 +177,14 @@ export function planOutput({ crop, padding = 'standard', background = null, fram
   if (isChosen(frame)) {
     fill = CHOSEN[frame];
     fillSource = 'chosen';
+  } else if (isCustom(frame)) {
+    // A custom background IS its colour (src/custom.js). Chosen like a tone,
+    // and the luma warnings below still run: a hex that came from somewhere
+    // other than the mixer is not assumed to be inside Ink..Paper.
+    fill = frame;
+    fillSource = 'chosen';
   } else if (frame !== 'match') {
-    throw new Error(`unknown frame: ${String(frame)}. Known: match, ${Object.keys(CHOSEN).join(', ')}`);
+    throw new Error(`unknown frame: ${String(frame)}. Known: match, ${Object.keys(CHOSEN).join(', ')}, or an uppercase #RRGGBB`);
   } else if (background && background.source === 'sampled' && background.hex) {
     fill = background.hex;
     fillSource = 'sampled';

@@ -34,7 +34,8 @@ README, and generating icon PNGs from SVG.
   out of the APK, and still needs the device pass in `release/checklist-1.0.7.md`.
 - **P6 · Features 1–4.** Remembered style (`src/prefs.js`, documents/prefs.json), six curated tones (Sky, Mint,
   Sand, Plum, Slate, Midnight), a remembered "Save as JPEG" switch (`src/format.js`; Copy stays PNG), and
-  "Saved to Photos" with View (`src/saved.js`). Item 5, one card per image, is done below.
+  "Saved to Photos" with View (`src/saved.js`). Item 5, one card per image, is done below. Item 2, custom background
+  colours (`src/custom.js`), is done, unbuilt, and is listed under P6 below.
 
 ## P1 · Opening and closing (the flow problems) — done, spec kept for reference
 1. **Importing state.** Add `importing` (a ref plus state) in `openImage`/`receive`, show a skeleton card
@@ -127,7 +128,15 @@ README, and generating icon PNGs from SVG.
 
 ## P6 · Features not yet built
 1. Remembered settings (padding and background), via the session file from P1.
-2. Custom background swatches, as one row in the Style sheet.
+2. ~~Custom background swatches, as one row in the Style sheet.~~ **Done, unbuilt.** A third row under the tones:
+   Add plus up to four saved colours (newest first, 48dp discs with no caption). Add swaps the Background block for
+   a mixer (Hue, Strength, Shade tracks drawn as colour gradients) that previews live on the card; Cancel, Done,
+   Back or leaving the sheet put the old background back. A custom background is its `#RRGGBB` string everywhere
+   (`ed.background`, the session file, prefs). `src/custom.js` holds the list, the mixer and its luma bound (every
+   mix lies between Ink and Paper, so none trips the near-white or near-black warning); `planOutput`, `setBackground`,
+   the session reader and prefs (`custom`, still v1) accept it. Long-press, or TalkBack's action, removes a colour;
+   the card on screen keeps it, and a removed colour no longer starts new cards. Device checks are in
+   `release/checklist-1.0.7.md`.
 3. JPEG export option for chat apps (quality 92). PNG stays the default.
 4. A "Saved to Photos" toast with a View action (open the MediaStore URI).
 5. ~~One card per image for multi-image shares (builds on the P1 queue).~~ **Done, unbuilt.** The native

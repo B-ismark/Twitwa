@@ -83,6 +83,17 @@ P5 section's EXPECTED numbers with measured ones. The expected size is about
 - [ ] Share while editing, choose Keep editing: the chip count goes up.
 - [ ] With pictures waiting, Back goes to the start screen and the chip is still there.
 
+**Custom backgrounds (Style sheet, new JS only)**
+- [ ] 360dp wide, and again at the largest font size: the third swatch row (Add plus four saved colours) fits on one line with no wrap and no clipped disc, each disc a 48dp target, and the sheet still sits clear of the bar.
+- [ ] Add opens the mixer in place of the Background block, opening on the card's current colour. Moving Hue, Strength and Shade repaints the card behind the sheet live, and the Strength and Shade tracks re-tint as Hue moves. The sheet is no taller than before.
+- [ ] Cancel puts back the background the card had before Add, and nothing is saved. Done, Back and opening Crop with the mixer open do the same.
+- [ ] Add saves the colour first in the row, selected. A fifth colour drops the oldest. Saving the same colour twice leaves one disc.
+- [ ] Long-press a saved colour: "Remove this colour?" with Cancel and Remove. Remove takes it out of the row and the card on screen keeps its colour.
+- [ ] With TalkBack on: the row reads "Add a colour" and "Your colour, #RRGGBB"; the actions menu on a saved colour offers "Remove this colour"; each mixer track adjusts with volume keys or swipe up and down in steps.
+- [ ] Remember: choose a saved colour, open the next screenshot, and it starts on that colour. Remove that colour, open another screenshot, and it starts on Match.
+- [ ] Share a card with a custom background, open the exported file and sample a frame pixel: it equals the disc's hex exactly (and the same after Save as JPEG, within JPEG's tolerance).
+- [ ] Kill the app mid-edit on a custom colour: the restored card keeps it, even if it has since been removed from the row.
+
 ## 3. Publish the APK
 
 ```

@@ -56,6 +56,16 @@ if (BREAK === 'read_any_version') {
     const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return o && o.background === 'neon' ? { ...o } : real.readSession(raw);
   };
+} else if (BREAK === 'read_hex_refused') {
+  F.readSession = (raw) => {
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return o && /^#/.test(String(o.background)) ? null : real.readSession(raw);
+  };
+} else if (BREAK === 'read_any_hex') {
+  F.readSession = (raw) => {
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return o && /^#/.test(String(o.background)) && !/^#[0-9A-F]{6}$/.test(o.background) ? { ...o } : real.readSession(raw);
+  };
 } else if (BREAK === 'read_throws_on_junk') {
   F.readSession = (raw) => (typeof raw === 'string' ? JSON.parse(raw) && real.readSession(raw) : real.readSession(raw));
 } else if (BREAK === 'read_aliases_input') {
@@ -139,6 +149,8 @@ console.log('readSession: a good file comes back');
   for (const b of ['match', 'paper', 'ink', 'sky', 'mint', 'sand', 'plum', 'slate', 'midnight']) {
     check(`background ${b} is accepted`, F.readSession({ ...good, background: b }) !== null);
   }
+  check('a custom colour is accepted and comes back as it was', F.readSession({ ...good, background: '#7A8FA6' }) && F.readSession({ ...good, background: '#7A8FA6' }).background === '#7A8FA6');
+  check('and survives write then read', (() => { const s = F.serialiseSession({ ...state(), background: '#7A8FA6' }, URI); const r = F.readSession(JSON.stringify(s)); return r && r.background === '#7A8FA6'; })());
   check('the result is a copy, not the input', (() => {
     const r = F.readSession(good);
     r.crop.w = 1;
@@ -180,6 +192,9 @@ console.log('readSession: everything else is null, and never throws');
   bad('a string padding', (j) => ({ ...j, padding: 'roomy' }));
   bad('a NaN padding', (j) => ({ ...j, padding: NaN }));
   bad('an unknown background', (j) => ({ ...j, background: 'neon' }));
+  bad('a lowercase hex', (j) => ({ ...j, background: '#7a8fa6' }));
+  bad('a short hex', (j) => ({ ...j, background: '#7A8' }));
+  bad('a hex with alpha', (j) => ({ ...j, background: '#7A8FA6FF' }));
   bad('no background', (j) => { delete j.background; return j; });
   check('JSON text that is null', F.readSession('null') === null);
 }
