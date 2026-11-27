@@ -22,6 +22,7 @@
 
 import { PADDING, padPixels } from './sizing.js';
 import { TONES } from './plan.js';
+import { isCustom } from './custom.js';
 
 /**
  * The tool table. `owns` is the set of state fields a tool session can change,
@@ -63,6 +64,17 @@ export const BASIC_BACKGROUNDS = ['match', 'paper', 'ink'];
 export const TONE_BACKGROUNDS = Object.keys(TONES);
 
 export const BACKGROUNDS = [...BASIC_BACKGROUNDS, ...TONE_BACKGROUNDS];
+
+/**
+ * Is `v` something a card can have as its background: one of the names above,
+ * or a custom colour (an uppercase #RRGGBB, src/custom.js)? The one check the
+ * editor, the session file and the prefs share. It lives here and not in
+ * custom.js because it needs BACKGROUNDS, and this file's import of plan.js
+ * would make custom.js a cycle.
+ */
+export function isBackground(v) {
+  return BACKGROUNDS.includes(v) || isCustom(v);
+}
 
 /**
  * The stops a dragged padding snaps onto, and WHY THE BAND IS NOT A CONSTANT.
@@ -396,8 +408,8 @@ export function setPadding(frac, cropW) {
  * reads as the control being broken rather than as the value being wrong.
  */
 export function setBackground(name) {
-  if (!BACKGROUNDS.includes(name)) {
-    throw new Error(`shell: no such background: ${String(name)}. Known: ${BACKGROUNDS.join(', ')}`);
+  if (!isBackground(name)) {
+    throw new Error(`shell: no such background: ${String(name)}. Known: ${BACKGROUNDS.join(', ')}, or an uppercase #RRGGBB`);
   }
   return name;
 }

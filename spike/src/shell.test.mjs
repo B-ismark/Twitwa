@@ -41,6 +41,14 @@ if (BREAK === 'saved_any_uri') {
   F.alreadySaved = (st, sv) => !!(st && sv && !real.unsaved(st, sv.card));
 } else if (BREAK === 'saved_ignores_format') {
   F.alreadySaved = (st, sv, uri) => real.alreadySaved(st, sv && { ...sv, format: 'png' }, uri, 'png');
+} else if (BREAK === 'bg_hex_refused') {
+  F.setBackground = (b) => (/^#/.test(b) ? real.setBackground('neon') : real.setBackground(b));
+} else if (BREAK === 'bg_any_hex') {
+  F.setBackground = (b) => (/^#/.test(String(b)) ? b : real.setBackground(b));
+} else if (BREAK === 'is_background_names_only') {
+  F.isBackground = (v) => real.BACKGROUNDS.includes(v);
+} else if (BREAK === 'is_background_any_string') {
+  F.isBackground = (v) => typeof v === 'string' && v !== '';
 } else if (BREAK === 'rows_partial') {
   F.BACKGROUNDS = real.BASIC_BACKGROUNDS;
 } else if (BREAK === 'saved_ignores_edit') {
@@ -260,6 +268,18 @@ console.log('\nthe background is checked against that list, not trusted');
   let threw = false;
   try { F.setBackground('paperr'); } catch (e) { threw = true; }
   check('a name the renderer has no branch for throws', threw);
+  check('a custom colour is accepted and comes back unchanged', F.setBackground('#7A8FA6') === '#7A8FA6');
+  threw = false;
+  for (const bad of ['#7a8fa6', '#7A8', '#7A8FA6FF', '7A8FA6', '#GGGGGG']) {
+    try { F.setBackground(bad); } catch (e) { threw = true; }
+  }
+  check('a hex that is not uppercase six-digit throws', threw);
+  check('isBackground: names and custom colours, nothing else', F.isBackground('ink') && F.isBackground('#7A8FA6') && !F.isBackground('neon') && !F.isBackground('') && !F.isBackground(null) && !F.isBackground('#abc'));
+  check('every named background is one', F.BACKGROUNDS.every((b) => F.isBackground(b)));
+  check('a custom colour is not in the named list: the strip has its own row', !F.BACKGROUNDS.includes('#7A8FA6'));
+  threw = false;
+  try { F.setBackground('#7a8fa6'); } catch (e) { threw = true; }
+  check('lowercase is refused by name too', threw);
   let threwUndef = false;
   try { F.setBackground(undefined); } catch (e) { threwUndef = true; }
   check('and so does nothing at all', threwUndef);

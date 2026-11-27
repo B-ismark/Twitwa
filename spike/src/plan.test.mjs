@@ -88,6 +88,15 @@ if (BREAK === 'no_shape_gate') {
   };
 } else if (BREAK === 'saved_ext_png') {
   F.savedName = (d) => real.savedName(d, 'png');
+} else if (BREAK === 'custom_as_match') {
+  // A custom hex falls through to Match: the sample wins over a colour the person mixed.
+  F.planOutput = (a) => real.planOutput({ ...a, frame: /^#/.test(a.frame) ? 'match' : a.frame });
+} else if (BREAK === 'custom_sampled_source') {
+  F.planOutput = (a) => { const r = real.planOutput(a); return /^#/.test(a.frame) ? { ...r, fillSource: 'sampled' } : r; };
+} else if (BREAK === 'custom_unwarned') {
+  F.planOutput = (a) => { const r = real.planOutput(a); return /^#/.test(a.frame) ? { ...r, warnings: [] } : r; };
+} else if (BREAK === 'custom_any_string') {
+  F.planOutput = (a) => (typeof a.frame === 'string' && a.frame.startsWith('#') ? real.planOutput({ ...a, frame: '#336699' }) : real.planOutput(a));
 } else if (BREAK === 'frame_unvalidated') {
   // An unknown frame falls through to Match instead of throwing, so a typo in
   // one call site is a card with a colour nobody chose.
@@ -276,6 +285,11 @@ console.log('the Style strip can override the sample, and says it did');
   let threw = false;
   try { F.planOutput({ crop, frame: 'papyrus' }); } catch (e) { threw = true; }
   check('an unknown frame throws rather than quietly becoming Match', threw);
+  threw = false;
+  for (const bad of ['#abcdef', '#ABC', '#12345G', '#1234567']) {
+    try { F.planOutput({ crop, frame: bad }); } catch (e) { threw = true; }
+  }
+  check('a hex that is not uppercase six-digit is not a frame', threw);
 
   // Through planCard, because that is the call renderCard makes, and a
   // parameter threaded into the wrong one of the two is the normal way this
@@ -505,6 +519,24 @@ console.log('the six tones: fixed fills through the same path as Paper and Ink')
   let threw = false;
   try { F.planOutput({ crop, frame: 'toString' }); } catch { threw = true; }
   check('an inherited property name is not a frame', threw);
+}
+
+console.log('a custom colour: its own hex through the same path as a tone');
+{
+  const crop = { x: 0, y: 0, w: 1000, h: 2000 };
+  const sampled = { source: 'sampled', hex: '#336699', luma: 90 };
+  const image = { width: 1000, height: 2000 };
+  for (const hex of ['#7A8FA6', '#C9A66B', '#2A3B2E']) {
+    const out = F.planOutput({ crop, background: sampled, frame: hex });
+    check(`${hex} overrides a sample and is a chosen fill`, out.fill === hex && out.fillSource === 'chosen', `${out.fill} ${out.fillSource}`);
+    check(`${hex} raises no sampling warning and no luma warning`, out.warnings.length === 0, JSON.stringify(out.warnings));
+    const exported = F.planCard({ image, crop, padding: 'roomy', frame: hex, sampleBackground: () => sampled }).fill;
+    check(`${hex}: preview and export use the same fill`, exported === hex, exported);
+  }
+  const white = F.planOutput({ crop, frame: '#FFFFFF' });
+  const black = F.planOutput({ crop, frame: '#000000' });
+  check('a custom hex past Paper still gets the near-white warning', white.fill === '#FFFFFF' && white.warnings.some((w) => /near-white/.test(w)), JSON.stringify(white.warnings));
+  check('and past Ink the near-black one', black.warnings.some((w) => /near-black/.test(w)), JSON.stringify(black.warnings));
 }
 
 console.log('savedName takes its extension from the format');

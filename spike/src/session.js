@@ -11,7 +11,7 @@
 // WHAT IS NOT IN IT: which tool is open, the proposal Reset returns to, and
 // whether the card was kept. The proposal is recomputed from the picture, and
 // a restored card is treated as unsaved (see openImage in App.js).
-import { BACKGROUNDS, PAD_MAX, PAD_MIN, cardOf } from './shell.js';
+import { PAD_MAX, PAD_MIN, cardOf, isBackground } from './shell.js';
 
 const VERSION = 1;
 
@@ -55,7 +55,9 @@ export function readSession(raw) {
   if (![c.x, c.y, c.w, c.h].every(finite)) return null;
   if (c.x < 0 || c.y < 0 || !(c.w > 0) || !(c.h > 0)) return null;
   if (!finite(j.padding) || j.padding < PAD_MIN || j.padding > PAD_MAX) return null;
-  if (!BACKGROUNDS.includes(j.background)) return null;
+  // A name or a custom colour: a restored card keeps its own colour even if
+  // it has since been removed from the Style sheet's row.
+  if (!isBackground(j.background)) return null;
   return {
     v: VERSION,
     uri: j.uri,

@@ -155,7 +155,8 @@ import { installRoute, downloadPercent, updateProblem, laterHides } from './src/
 import { advancePlan, arrivalPlan, shareOutcome } from './src/sharein';
 import { keepList, takeNext, waitingLabel } from './src/queue';
 import { cropFits, readSession, serialiseSession } from './src/session';
-import { DEFAULT_PREFS, parsePrefs, serialisePrefs, startingStyle } from './src/prefs';
+import { DEFAULT_PREFS, forgetCustom, parsePrefs, rememberCustom, serialisePrefs, startingStyle } from './src/prefs';
+import { mixColour, mixFromHex, nudge, trackStops } from './src/custom';
 import { formatFor } from './src/format';
 import { noticeMs } from './src/saved';
 import { onShare, shareInAvailable, takeShare } from './src/sharein-io';
@@ -363,6 +364,9 @@ function Editor() {
   // read, so a share that starts the app cold still opens on the remembered
   // style instead of racing the file.
   const prefsRef = useRef({ ...DEFAULT_PREFS });
+  // The saved custom colours, for the Style sheet's row. State as well as part
+  // of prefsRef because the row has to redraw when one is added or removed.
+  const [customRow, setCustomRow] = useState(DEFAULT_PREFS.custom);
   const prefsLoad = useRef(null);
   const prefsText = useRef(null);
   const [menu, setMenu] = useState(false);
@@ -694,6 +698,7 @@ function Editor() {
       prefsRef.current = p;
       prefsText.current = JSON.stringify(serialisePrefs(p));
       setFormat(p.format);
+      setCustomRow(p.custom);
       return p;
     });
   }, []);
@@ -701,8 +706,12 @@ function Editor() {
   // A style choice was committed (chip, slider release, swatch, the format
   // switch): write it down. Not called for a slider's live preview, nor for
   // Style's Reset, which is "undo on this card" and not a new habit.
-  const remember = useCallback((patch) => {
+  // `patch` may be a function of the current prefs, for the two that depend on
+  // what is saved (src/prefs.js rememberCustom and forgetCustom).
+  const remember = useCallback((change) => {
+    const patch = typeof change === 'function' ? change(prefsRef.current) : change;
     prefsRef.current = { ...prefsRef.current, ...patch };
+    setCustomRow(prefsRef.current.custom);
     const text = JSON.stringify(serialisePrefs(prefsRef.current));
     if (text === prefsText.current) return;
     if (writePrefsFile(text)) prefsText.current = text;
@@ -2211,6 +2220,8 @@ function Editor() {
           stopLabel={stopLabel}
           frameLabel={frameLabel}
           swatchFills={swatchFills}
+          customRow={customRow}
+          fillColour={fillColour}
           onSheetLayout={(h) => setSheetH(h + SPACE.sm)}
           canReset={canReset(ed)}
           onReset={resetT}
@@ -2762,6 +2773,10 @@ function CropLoupe({ crop, view, stage, image, handle, on }) {
   );
 }
 
+// Segments in a mixer track. Enough that the steps read as a gradient on a
+// 240dp track (10dp each), few enough to stay cheap to draw.
+const MIX_SEGMENTS = 24;
+
 /**
  * Padding and background, as a sheet over the stage. No apply: every control
  * here is already its own preview, which is what `TOOL.style.takeover ===
@@ -2771,7 +2786,50 @@ function CropLoupe({ crop, view, stage, image, handle, on }) {
  * control on the screen, and a second filled thing in the sheet competed with
  * it for "the thing to press".
  */
-function StyleStrip({ ed, setEd, onRemember, palette, stops, stopLabel, frameLabel, swatchFills, onSheetLayout, canReset: resettable, onReset, onDone }) {
+function StyleStrip({ ed, setEd, onRemember, palette, stops, stopLabel, frameLabel, swatchFills, customRow, fillColour, onSheetLayout, canReset: resettable, onReset, onDone }) {
+  // The mixer, or null. `before` is the background the card had when Add was
+  // tapped, which Cancel puts back. The ref carries the latest value to the
+  // slider callbacks (a drag's closures are built once) and to the unmount
+  // below.
+  const [mixer, setMixer] = useState(null);
+  const mixRef = useRef(null);
+  const openMixer = (m) => { mixRef.current = m; setMixer(m); };
+  // The card's colour for a mix, previewed behind the sheet. Not remembered:
+  // only Add commits a colour.
+  const preview = (mix) => {
+    const hex = mixColour(mix);
+    mixRef.current = { ...mixRef.current, mix, hex };
+    setMixer(mixRef.current);
+    setEd((s) => (s && s.background !== hex ? { ...s, background: setBackground(hex) } : s));
+  };
+  const setMix = (which, v) => preview({ ...mixRef.current.mix, [which]: v });
+  // Put the card back to what it was before the mixer, but only if the card
+  // is still showing the mixer's colour: a Reset, or a different card, in
+  // the meantime owns its own background.
+  const restore = () => {
+    const m = mixRef.current;
+    mixRef.current = null;
+    if (!m || !m.hex) return;
+    setEd((s) => (s && s.background === m.hex ? { ...s, background: m.before } : s));
+  };
+  const cancelMixer = () => { restore(); setMixer(null); };
+  // EVERY way out of the sheet (Done, Back, the backdrop, opening Crop,
+  // closing the card) unmounts it, so a mixer left open is a Cancel.
+  useEffect(() => () => restore(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const addMixed = () => {
+    const m = mixRef.current;
+    const hex = mixColour(m.mix);
+    mixRef.current = null;
+    setMixer(null);
+    setEd((s) => (s ? { ...s, background: setBackground(hex) } : s));
+    onRemember((prefs) => rememberCustom(prefs, hex));
+  };
+  const resetStyle = () => { if (mixRef.current) { mixRef.current = null; setMixer(null); } onReset(); };
+
+  const choose = (b) => {
+    setEd((s) => ({ ...s, background: setBackground(b) }));
+    onRemember({ background: b });
+  };
   const swatch = (b) => (
     <Swatch
       key={b}
@@ -2779,12 +2837,52 @@ function StyleStrip({ ed, setEd, onRemember, palette, stops, stopLabel, frameLab
       colour={swatchFills[b]}
       palette={palette}
       on={ed.background === b}
-      onPress={() => {
-        setEd((s) => ({ ...s, background: setBackground(b) }));
-        onRemember({ background: b });
-      }}
+      onPress={() => choose(b)}
     />
   );
+  // Long-press removes, and the same is offered to TalkBack as an action so
+  // it does not need a gesture. The card on screen keeps its colour.
+  const askRemove = (hex) => Alert.alert(COPY.removeColourTitle, undefined, [
+    { text: COPY.cancel, style: 'cancel' },
+    { text: COPY.removeColour, style: 'destructive', onPress: () => onRemember((prefs) => forgetCustom(prefs, hex)) },
+  ]);
+  const own = (hex) => (
+    <Swatch
+      key={hex}
+      a11yLabel={fill(COPY.customColour, { hex })}
+      colour={hex}
+      palette={palette}
+      compact
+      on={ed.background === hex}
+      onPress={() => choose(hex)}
+      onLongPress={() => askRemove(hex)}
+      action={{ name: 'remove', label: COPY.removeColourAction }}
+    />
+  );
+  const track = (which, label) => (
+    <View style={styles.mixRow} key={which}>
+      <Text style={[styles.mixLabel, { color: palette.graphite }]}>{label}</Text>
+      <View style={styles.mixTrack}>
+        <Slider
+          value={mixer.mix[which]}
+          min={0}
+          max={1}
+          palette={palette}
+          label={label}
+          stops={mixStops[which]}
+          onCommit={(v) => setMix(which, v)}
+          onPreview={(v) => setMix(which, v)}
+          onStep={(dir) => setMix(which, nudge(mixRef.current.mix[which], dir))}
+        />
+      </View>
+    </View>
+  );
+  const mixStops = useMemo(() => {
+    if (!mixer) return null;
+    const out = {};
+    for (const w of ['hue', 'strength', 'shade']) out[w] = trackStops(w, mixer.mix, MIX_SEGMENTS);
+    return out;
+  }, [mixer]);
   return (
     <View
       style={[styles.strip, { backgroundColor: palette.surface, borderColor: palette.hairline }]}
@@ -2795,7 +2893,7 @@ function StyleStrip({ ed, setEd, onRemember, palette, stops, stopLabel, frameLab
           the sheet 48dp taller, and it floats over the card it is editing. */}
       <View style={styles.stripHead}>
         <Text style={[styles.stripLabel, styles.stripHeadLabel, { color: palette.graphite }]}>{COPY.padding}</Text>
-        <Chip label={COPY.reset} palette={palette} on={false} toggle={false} disabled={!resettable} onPress={onReset} />
+        <Chip label={COPY.reset} palette={palette} on={false} toggle={false} disabled={!resettable} onPress={resetStyle} />
         <Pressable
           onPress={onDone}
           accessibilityRole="button"
@@ -2842,42 +2940,92 @@ function StyleStrip({ ed, setEd, onRemember, palette, stops, stopLabel, frameLab
         }}
       />
 
-      <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.background}</Text>
-      {/* Match, Paper, Ink, then the six tones on a row of their own. The
-          tones wrap rather than shrink: at a large font scale a name like
-          Midnight outgrows its share, and a swatch under 48dp is not a target. */}
-      <View style={styles.swatches}>
-        {BASIC_BACKGROUNDS.map(swatch)}
-      </View>
-      <View style={styles.swatchesTones}>
-        {TONE_BACKGROUNDS.map(swatch)}
-      </View>
+      {mixer ? (
+        <>
+          {/* The mixer takes the place of the Background label and its three
+              rows, and is no taller than them: a header row of 48dp text
+              buttons, then three tracks of 48dp with their word beside them
+              rather than above. Closing the sheet is Cancel (see above). */}
+          <View style={styles.stripHead}>
+            <Text style={[styles.stripLabel, styles.stripHeadLabel, { color: palette.graphite }]}>{COPY.newColour}</Text>
+            <Pressable onPress={cancelMixer} accessibilityRole="button" accessibilityLabel={COPY.cancel} style={styles.textButton}>
+              <Text style={[styles.chipText, { color: palette.graphite }]}>{COPY.cancel}</Text>
+            </Pressable>
+            <Pressable onPress={addMixed} accessibilityRole="button" accessibilityLabel={COPY.add} style={styles.textButton}>
+              <Text style={[styles.chipText, { color: palette.signal }]}>{COPY.add}</Text>
+            </Pressable>
+          </View>
+          {track('hue', COPY.hue)}
+          {track('strength', COPY.strength)}
+          {track('shade', COPY.shade)}
+        </>
+      ) : (
+        <>
+          <Text style={[styles.stripLabel, { color: palette.graphite }]}>{COPY.background}</Text>
+          {/* Match, Paper, Ink, then the six tones on a row of their own. The
+              tones wrap rather than shrink: at a large font scale a name like
+              Midnight outgrows its share, and a swatch under 48dp is not a target. */}
+          <View style={styles.swatches}>
+            {BASIC_BACKGROUNDS.map(swatch)}
+          </View>
+          <View style={styles.swatchesTones}>
+            {TONE_BACKGROUNDS.map(swatch)}
+          </View>
+          {/* The colours made with Add, newest first. One row, no wrap, and no
+              captions: Add plus four 48dp targets and their gaps is 272dp of
+              the 312dp inside the sheet at 360dp wide. */}
+          <View style={styles.swatchesCustom}>
+            <Swatch
+              a11yLabel={COPY.addColour}
+              icon="plus"
+              palette={palette}
+              compact
+              onPress={() => {
+                const hex = fillColour || swatchFills[ed.background] || swatchFills.match;
+                openMixer({ mix: mixFromHex(hex), before: ed.background, hex: null });
+              }}
+            />
+            {customRow.map(own)}
+          </View>
+        </>
+      )}
     </View>
   );
 }
 
 /**
- * A background choice as the colour it paints, with its name under it.
+ * A background choice as the colour it paints, with its name under it, or,
+ * with `compact` and no `label`, just the disc (the custom row).
  *
  * Selected is a ring AND the accessibility state, not the ring alone. The ring
  * is Signal-coloured and a gap wide, so it reads against a swatch of any
  * colour, including one that matches the sheet. The disc itself has a hairline
  * because Paper on a white sheet, and Ink on a dark one, have no edge
  * otherwise.
+ *
+ * `a11yLabel` is what TalkBack says when it differs from the caption (it does
+ * for a custom colour, which has no caption). `icon` draws a glyph on the disc
+ * on the surface fill (Add), and `on` left out means it is not a choice at
+ * all, so no selected state is announced.
  */
-function Swatch({ label, colour, on, onPress, palette }) {
+function Swatch({ label, a11yLabel, colour, icon, on, onPress, onLongPress, action, compact = false, palette }) {
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
       accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: on }}
-      style={styles.swatch}
+      accessibilityLabel={a11yLabel || label}
+      accessibilityState={on === undefined ? undefined : { selected: on }}
+      accessibilityActions={action ? [action] : undefined}
+      onAccessibilityAction={action ? (e) => { if (e.nativeEvent.actionName === action.name) onLongPress(); } : undefined}
+      style={[styles.swatch, compact && styles.swatchCompact]}
     >
       <View style={[styles.swatchRing, { borderColor: on ? palette.signal : 'transparent' }]}>
-        <View style={[styles.swatchDisc, { backgroundColor: colour || palette.surface, borderColor: palette.hairline }]} />
+        <View style={[styles.swatchDisc, { backgroundColor: colour || palette.surface, borderColor: palette.hairline }]}>
+          {icon ? <Icon name={icon} color={palette.text} /> : null}
+        </View>
       </View>
-      <Text style={[styles.swatchText, { color: on ? palette.text : palette.graphite }]}>{label}</Text>
+      {label ? <Text style={[styles.swatchText, { color: on ? palette.text : palette.graphite }]}>{label}</Text> : null}
     </Pressable>
   );
 }
@@ -2899,7 +3047,7 @@ function Swatch({ label, colour, on, onPress, palette }) {
  * the platform's touch floor and a track that only responds where the thumb
  * already is makes a long drag start with a miss.
  */
-function Slider({ value, min, max, onCommit, onPreview, onStep, palette, label }) {
+function Slider({ value, min, max, onCommit, onPreview, onStep, palette, label, stops }) {
   const at = max > min ? (value - min) / (max - min) : 0;
   // 0..1 along the track, written by the drag and, at rest, by `value`.
   const pos = useSharedValue(at);
@@ -2964,8 +3112,18 @@ function Slider({ value, min, max, onCommit, onPreview, onStep, palette, label }
           else if (e.nativeEvent.actionName === 'decrement') onStep(-1);
         }}
       >
-        <View style={[styles.track, { backgroundColor: palette.hairline }]} />
-        <Animated.View style={[styles.trackFill, { backgroundColor: palette.signal }, fillStyle]} />
+        {stops ? (
+          // The mixer's tracks: the colours the thumb passes through, as flex
+          // segments, in place of the hairline and its fill.
+          <View style={styles.stopsTrack} pointerEvents="none">
+            {stops.map((c, i) => <View key={i} style={[styles.stopsSegment, { backgroundColor: c }]} />)}
+          </View>
+        ) : (
+          <>
+            <View style={[styles.track, { backgroundColor: palette.hairline }]} />
+            <Animated.View style={[styles.trackFill, { backgroundColor: palette.signal }, fillStyle]} />
+          </>
+        )}
         <Animated.View
           style={[styles.thumb, { backgroundColor: palette.signal, borderColor: palette.surface }, thumbStyle]}
         />
@@ -3302,7 +3460,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  swatchDisc: { width: 34, height: 34, borderRadius: 17, borderWidth: 1 },
+  swatchDisc: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  // The custom row's discs have no caption, so they are the 48dp target alone.
+  swatchCompact: { minWidth: TOUCH, justifyContent: 'center' },
+  swatchesCustom: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.xs },
+  // The mixer's rows: the word, then the track, each 48dp tall.
+  mixRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  mixLabel: { ...TYPE.caption, minWidth: 72 },
+  mixTrack: { flex: 1 },
+  stopsTrack: { flexDirection: 'row', height: 8, borderRadius: 4, overflow: 'hidden' },
+  stopsSegment: { flex: 1, height: 8 },
   swatchText: { ...TYPE.caption, marginTop: SPACE.xs },
 
   sliderHit: { height: TOUCH, justifyContent: 'center' },
