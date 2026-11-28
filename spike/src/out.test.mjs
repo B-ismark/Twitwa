@@ -165,17 +165,25 @@ console.log('\nthe contract with the Kotlin, the manifest and the app');
   // only while no Kotlin string contains "//" or "/*"; the last check holds that.
   const strip = (src) => src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
   const stripXml = (src) => src.replace(/<!--[\s\S]*?-->/g, '');
-  let kt = readFileSync(join(mod, 'src/main/java/dev/bismark/twitwa/out/OutModule.kt'), 'utf8');
-  let man = readFileSync(join(mod, 'src/main/AndroidManifest.xml'), 'utf8');
-  let xml = readFileSync(join(mod, 'src/main/res/xml/twitwa_out_paths.xml'), 'utf8');
-  let cfg = readFileSync(join(here, '../modules/twitwa-out/expo-module.config.json'), 'utf8');
-  const gradle = readFileSync(join(mod, 'build.gradle'), 'utf8');
-  const provider = readFileSync(join(mod, 'src/main/java/dev/bismark/twitwa/out/TwitwaOutProvider.kt'), 'utf8');
-  let io = readFileSync(join(here, 'out-io.js'), 'utf8');
-  let app = readFileSync(join(here, '../App.js'), 'utf8');
-  let pkg = readFileSync(join(here, '../package.json'), 'utf8');
-  const appJson = readFileSync(join(here, '../app.json'), 'utf8');
-  let pl = readFileSync(join(here, 'pipeline.js'), 'utf8');
+  // Every source is read with LF line ends. On a Windows checkout
+  // (core.autocrlf=true, and .gitattributes leaves these files text=auto) they
+  // arrive CRLF, and a mutant whose search text spans lines with "\n" then
+  // finds nothing, changes nothing, and the suite stays green under it: three
+  // did exactly that on 2026-11-28 (app_problem_generic, kt_asks_on_new_android,
+  // kt_no_file_cleanup), each printed NOT RED by the README loop.
+  const readLf = (p) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+  let kt = readLf(join(mod, 'src/main/java/dev/bismark/twitwa/out/OutModule.kt'));
+  let man = readLf(join(mod, 'src/main/AndroidManifest.xml'));
+  let xml = readLf(join(mod, 'src/main/res/xml/twitwa_out_paths.xml'));
+  let cfg = readLf(join(here, '../modules/twitwa-out/expo-module.config.json'));
+  const gradle = readLf(join(mod, 'build.gradle'));
+  const provider = readLf(join(mod, 'src/main/java/dev/bismark/twitwa/out/TwitwaOutProvider.kt'));
+  let io = readLf(join(here, 'out-io.js'));
+  let app = readLf(join(here, '../App.js'));
+  let pkg = readLf(join(here, '../package.json'));
+  const appJson = readLf(join(here, '../app.json'));
+  let pl = readLf(join(here, 'pipeline.js'));
+  const unmutated = [kt, man, xml, cfg, io, app, pkg, pl].join('\0');
   if (BREAK === 'kt_module_renamed') kt = kt.replace('Name("TwitwaOut")', 'Name("Out")');
   if (BREAK === 'kt_share_renamed') kt = kt.replace('AsyncFunction("share")', 'AsyncFunction("shareFile")');
   if (BREAK === 'kt_copy_renamed') kt = kt.replace('AsyncFunction("copyImage")', 'AsyncFunction("copy")');
@@ -267,6 +275,17 @@ console.log('\nthe contract with the Kotlin, the manifest and the app');
   if (BREAK === 'pkg_clipboard_back') pkg = pkg.replace('"expo-splash-screen"', '"expo-clipboard": "~57.0.2",\n    "expo-splash-screen"');
   if (BREAK === 'pkg_medialibrary_back') pkg = pkg.replace('"expo-splash-screen"', '"expo-media-library": "~57.0.5",\n    "expo-splash-screen"');
   if (BREAK === 'pl_cards_renamed') pl = pl.replace("new Directory(Paths.cache, 'cards')", "new Directory(Paths.cache, 'out')");
+  // A source mutant that changed nothing tests nothing, whatever the reason:
+  // line ends, as above, or a search string the source has moved away from.
+  // Exit 2, not 1, so the README loop (which counts exit 1 as red) prints it
+  // as NOT RED instead of counting it. The list of source mutants is read from
+  // this file, so a new one is covered without being listed anywhere.
+  const sourceMutants = new Set([...readLf(fileURLToPath(import.meta.url))
+    .matchAll(/BREAK === '([a-z_0-9]+)'\) (?:kt|man|xml|cfg|io|app|pkg|pl) = /g)].map((m) => m[1]));
+  if (sourceMutants.has(BREAK) && [kt, man, xml, cfg, io, app, pkg, pl].join('\0') === unmutated) {
+    console.log(`BREAK=${BREAK} NO LONGER APPLIES: its search text is not in the source, so it changed nothing`);
+    process.exit(2);
+  }
 
   const ktRaw = kt;
   kt = strip(kt);
@@ -291,9 +310,9 @@ console.log('\nthe contract with the Kotlin, the manifest and the app');
     /AsyncFunction\("save"\) Coroutine \{ path: String, mime: String, displayName: String ->/.test(kt) && /\.save\(path, mime, displayName\)/.test(io));
   check('share takes (path, mime)', /AsyncFunction\("share"\) Coroutine \{ path: String, mime: String ->/.test(kt) && /\.share\(path, mime\)/.test(io));
   check('copyImage takes (path) and no base64', /AsyncFunction\("copyImage"\) Coroutine \{ path: String ->/.test(kt) && /\.copyImage\(path\)/.test(io));
-  check('save answers with "uri", which src/out.js reads', /mapOf\("uri" to /.test(kt) && /answer\.uri/.test(readFileSync(join(here, 'out.js'), 'utf8')));
-  check('the permission answer carries "granted", which src/out.js reads', (kt.match(/"granted" to /g) || []).length >= 3 && /answer\.granted/.test(readFileSync(join(here, 'out.js'), 'utf8')));
-  check('a build without the module throws the code src/out.js recognises', /e\.code = 'ERR_OUT_MODULE_MISSING'/.test(io) && /ERR_OUT_MODULE_MISSING/.test(readFileSync(join(here, 'out.js'), 'utf8')));
+  check('save answers with "uri", which src/out.js reads', /mapOf\("uri" to /.test(kt) && /answer\.uri/.test(readLf(join(here, 'out.js'))));
+  check('the permission answer carries "granted", which src/out.js reads', (kt.match(/"granted" to /g) || []).length >= 3 && /answer\.granted/.test(readLf(join(here, 'out.js'))));
+  check('a build without the module throws the code src/out.js recognises', /e\.code = 'ERR_OUT_MODULE_MISSING'/.test(io) && /ERR_OUT_MODULE_MISSING/.test(readLf(join(here, 'out.js'))));
 
   console.log('\n  the work happens off the JS thread');
   check('share prepares the file on Dispatchers.IO',
