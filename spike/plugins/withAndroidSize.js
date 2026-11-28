@@ -202,5 +202,11 @@ module.exports = function withAndroidSize(config) {
 
 module.exports.apply = apply;
 module.exports.applyLocales = applyLocales;
+// The build.gradle edit under the name withReleaseSigning.test.mjs looks for
+// when it replays every plugin that edits that file, in app.json order, and
+// compares the result with what prebuild wrote. Exported only as applyLocales,
+// the locale line was missing from that replay, and the check refused a
+// correct build by exactly that one line (9969 vs 10001 bytes).
+module.exports.patch = applyLocales;
 module.exports.LOCALE_LINE = LOCALE_LINE;
 module.exports.PROPERTIES = PROPERTIES;
