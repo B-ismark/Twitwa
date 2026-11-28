@@ -67,7 +67,9 @@ const LIVE = 'android/app/build.gradle';
 // the chain check then applies a second time. The two lines were edited by
 // hand instead, and the chain check going green is what shows that was right.
 // 1.0.3, 1.0.4 and 1.0.5 (2026-09-23) and 1.0.6 (2026-09-24): the same two lines, edited by hand the same way.
-const FIXTURE_SHA256 = '86c127b46210991dfd2c0e3376fdcb42003c3dc7578ca4bfe6767c06999df19b';
+// 1.0.7 (2026-11-28): the same two lines, missed when app.json was bumped and
+// caught only by the first prebuild of 1.0.7, as the chain check going red.
+const FIXTURE_SHA256 = '7089e8a05ceff9f125718b0997248f2ddbcfcbd7ac5a031d60bbebca78ee8cf9';
 // sha256 of patch(fixture) -- the expected PATCHED output, recorded the same day
 // and equal to the generated android/app/build.gradle byte-for-byte.
 //
@@ -82,7 +84,7 @@ const FIXTURE_SHA256 = '86c127b46210991dfd2c0e3376fdcb42003c3dc7578ca4bfe6767c06
 // It fails on every intentional change to the plugin, by design. Update it in
 // the same commit as the change, after reading the diff -- never to silence a
 // red run.
-const PATCHED_SHA256 = '97466ab7ecbb6201a2d45fa4179e59360b48d758e5f31d433469804651e70624';
+const PATCHED_SHA256 = 'b92da017618443ab685e3fe67bc7a2e974392dba1d1e1a5d6e2dad6093899fe0';
 
 // --- the mutants -----------------------------------------------------------
 // Each is [find, replace] applied to the real plugin source. Keep them to the

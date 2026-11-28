@@ -444,13 +444,22 @@ if (!existsSync(LIVE_PROPERTIES)) {
 }
 
 const LIVE_BUILD_GRADLE = 'android/app/build.gradle';
+const EXCERPT_LIVE = 'BUILD_GRADLE_EXCERPT still matches android/app/build.gradle, as withReleaseSigning leaves it';
 if (!existsSync(LIVE_BUILD_GRADLE)) {
-  skip('BUILD_GRADLE_EXCERPT still matches android/app/build.gradle', `${LIVE_BUILD_GRADLE} needs a prebuild`);
+  skip(EXCERPT_LIVE, `${LIVE_BUILD_GRADLE} needs a prebuild`);
   skip('the live build.gradle carries exactly one localeFilters line', `${LIVE_BUILD_GRADLE} needs a prebuild`);
 } else {
   const liveText = readFileSync(LIVE_BUILD_GRADLE, 'utf8').replace(/\r\n/g, '\n');
   const stripped = liveText.split('\n').filter((l) => l.trim() !== LOCALE).join('\n');
-  check('BUILD_GRADLE_EXCERPT still matches android/app/build.gradle', stripped.includes(BUILD_GRADLE_EXCERPT));
+  // The excerpt is the bare template, and its release block carries the
+  // debug-signing line that withReleaseSigning rewrites in the same prebuild,
+  // so the bare excerpt can never appear in a generated file. That edit is
+  // redone here with the signing plugin's OWN before/after strings, not a
+  // copy of them, and it must actually apply: a replace that found nothing
+  // would compare the bare excerpt again and go red for the wrong reason.
+  const { strings: SIGN } = require('./withReleaseSigning.js');
+  const signedExcerpt = BUILD_GRADLE_EXCERPT.replace(SIGN.RELEASE_SIGNING, SIGN.RELEASE_SIGNING_PATCHED);
+  check(EXCERPT_LIVE, signedExcerpt !== BUILD_GRADLE_EXCERPT && stripped.includes(signedExcerpt));
   check('the live build.gradle carries exactly one localeFilters line, and applying again changes nothing',
     localeCount(liveText) === 1 && applyLocales(liveText) === liveText);
 }
